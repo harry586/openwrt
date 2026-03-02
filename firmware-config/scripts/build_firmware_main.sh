@@ -5218,7 +5218,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（修改 Makefile 跳过问题步骤） ==="
+    log "=== 步骤22: 编译固件（彻底禁用 Netgear 特定格式） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5257,10 +5257,10 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 修改 Makefile 跳过有问题的步骤
+    # 彻底禁用 Netgear 特定格式
     # ============================================
     if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
-        log "🔧 检测到 Netgear WNDR3800 设备，修改 Makefile 跳过问题步骤..."
+        log "🔧 检测到 Netgear WNDR3800 设备，彻底禁用 Netgear 特定格式..."
         
         # 找到设备相关的 Makefile
         local device_mk_file="target/linux/ath79/image/generic.mk"
@@ -5272,57 +5272,56 @@ workflow_step22_build_firmware() {
             # 创建一个新文件来存储修改后的内容
             local temp_file="${device_mk_file}.tmp"
             
-            # 逐行处理文件
+            # 逐行处理文件，完全移除 Netgear 相关定义
             while IFS= read -r line; do
-                # 如果行包含 mkdniimg，注释掉
-                if [[ "$line" == *"mkdniimg"* ]]; then
-                    echo "# $line" >> "$temp_file"
-                # 如果行是 IMAGE/factory 或 IMAGE/sysupgrade 定义，也注释掉
-                elif [[ "$line" == *"IMAGE/factory"* ]] || [[ "$line" == *"IMAGE/sysupgrade"* ]]; then
-                    # 检查是否在 netgear_wndr3800 设备块内
-                    if [[ "$in_device_block" == "true" ]]; then
-                        echo "# $line" >> "$temp_file"
-                    else
-                        echo "$line" >> "$temp_file"
+                # 跳过包含 netgear_wndr3800 的设备块
+                if [[ "$line" == *"Device/netgear_wndr3800"* ]]; then
+                    # 跳过这个设备块
+                    skip_block=true
+                    echo "# 已禁用 netgear_wndr3800 设备定义" >> "$temp_file"
+                    continue
+                fi
+                
+                # 如果正在跳过设备块，遇到 endef 时结束跳过
+                if [[ "$skip_block" == true ]]; then
+                    if [[ "$line" == "endef" ]]; then
+                        skip_block=false
                     fi
-                else
-                    echo "$line" >> "$temp_file"
+                    continue
                 fi
                 
-                # 检测设备块开始
-                if [[ "$line" == *"define Device/netgear_wndr3800"* ]]; then
-                    in_device_block="true"
-                    device_block_start=$LINENO
+                # 如果行包含 mkdniimg，完全删除
+                if [[ "$line" == *"mkdniimg"* ]]; then
+                    # 不输出这行
+                    continue
                 fi
                 
-                # 检测设备块结束
-                if [[ "$in_device_block" == "true" ]] && [[ "$line" == "endef" ]]; then
-                    in_device_block="false"
-                fi
+                # 输出其他行
+                echo "$line" >> "$temp_file"
                 
             done < "$device_mk_file"
             
             # 替换原文件
             mv "$temp_file" "$device_mk_file"
-            log "  ✅ 成功修改 Makefile，注释掉 mkdniimg 相关行"
+            log "  ✅ 已从 Makefile 中移除 netgear_wndr3800 设备定义"
         fi
         
-        # 同时修改 target 目录下的其他相关文件
-        find "target/linux/ath79" -name "*.mk" -type f | while read mkfile; do
-            if grep -q "netgear_wndr3800" "$mkfile"; then
-                cp "$mkfile" "$mkfile.bak"
-                local temp="${mkfile}.tmp"
-                while IFS= read -r line; do
-                    if [[ "$line" == *"mkdniimg"* ]]; then
-                        echo "# $line" >> "$temp"
-                    else
-                        echo "$line" >> "$temp"
-                    fi
-                done < "$mkfile"
-                mv "$temp" "$mkfile"
-                log "  ✅ 修改: $mkfile"
-            fi
-        done
+        # 在 .config 中禁用 Netgear 特定选项
+        log "🔧 在 .config 中禁用 Netgear 特定选项..."
+        cat >> .config << 'EOF'
+# 完全禁用 Netgear 特定格式
+CONFIG_NETGEAR_MASTER_WEBPAGE=n
+CONFIG_NETGEAR_ENABLE_UART=n
+CONFIG_NETGEAR_BOOTARGS_CMDLINE=n
+CONFIG_NETGEAR_KERNEL_MAGIC=n
+CONFIG_NETGEAR_TARGET=n
+CONFIG_NETGEAR_KERNEL_HEADER=n
+CONFIG_NETGEAR_ROOTFS_HEADER=n
+EOF
+        
+        # 重新运行 defconfig
+        make defconfig > /dev/null 2>&1
+        log "  ✅ 已更新配置"
     fi
     
     # ============================================
@@ -5384,20 +5383,11 @@ workflow_step22_build_firmware() {
     # ============================================
     if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
         log "🔧 恢复 Makefile..."
-        
-        # 恢复主 Makefile
         local device_mk_file="target/linux/ath79/image/generic.mk"
         if [ -f "${device_mk_file}.bak" ]; then
             mv "${device_mk_file}.bak" "$device_mk_file"
             log "  ✅ 恢复: $device_mk_file"
         fi
-        
-        # 恢复其他 Makefile
-        find "target/linux/ath79" -name "*.mk.bak" -type f | while read bakfile; do
-            original="${bakfile%.bak}"
-            mv "$bakfile" "$original"
-            log "  ✅ 恢复: $original"
-        done
     fi
     
     # ============================================
@@ -5413,28 +5403,34 @@ workflow_step22_build_firmware() {
     local other_count=0
     
     if [ -d "$target_dir" ]; then
-        while IFS= read -r line; do
-            if echo "$line" | grep -q "sysupgrade.*\.bin"; then
-                sysupgrade_count=$((sysupgrade_count + 1))
-                size=$(echo "$line" | awk '{print $5}')
-                if [ $size -gt 5000000 ] && [ $size -lt 15000000 ]; then
-                    echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
+        while IFS= read -r file; do
+            if [ -f "$file" ] && [ -s "$file" ]; then
+                local filename=$(basename "$file")
+                local size=$(ls -lh "$file" | awk '{print $5}')
+                local size_bytes=$(stat -c %s "$file" 2>/dev/null || echo "0")
+                
+                if [[ "$filename" == *"sysupgrade"* ]]; then
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                    if [ $size_bytes -gt 5000000 ] && [ $size_bytes -lt 15000000 ]; then
+                        echo "  ✅ sysupgrade: $filename ($size)"
+                    else
+                        echo "  ⚠️ sysupgrade: $filename ($size) - 大小可能异常"
+                    fi
+                elif [[ "$filename" == *"factory"* ]]; then
+                    factory_count=$((factory_count + 1))
+                    if [ $size_bytes -gt 10000000 ] && [ $size_bytes -lt 20000000 ]; then
+                        echo "  ✅ factory: $filename ($size)"
+                    else
+                        echo "  ⚠️ factory: $filename ($size) - 大小可能异常"
+                    fi
+                elif [[ "$filename" == *"initramfs"* ]]; then
+                    initramfs_count=$((initramfs_count + 1))
+                    echo "  🔷 initramfs: $filename ($size)"
                 else
-                    echo "  ⚠️ $(echo "$line" | awk '{print $9" ("$5" bytes) - 大小可能异常"}')"
+                    other_count=$((other_count + 1))
                 fi
-            elif echo "$line" | grep -q "factory.*\.img"; then
-                factory_count=$((factory_count + 1))
-                size=$(echo "$line" | awk '{print $5}')
-                if [ $size -gt 10000000 ] && [ $size -lt 20000000 ]; then
-                    echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
-                else
-                    echo "  ⚠️ $(echo "$line" | awk '{print $9" ("$5" bytes) - 大小可能异常"}')"
-                fi
-            elif echo "$line" | grep -q "initramfs.*\.bin"; then
-                initramfs_count=$((initramfs_count + 1))
-                echo "  🔷 $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
             fi
-        done < <(ls -la "$target_dir/" 2>/dev/null | grep -E "\.bin|\.img" || echo "")
+        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
     fi
     
     echo "----------------------------------------"
@@ -5450,11 +5446,12 @@ workflow_step22_build_firmware() {
         echo "📋 最近50行错误日志:"
         tail -50 build.log 2>/dev/null | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 3 -B 3 || echo "  无错误日志"
         
-        # 显示修改后的 Makefile 内容以便调试
-        if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
-            echo ""
-            echo "📋 修改后的设备 Makefile 内容:"
-            grep -A 20 -B 5 "netgear_wndr3800" "target/linux/ath79/image/generic.mk" 2>/dev/null || echo "  无法读取 Makefile"
+        # 检查是否有 .new 文件
+        echo ""
+        echo "🔍 检查临时目录中的文件..."
+        local tmp_dir="build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
+        if [ -d "$tmp_dir" ]; then
+            ls -la "$tmp_dir/" | grep -E "\.bin|\.img" || echo "  临时目录中没有文件"
         fi
         
         exit 1
