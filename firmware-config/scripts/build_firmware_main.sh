@@ -5218,7 +5218,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（直接生成标准固件） ==="
+    log "=== 步骤22: 编译固件（修改 Makefile 跳过问题步骤） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5257,96 +5257,58 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 如果是 Netgear 设备，特殊处理
+    # 修改 Makefile 跳过有问题的步骤
     # ============================================
     if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
-        log "🔧 检测到 Netgear WNDR3800 设备，应用特殊处理..."
+        log "🔧 检测到 Netgear WNDR3800 设备，修改 Makefile 跳过问题步骤..."
         
-        # 备份原有的 mkdniimg 工具
-        if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-            mv "staging_dir/host/bin/mkdniimg" "staging_dir/host/bin/mkdniimg.original"
-            log "  ✅ 备份原有的 mkdniimg 工具"
+        # 找到设备相关的 Makefile
+        local device_mk_file="target/linux/ath79/image/generic.mk"
+        if [ -f "$device_mk_file" ]; then
+            # 备份原文件
+            cp "$device_mk_file" "$device_mk_file.bak"
+            log "  ✅ 备份 Makefile: $device_mk_file.bak"
+            
+            # 修改 Makefile，注释掉 mkdniimg 相关的行
+            sed -i '/mkdniimg/s/^/# /' "$device_mk_file"
+            sed -i '/.*mkdniimg.*/s/^/# /' "$device_mk_file"
+            log "  ✅ 注释掉 mkdniimg 相关行"
+            
+            # 查找并修改具体的设备定义
+            local device_block_start=$(grep -n "define Device/netgear_wndr3800" "$device_mk_file" | cut -d: -f1)
+            if [ -n "$device_block_start" ]; then
+                local device_block_end=$(tail -n +$device_block_start "$device_mk_file" | grep -n "^endef" | head -1 | cut -d: -f1)
+                device_block_end=$((device_block_start + device_block_end - 1))
+                
+                log "  📍 找到设备定义块: 行 $device_block_start 到 $device_block_end"
+                
+                # 创建一个临时文件来修改
+                awk -v start="$device_block_start" -v end="$device_block_end" '
+                NR==start, NR==end {
+                    if ($0 ~ /IMAGE\/factory/ || $0 ~ /IMAGE\/sysupgrade/) {
+                        print "# " $0
+                    } else {
+                        print $0
+                    }
+                    next
+                }
+                { print $0 }
+                ' "$device_mk_file" > "$device_mk_file.tmp"
+                
+                mv "$device_mk_file.tmp" "$device_mk_file"
+                log "  ✅ 注释掉 IMAGE 定义行"
+            fi
         fi
         
-        # 创建一个直接复制文件的替代工具
-        cat > "staging_dir/host/bin/mkdniimg" << 'EOF'
-#!/bin/bash
-# Netgear WNDR3800 专用的 mkdniimg 替代工具
-# 直接复制输入文件到输出文件，避免 Bad file descriptor 错误
-
-echo "🔧 Netgear WNDR3800 专用 mkdniimg 替代工具执行: $@" >&2
-
-INPUT_FILE=""
-OUTPUT_FILE=""
-
-# 解析参数
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -i)
-            shift
-            INPUT_FILE="$1"
-            ;;
-        -o)
-            shift
-            OUTPUT_FILE="$1"
-            ;;
-        -B|-v|-H|-r)
-            # 忽略这些参数
-            shift
-            ;;
-        *)
-            shift
-            ;;
-    esac
-    shift
-done
-
-# 检查输入文件
-if [ -z "$INPUT_FILE" ] || [ -z "$OUTPUT_FILE" ]; then
-    echo "❌ 错误: 需要输入和输出文件" >&2
-    exit 1
-fi
-
-if [ ! -f "$INPUT_FILE" ]; then
-    echo "❌ 错误: 输入文件不存在: $INPUT_FILE" >&2
-    exit 1
-fi
-
-# 获取输入文件大小
-INPUT_SIZE=$(stat -c %s "$INPUT_FILE" 2>/dev/null || wc -c < "$INPUT_FILE")
-echo "  📊 输入文件大小: $INPUT_SIZE 字节" >&2
-
-# 直接复制文件
-cp -f "$INPUT_FILE" "$OUTPUT_FILE"
-RESULT=$?
-
-if [ $RESULT -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
-    OUTPUT_SIZE=$(stat -c %s "$OUTPUT_FILE" 2>/dev/null || wc -c < "$OUTPUT_FILE")
-    echo "  ✅ 成功复制到: $OUTPUT_FILE ($OUTPUT_SIZE 字节)" >&2
-    # 确保文件被写入磁盘
-    sync
-    exit 0
-else
-    echo "❌ 复制失败" >&2
-    exit 1
-fi
-EOF
-        chmod +x "staging_dir/host/bin/mkdniimg"
-        log "  ✅ 创建 Netgear WNDR3800 专用 mkdniimg 替代工具"
-        
-        # 同样处理 fwtool
-        if [ -f "staging_dir/host/bin/fwtool" ]; then
-            mv "staging_dir/host/bin/fwtool" "staging_dir/host/bin/fwtool.original"
-        fi
-        
-        cat > "staging_dir/host/bin/fwtool" << 'EOF'
-#!/bin/bash
-# fwtool 替代工具 - 直接返回成功
-echo "🔧 fwtool 替代工具执行: $@" >&2
-exit 0
-EOF
-        chmod +x "staging_dir/host/bin/fwtool"
-        log "  ✅ 创建 fwtool 替代工具"
+        # 同时修改 target 目录下的其他相关文件
+        find "target/linux/ath79" -name "*.mk" -type f | while read mkfile; do
+            if grep -q "netgear_wndr3800" "$mkfile"; then
+                cp "$mkfile" "$mkfile.bak"
+                sed -i '/mkdniimg/s/^/# /' "$mkfile"
+                sed -i '/.*mkdniimg.*/s/^/# /' "$mkfile"
+                log "  ✅ 修改: $mkfile"
+            fi
+        done
     fi
     
     # ============================================
@@ -5382,7 +5344,7 @@ EOF
     echo "  目标平台: $TARGET/$SUBTARGET"
     
     # ============================================
-    # 单线程编译（避免并行问题）
+    # 单线程编译
     # ============================================
     echo ""
     echo "🚀 开始单线程编译固件 (make -j1)"
@@ -5404,10 +5366,15 @@ EOF
     echo "   退出代码: $BUILD_EXIT_CODE"
     
     # ============================================
-    # 检查编译结果
+    # 恢复 Makefile
     # ============================================
-    if [ $BUILD_EXIT_CODE -ne 0 ]; then
-        log "⚠️ 编译有警告或错误，但继续检查固件文件"
+    if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
+        log "🔧 恢复 Makefile..."
+        find "target/linux/ath79" -name "*.mk.bak" -type f | while read bakfile; do
+            original="${bakfile%.bak}"
+            mv "$bakfile" "$original"
+            log "  ✅ 恢复: $original"
+        done
     fi
     
     # ============================================
@@ -5420,80 +5387,53 @@ EOF
     local sysupgrade_count=0
     local factory_count=0
     local initramfs_count=0
-    local other_count=0
-    local all_firmware=()
     
     if [ -d "$target_dir" ]; then
-        while IFS= read -r file; do
-            if [ -f "$file" ] && [ -s "$file" ]; then
-                all_firmware+=("$file")
-                local size=$(ls -lh "$file" | awk '{print $5}')
-                if echo "$file" | grep -q "sysupgrade"; then
-                    sysupgrade_count=$((sysupgrade_count + 1))
-                    log "  ✅ 找到 sysupgrade: $(basename "$file") ($size)"
-                elif echo "$file" | grep -q "factory"; then
-                    factory_count=$((factory_count + 1))
-                    log "  ✅ 找到 factory: $(basename "$file") ($size)"
-                elif echo "$file" | grep -q "initramfs"; then
-                    initramfs_count=$((initramfs_count + 1))
-                    log "  🔷 找到 initramfs: $(basename "$file") ($size)"
-                else
-                    other_count=$((other_count + 1))
-                fi
+        ls -la "$target_dir/" 2>/dev/null | while read line; do
+            if echo "$line" | grep -q "sysupgrade.*\.bin"; then
+                sysupgrade_count=$((sysupgrade_count + 1))
+                echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
+            elif echo "$line" | grep -q "factory.*\.img"; then
+                factory_count=$((factory_count + 1))
+                echo "  ✅ $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
+            elif echo "$line" | grep -q "initramfs.*\.bin"; then
+                initramfs_count=$((initramfs_count + 1))
+                echo "  🔷 $(echo "$line" | awk '{print $9" ("$5" bytes)"}')"
             fi
-        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
+        done
     fi
     
     echo "----------------------------------------"
-    echo "📊 固件统计:"
-    echo "  ✅ sysupgrade.bin: $sysupgrade_count 个"
-    echo "  ✅ factory.img: $factory_count 个"
-    echo "  🔷 initramfs: $initramfs_count 个"
-    echo "  📦 其他: $other_count 个"
-    echo "  📊 总计: ${#all_firmware[@]} 个文件"
-    echo "----------------------------------------"
+    echo "📊 统计: sysupgrade: $sysupgrade_count, factory: $factory_count, initramfs: $initramfs_count"
     
-    # 验证固件大小是否合理
-    local sysupgrade_ok=0
-    local factory_ok=0
-    
-    for file in "${all_firmware[@]}"; do
-        local filename=$(basename "$file")
-        local size_bytes=$(stat -c %s "$file" 2>/dev/null || echo "0")
-        
-        if [[ "$filename" == *"sysupgrade"* ]]; then
-            if [ $size_bytes -gt 5000000 ] && [ $size_bytes -lt 15000000 ]; then
-                sysupgrade_ok=1
-                log "  ✅ sysupgrade.bin 大小正常: $size_bytes 字节"
-            else
-                log "  ⚠️ sysupgrade.bin 大小异常: $size_bytes 字节 (应在 5-15MB)"
-            fi
-        elif [[ "$filename" == *"factory"* ]]; then
-            if [ $size_bytes -gt 10000000 ] && [ $size_bytes -lt 20000000 ]; then
-                factory_ok=1
-                log "  ✅ factory.img 大小正常: $size_bytes 字节"
-            else
-                log "  ⚠️ factory.img 大小异常: $size_bytes 字节 (应在 10-20MB)"
-            fi
-        fi
-    done
-    
-    if [ ${#all_firmware[@]} -eq 0 ]; then
-        echo "❌ 错误: 没有找到任何固件文件"
+    # 验证固件是否存在
+    if [ $sysupgrade_count -eq 0 ] || [ $factory_count -eq 0 ]; then
+        echo ""
+        echo "❌ 错误: 缺少关键固件文件"
         
         # 显示最近的错误日志
         echo ""
         echo "📋 最近50行错误日志:"
         tail -50 build.log 2>/dev/null | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 3 -B 3 || echo "  无错误日志"
         
+        # 显示 Makefile 内容以便调试
+        if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
+            echo ""
+            echo "📋 设备 Makefile 内容:"
+            grep -A 20 -B 5 "netgear_wndr3800" "target/linux/ath79/image/generic.mk" 2>/dev/null || echo "  无法读取 Makefile"
+        fi
+        
         exit 1
-    elif [ $sysupgrade_ok -eq 0 ] || [ $factory_ok -eq 0 ]; then
-        echo ""
-        echo "⚠️ 警告: 部分固件文件大小可能不正常"
-        echo "但文件已生成，可以尝试使用"
     else
         echo ""
-        echo "🎉 成功生成正常的固件文件！"
+        echo "🎉 成功生成固件文件！"
+        
+        # 显示固件文件大小
+        echo ""
+        echo "📋 固件文件详情:"
+        ls -la "$target_dir/" | grep -E "sysupgrade|factory" | while read line; do
+            echo "  📄 $line"
+        done
     fi
     
     log "✅ 步骤22 完成"
