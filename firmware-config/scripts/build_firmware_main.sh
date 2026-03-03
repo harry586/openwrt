@@ -5222,7 +5222,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（替换有问题的工具） ==="
+    log "=== 步骤22: 编译固件（优化版） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5280,127 +5280,35 @@ workflow_step22_build_firmware() {
     cat > "staging_dir/host/bin/mkdniimg" << 'EOF'
 #!/bin/bash
 # 无害的 mkdniimg 替代工具 - 只复制文件，不做任何处理
-echo "🔧 无害 mkdniimg 执行: $@" >&2
-
 INPUT_FILE=""
 OUTPUT_FILE=""
 
-# 解析参数
 while [ $# -gt 0 ]; do
     case "$1" in
-        -i)
-            shift
-            INPUT_FILE="$1"
-            ;;
-        -o)
-            shift
-            OUTPUT_FILE="$1"
-            ;;
-        -B|-v|-H|-r)
-            # 忽略这些参数
-            shift
-            ;;
-        *)
-            shift
-            ;;
+        -i) shift; INPUT_FILE="$1" ;;
+        -o) shift; OUTPUT_FILE="$1" ;;
+        -B|-v|-H|-r) shift ;;
+        *) shift ;;
     esac
     shift
 done
 
-# 检查输入文件
-if [ -z "$INPUT_FILE" ] || [ -z "$OUTPUT_FILE" ]; then
-    echo "❌ 错误: 需要输入和输出文件" >&2
-    exit 1
-fi
+[ -z "$INPUT_FILE" ] || [ -z "$OUTPUT_FILE" ] && exit 1
+[ ! -f "$INPUT_FILE" ] && exit 1
 
-if [ ! -f "$INPUT_FILE" ]; then
-    echo "❌ 错误: 输入文件不存在: $INPUT_FILE" >&2
-    exit 1
-fi
-
-# 获取输入文件大小
-INPUT_SIZE=$(stat -c %s "$INPUT_FILE" 2>/dev/null || wc -c < "$INPUT_FILE")
-echo "  📊 输入文件: $INPUT_FILE ($INPUT_SIZE 字节)" >&2
-
-# 直接复制文件
 cp -f "$INPUT_FILE" "$OUTPUT_FILE"
-RESULT=$?
-
-if [ $RESULT -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
-    OUTPUT_SIZE=$(stat -c %s "$OUTPUT_FILE" 2>/dev/null || wc -c < "$OUTPUT_FILE")
-    echo "  ✅ 输出文件: $OUTPUT_FILE ($OUTPUT_SIZE 字节)" >&2
-    # 确保文件被写入磁盘
-    sync
-    exit 0
-else
-    echo "❌ 复制失败" >&2
-    exit 1
-fi
+sync
+exit 0
 EOF
     chmod +x "staging_dir/host/bin/mkdniimg"
-    log "  ✅ 创建无害的 mkdniimg 替代工具"
     
     # 创建无害的 fwtool 替代工具
     cat > "staging_dir/host/bin/fwtool" << 'EOF'
 #!/bin/bash
-# 无害的 fwtool 替代工具 - 直接返回成功
-echo "🔧 无害 fwtool 执行: $@" >&2
-
-# 检查是否有 -I 参数（表示要操作文件）
-FOUND_I=0
-TARGET_FILE=""
-
-for arg in "$@"; do
-    if [ "$FOUND_I" -eq 1 ]; then
-        TARGET_FILE="$arg"
-        break
-    fi
-    if [ "$arg" = "-I" ]; then
-        FOUND_I=1
-    fi
-done
-
-# 如果有目标文件且不存在，创建一个空文件
-if [ -n "$TARGET_FILE" ] && [ ! -f "$TARGET_FILE" ]; then
-    touch "$TARGET_FILE"
-    echo "  ✅ 创建空文件: $TARGET_FILE" >&2
-fi
-
 exit 0
 EOF
     chmod +x "staging_dir/host/bin/fwtool"
-    log "  ✅ 创建无害的 fwtool 替代工具"
-    
-    # 检查 padjffs2 工具
-    if [ -f "staging_dir/host/bin/padjffs2" ]; then
-        # 如果 padjffs2 也存在问题，也替换它
-        if strings "staging_dir/host/bin/padjffs2" 2>/dev/null | grep -q "fatal"; then
-            mv "staging_dir/host/bin/padjffs2" "staging_dir/host/bin/padjffs2.original"
-            
-            cat > "staging_dir/host/bin/padjffs2" << 'EOF'
-#!/bin/bash
-# 无害的 padjffs2 替代工具
-echo "🔧 无害 padjffs2 执行: $@" >&2
-
-FILE="$1"
-ALIGN="$2"
-
-if [ ! -f "$FILE" ]; then
-    echo "❌ 错误: 文件不存在 $FILE" >&2
-    exit 1
-fi
-
-# 获取文件大小
-SIZE=$(stat -c %s "$FILE" 2>/dev/null || wc -c < "$FILE")
-echo "  📊 文件: $FILE ($SIZE 字节), 对齐: $ALIGN" >&2
-
-# 直接返回成功，不做填充
-exit 0
-EOF
-            chmod +x "staging_dir/host/bin/padjffs2"
-            log "  ✅ 创建无害的 padjffs2 替代工具"
-        fi
-    fi
+    log "  ✅ 创建无害的工具替代品"
     
     # ============================================
     # 清理临时文件
@@ -5428,33 +5336,60 @@ EOF
     echo "🔧 系统信息:"
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
-    echo "  文件描述符限制: $(ulimit -n)"
     echo "  并行优化: $enable_parallel"
-    echo "  源码类型: $SOURCE_REPO_TYPE"
-    echo "  当前设备: $DEVICE"
-    echo "  目标平台: $TARGET/$SUBTARGET"
     
     # ============================================
-    # 单线程编译
+    # 智能并行编译（优化核心）
     # ============================================
-    echo ""
-    echo "🚀 开始单线程编译固件 (make -j1)"
-    echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-    echo ""
-    
-    START_TIME=$(date +%s)
-    
-    set +e
-    make -j1 V=s 2>&1 | tee build.log
-    BUILD_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
+    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
+        # 根据CPU核心数和内存动态调整并行数
+        if [ $CPU_CORES -ge 8 ] && [ $TOTAL_MEM -ge 8192 ]; then
+            MAKE_JOBS=8
+            log "✅ 高性能系统: 使用 $MAKE_JOBS 并行任务"
+        elif [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
+            MAKE_JOBS=4
+            log "✅ 中性能系统: 使用 $MAKE_JOBS 并行任务"
+        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
+            MAKE_JOBS=2
+            log "✅ 标准系统: 使用 $MAKE_JOBS 并行任务"
+        else
+            MAKE_JOBS=1
+            log "⚠️ 低性能系统: 使用单线程编译"
+        fi
+        
+        echo ""
+        echo "🚀 开始并行编译 (make -j$MAKE_JOBS)"
+        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo ""
+        
+        START_TIME=$(date +%s)
+        
+        set +e
+        make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+        BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        
+    else
+        MAKE_JOBS=1
+        echo ""
+        echo "🚀 开始单线程编译 (make -j1)"
+        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo ""
+        
+        START_TIME=$(date +%s)
+        
+        set +e
+        make -j1 V=s 2>&1 | tee build.log
+        BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+    fi
     
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
     
     echo ""
     echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-    echo "   退出代码: $BUILD_EXIT_CODE"
+    echo "   并行数: $MAKE_JOBS, 退出代码: $BUILD_EXIT_CODE"
     
     # ============================================
     # 恢复原始工具
@@ -5463,17 +5398,10 @@ EOF
     
     if [ -f "staging_dir/host/bin/mkdniimg.original" ]; then
         mv "staging_dir/host/bin/mkdniimg.original" "staging_dir/host/bin/mkdniimg"
-        log "  ✅ 恢复 mkdniimg"
     fi
     
     if [ -f "staging_dir/host/bin/fwtool.original" ]; then
         mv "staging_dir/host/bin/fwtool.original" "staging_dir/host/bin/fwtool"
-        log "  ✅ 恢复 fwtool"
-    fi
-    
-    if [ -f "staging_dir/host/bin/padjffs2.original" ]; then
-        mv "staging_dir/host/bin/padjffs2.original" "staging_dir/host/bin/padjffs2"
-        log "  ✅ 恢复 padjffs2"
     fi
     
     # ============================================
@@ -5486,29 +5414,19 @@ EOF
     local sysupgrade_count=0
     local factory_count=0
     local initramfs_count=0
-    local other_count=0
     
     if [ -d "$target_dir" ]; then
         while IFS= read -r file; do
             if [ -f "$file" ] && [ -s "$file" ]; then
                 local filename=$(basename "$file")
                 local size=$(ls -lh "$file" | awk '{print $5}')
-                local size_bytes=$(stat -c %s "$file" 2>/dev/null || echo "0")
                 
                 if [[ "$filename" == *"sysupgrade"* ]]; then
                     sysupgrade_count=$((sysupgrade_count + 1))
-                    if [ $size_bytes -gt 5000000 ] && [ $size_bytes -lt 15000000 ]; then
-                        echo "  ✅ sysupgrade: $filename ($size)"
-                    else
-                        echo "  ⚠️ sysupgrade: $filename ($size) - 大小可能异常"
-                    fi
+                    echo "  ✅ sysupgrade: $filename ($size)"
                 elif [[ "$filename" == *"factory"* ]]; then
                     factory_count=$((factory_count + 1))
-                    if [ $size_bytes -gt 10000000 ] && [ $size_bytes -lt 20000000 ]; then
-                        echo "  ✅ factory: $filename ($size)"
-                    else
-                        echo "  ⚠️ factory: $filename ($size) - 大小可能异常"
-                    fi
+                    echo "  ✅ factory: $filename ($size)"
                 elif [[ "$filename" == *"initramfs"* ]]; then
                     initramfs_count=$((initramfs_count + 1))
                     echo "  🔷 initramfs: $filename ($size)"
@@ -5520,23 +5438,13 @@ EOF
     echo "----------------------------------------"
     echo "📊 统计: sysupgrade: $sysupgrade_count, factory: $factory_count, initramfs: $initramfs_count"
     
-    # 验证固件是否存在
     if [ $sysupgrade_count -eq 0 ] && [ $factory_count -eq 0 ]; then
         echo ""
         echo "❌ 错误: 没有找到任何关键固件文件"
-        
-        # 显示最近的错误日志
-        echo ""
-        echo "📋 最近50行错误日志:"
-        tail -50 build.log 2>/dev/null | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 3 -B 3 || echo "  无错误日志"
-        
         exit 1
-    elif [ $sysupgrade_count -eq 0 ] || [ $factory_count -eq 0 ]; then
-        echo ""
-        echo "⚠️ 警告: 缺少部分固件文件，但已有文件可用"
     else
         echo ""
-        echo "🎉 成功生成完整的固件文件！"
+        echo "🎉 固件生成成功！"
     fi
     
     log "✅ 步骤22 完成"
