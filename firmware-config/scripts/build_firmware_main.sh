@@ -903,34 +903,26 @@ configure_feeds() {
         fi
     done
     
+    # ============================================
+    # 添加诊断工具到禁用列表
+    # ============================================
+    local diagnostic_tools=(
+        "iw"           # 无线诊断工具，约 200KB
+        "iwinfo"       # 无线信息工具，约 100KB
+        "ethtool"      # 网卡诊断工具，约 150KB
+        "tcpdump"      # 抓包工具，约 500KB
+        "mtr"          # 网络诊断，约 100KB
+    )
+    
+    log "🔧 添加诊断工具到禁用列表: ${diagnostic_tools[*]}"
+    
+    for tool in "${diagnostic_tools[@]}"; do
+        search_keywords+=("$tool")
+        seen_keywords+=("$tool")
+        full_forbidden_list+=("$tool")
+    done
+    
     log "📋 搜索关键词列表 (${#search_keywords[@]} 个): ${search_keywords[*]}"
-    
-    # ============================================
-    # 在配置 feeds 之前，先删除不需要的插件包
-    # ============================================
-    log "🔧 在配置 feeds 之前，删除不需要的插件包..."
-    
-    # 查找并删除 package/feeds 中的相关目录
-    if [ -d "package/feeds" ]; then
-        for keyword in "${search_keywords[@]}"; do
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除包目录: $dir"
-                rm -rf "$dir"
-            done
-        done
-    fi
-    
-    # 查找并删除 feeds 目录中的相关目录（如果存在）
-    if [ -d "feeds" ]; then
-        for keyword in "${search_keywords[@]}"; do
-            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        done
-    fi
-    
-    log "✅ 不需要的插件包已删除"
     
     # ============================================
     # 根据源码类型设置feeds
@@ -998,92 +990,101 @@ EOF
     ./scripts/feeds update -a || handle_error "更新feeds失败"
     
     # ============================================
-    # 在安装 feeds 之前，再次删除不需要的插件
+    # 在安装 feeds 之前，彻底删除不需要的插件源文件
     # ============================================
-    log "🔧 在安装 feeds 之前，再次删除不需要的插件包..."
+    log "🔧 在安装 feeds 之前，彻底删除不需要的插件源文件..."
     
-    sleep 2
+    # 创建临时文件存储所有要删除的关键词
+    local all_keywords_file=$(mktemp)
     
+    # 添加所有基础关键词
     for keyword in "${search_keywords[@]}"; do
-        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-            log "  🗑️  删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
+        echo "$keyword" >> "$all_keywords_file"
     done
     
-    log "✅ 不需要的插件包已删除"
+    # 添加特定插件的关键词
+    local specific_keywords=(
+        "nlbwmon"
+        "luci-app-nlbwmon"
+        "nlbwmon-database"
+        "wol"
+        "luci-app-wol"
+        "etherwake"
+        "ddns"
+        "luci-app-ddns"
+        "ddns-scripts"
+    )
+    
+    for keyword in "${specific_keywords[@]}"; do
+        echo "$keyword" >> "$all_keywords_file"
+    done
+    
+    # 去重
+    sort -u "$all_keywords_file" > "$all_keywords_file.sorted"
+    
+    log "🔍 使用 $(wc -l < "$all_keywords_file.sorted") 个关键词删除源文件..."
+    
+    # 遍历所有唯一关键词，删除相关目录
+    while read keyword; do
+        [ -z "$keyword" ] && continue
+        
+        # 在 feeds 目录中搜索并删除
+        if [ -d "feeds" ]; then
+            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除 feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+            find feeds -type f -name "*${keyword}*" 2>/dev/null | while read file; do
+                log "  🗑️  删除 feeds 文件: $file"
+                rm -f "$file"
+            done
+        fi
+        
+    done < "$all_keywords_file.sorted"
+    
+    rm -f "$all_keywords_file" "$all_keywords_file.sorted"
+    
+    log "✅ 不需要的插件源文件已彻底删除"
     
     log "=== 安装Feeds ==="
     ./scripts/feeds install -a || handle_error "安装feeds失败"
     
     # ============================================
-    # 安装后彻底删除不需要的插件源文件（动态删除）
+    # 安装后再次彻底删除不需要的插件源文件
     # ============================================
-    log "🔧 安装后彻底删除不需要的插件源文件（动态删除）..."
+    log "🔧 安装后再次彻底删除不需要的插件源文件..."
     
-    # 再次删除所有相关目录
+    # 重新创建关键词文件
+    local post_keywords_file=$(mktemp)
+    
+    # 重新添加所有关键词
     for keyword in "${search_keywords[@]}"; do
-        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-            log "  🗑️  删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
+        echo "$keyword" >> "$post_keywords_file"
     done
     
-    # 特别处理：根据禁用列表删除所有相关目录（使用完整列表）
-    log "🔧 根据完整禁用列表删除所有相关目录..."
-    
-    # 创建临时文件存储唯一的关键词
-    local unique_keywords_file=$(mktemp)
-    
-    # 从完整禁用列表中提取所有可能的关键词
-    for plugin in "${full_forbidden_list[@]}"; do
-        # 提取基础包名（去除前缀和后缀）
-        local base_name=$(echo "$plugin" | sed 's/^luci-app-//' | sed 's/^luci-i18n-//' | sed 's/-zh-cn$//' | sed 's/_INCLUDE_.*//' | sed 's/-[^-]*$//')
-        echo "$base_name" >> "$unique_keywords_file"
-        
-        # 添加原始名称
-        echo "$plugin" >> "$unique_keywords_file"
-        
-        # 提取核心名称（去除所有后缀）
-        local core_name=$(echo "$plugin" | sed 's/^luci-app-//' | sed 's/^luci-i18n-//' | sed 's/-zh-cn$//' | sed 's/_INCLUDE_.*//' | sed 's/-scripts$//' | sed 's/-extra$//' | sed 's/-core$//' | sed 's/-ng$//' | sed 's/-webui$//')
-        echo "$core_name" >> "$unique_keywords_file"
+    for keyword in "${specific_keywords[@]}"; do
+        echo "$keyword" >> "$post_keywords_file"
     done
     
-    # 去重
-    sort -u "$unique_keywords_file" > "$unique_keywords_file.sorted"
+    sort -u "$post_keywords_file" > "$post_keywords_file.sorted"
     
-    log "🔍 使用 $(wc -l < "$unique_keywords_file.sorted") 个唯一关键词搜索目录..."
-    
-    # 遍历所有唯一关键词
+    # 再次删除
     while read keyword; do
         [ -z "$keyword" ] && continue
         
-        # 跳过太短的词
-        if [ ${#keyword} -lt 3 ]; then
-            continue
+        # 在 feeds 目录中搜索并删除
+        if [ -d "feeds" ]; then
+            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除 feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+            find feeds -type f -name "*${keyword}*" 2>/dev/null | while read file; do
+                log "  🗑️  删除 feeds 文件: $file"
+                rm -f "$file"
+            done
         fi
         
-        # 在 feeds 目录中搜索
-        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-            log "  🗑️  删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        # 在 package/feeds 目录中搜索
+        # 在 package/feeds 目录中搜索并删除
         if [ -d "package/feeds" ]; then
             find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
                 log "  🗑️  删除 package/feeds 目录: $dir"
@@ -1091,17 +1092,9 @@ EOF
             done
         fi
         
-        # 在 package 目录中搜索
-        find package -maxdepth 2 -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-            # 跳过核心目录
-            if [[ "$dir" != "package/feeds" && "$dir" != "package/kernel" && "$dir" != "package/libs" && "$dir" != "package/network" && "$dir" != "package/system" && "$dir" != "package/utils" ]]; then
-                log "  🗑️  删除 package 目录: $dir"
-                rm -rf "$dir"
-            fi
-        done
-    done < "$unique_keywords_file.sorted"
+    done < "$post_keywords_file.sorted"
     
-    rm -f "$unique_keywords_file" "$unique_keywords_file.sorted"
+    rm -f "$post_keywords_file" "$post_keywords_file.sorted"
     
     log "✅ 所有不需要的插件源文件已彻底删除"
     
