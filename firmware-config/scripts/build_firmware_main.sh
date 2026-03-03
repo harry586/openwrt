@@ -1451,6 +1451,36 @@ EOF
         log "✅ ath10k-ct驱动已强制启用"
     fi
     
+    # ============================================
+    # 处理 openvpn 依赖问题
+    # ============================================
+    log "🔧 处理 openvpn 依赖问题..."
+    
+    # 创建缺失的 Config-wolfssl.in 文件
+    local openvpn_config_dir="feeds/packages/net/openvpn"
+    if [ ! -d "$openvpn_config_dir" ]; then
+        mkdir -p "$openvpn_config_dir"
+    fi
+    
+    # 创建空的 Config-wolfssl.in 文件
+    cat > "$openvpn_config_dir/Config-wolfssl.in" << 'EOF'
+# dummy Config-wolfssl.in to fix build
+menuconfig PACKAGE_openvpn-wolfssl
+	bool "openvpn-wolfssl (dummy)"
+	default n
+EOF
+    
+    log "  ✅ 创建了缺失的 Config-wolfssl.in 文件"
+    
+    # 禁用 openvpn 相关选项
+    cat >> .config << 'EOF'
+# 禁用 openvpn 相关选项
+# CONFIG_PACKAGE_openvpn is not set
+# CONFIG_PACKAGE_openvpn-openssl is not set
+# CONFIG_PACKAGE_openvpn-mbedtls is not set
+# CONFIG_PACKAGE_openvpn-wolfssl is not set
+EOF
+    
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
