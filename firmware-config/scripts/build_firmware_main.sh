@@ -990,6 +990,42 @@ EOF
     ./scripts/feeds update -a || handle_error "更新feeds失败"
     
     # ============================================
+    # 在安装 feeds 之前，先处理依赖关系
+    # ============================================
+    log "🔧 处理依赖关系..."
+    
+    # 查找并修改依赖 ddns-scripts 的 Makefile
+    if [ -d "feeds" ]; then
+        find feeds -name "Makefile" -type f 2>/dev/null | while read makefile; do
+            # 如果 Makefile 依赖 ddns-scripts，注释掉相关行
+            if grep -q "ddns-scripts" "$makefile" 2>/dev/null; then
+                log "  📝 处理依赖: $makefile"
+                # 备份原文件
+                cp "$makefile" "$makefile.bak"
+                # 注释掉 DEPENDS 行
+                sed -i 's/\(DEPENDS.*ddns-scripts\)/# \1/g' "$makefile"
+            fi
+            # 如果 Makefile 依赖 luci-app-nlbwmon，注释掉相关行
+            if grep -q "luci-app-nlbwmon" "$makefile" 2>/dev/null; then
+                log "  📝 处理依赖: $makefile"
+                cp "$makefile" "$makefile.bak"
+                sed -i 's/\(DEPENDS.*luci-app-nlbwmon\)/# \1/g' "$makefile"
+            fi
+        done
+    fi
+    
+    # 处理 package/lean 目录下的特殊依赖
+    if [ -d "package/lean" ]; then
+        find package/lean -name "Makefile" -type f 2>/dev/null | while read makefile; do
+            if grep -q "ddns-scripts" "$makefile" 2>/dev/null; then
+                log "  📝 处理 lean 依赖: $makefile"
+                cp "$makefile" "$makefile.bak"
+                sed -i 's/\(DEPENDS.*ddns-scripts\)/# \1/g' "$makefile"
+            fi
+        done
+    fi
+    
+    # ============================================
     # 在安装 feeds 之前，彻底删除不需要的插件源文件
     # ============================================
     log "🔧 在安装 feeds 之前，彻底删除不需要的插件源文件..."
@@ -1013,6 +1049,7 @@ EOF
         "ddns"
         "luci-app-ddns"
         "ddns-scripts"
+        "luci-app-wrtbwmon"
     )
     
     for keyword in "${specific_keywords[@]}"; do
@@ -1095,6 +1132,21 @@ EOF
     done < "$post_keywords_file.sorted"
     
     rm -f "$post_keywords_file" "$post_keywords_file.sorted"
+    
+    # ============================================
+    # 恢复被修改的 Makefile
+    # ============================================
+    log "🔧 恢复 Makefile 依赖..."
+    
+    find feeds -name "Makefile.bak" -type f 2>/dev/null | while read bakfile; do
+        original="${bakfile%.bak}"
+        mv "$bakfile" "$original"
+    done
+    
+    find package/lean -name "Makefile.bak" -type f 2>/dev/null | while read bakfile; do
+        original="${bakfile%.bak}"
+        mv "$bakfile" "$original"
+    done
     
     log "✅ 所有不需要的插件源文件已彻底删除"
     
