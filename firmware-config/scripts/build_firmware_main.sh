@@ -1246,7 +1246,6 @@ generate_config() {
     local openwrt_device=""
     local search_device=""
     
-    # 根据不同源码类型和设备名称，动态映射正确的设备名
     case "$DEVICE" in
         ac42u|rt-ac42u|asus_rt-ac42u)
             openwrt_device="asus_rt-ac42u"
@@ -1313,35 +1312,6 @@ CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
 ${device_config}=y
 EOF
-    
-    # 为 Netgear 设备添加必要的内核配置
-    if [[ "$DEVICE" == *"netgear_wndr3800"* ]] || [[ "$DEVICE" == *"wndr3800"* ]]; then
-        log "🔧 为 Netgear WNDR3800 添加必要的内核配置..."
-        
-        cat >> .config << 'EOF'
-# Netgear WNDR3800 必要的内核配置
-CONFIG_TARGET_ath79_generic_DEVICE_netgear_wndr3800=y
-CONFIG_TARGET_IMAGES_GZIP=y
-CONFIG_TARGET_ROOTFS_PARTSIZE=256
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
-CONFIG_GRUB_CONSOLE=y
-CONFIG_GRUB_SERIAL=y
-CONFIG_GRUB_TERMINALS=y
-CONFIG_PACKAGE_kmod-usb-ohci=y
-CONFIG_PACKAGE_kmod-usb2=y
-CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
-CONFIG_PACKAGE_kmod-leds-reset=y
-CONFIG_PACKAGE_kmod-owl-loader=y
-CONFIG_PACKAGE_kmod-ath9k=y
-CONFIG_PACKAGE_kmod-ath9k-htc=y
-CONFIG_PACKAGE_hostapd-common=y
-CONFIG_PACKAGE_wpad-basic=y
-CONFIG_PACKAGE_iw=y
-CONFIG_PACKAGE_iwinfo=y
-EOF
-        log "✅ Netgear 内核配置已添加"
-    fi
     
     log "🔧 基础配置文件内容:"
     cat .config
@@ -1441,45 +1411,21 @@ EOF
     fi
     
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
+        # 先清除可能存在的配置
         sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
         sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
         sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/d' .config
+        
+        # 暂时不启用任何驱动，等内核检测后决定
         echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
-        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-        log "✅ ath10k-ct驱动已强制启用"
+        echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set" >> .config
+        log "✅ ath10k驱动将在内核检测后决定"
     fi
-    
-    # ============================================
-    # 处理 openvpn 依赖问题
-    # ============================================
-    log "🔧 处理 openvpn 依赖问题..."
-    
-    # 创建缺失的 Config-wolfssl.in 文件
-    local openvpn_config_dir="feeds/packages/net/openvpn"
-    if [ ! -d "$openvpn_config_dir" ]; then
-        mkdir -p "$openvpn_config_dir"
-    fi
-    
-    # 创建空的 Config-wolfssl.in 文件
-    cat > "$openvpn_config_dir/Config-wolfssl.in" << 'EOF'
-# dummy Config-wolfssl.in to fix build
-menuconfig PACKAGE_openvpn-wolfssl
-	bool "openvpn-wolfssl (dummy)"
-	default n
-EOF
-    
-    log "  ✅ 创建了缺失的 Config-wolfssl.in 文件"
-    
-    # 禁用 openvpn 相关选项
-    cat >> .config << 'EOF'
-# 禁用 openvpn 相关选项
-# CONFIG_PACKAGE_openvpn is not set
-# CONFIG_PACKAGE_openvpn-openssl is not set
-# CONFIG_PACKAGE_openvpn-mbedtls is not set
-# CONFIG_PACKAGE_openvpn-wolfssl is not set
-EOF
     
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
@@ -1542,8 +1488,39 @@ EOF
         fi
     fi
     
+    # 获取系统内存大小用于ath10k选择
+    local total_mem=$(free -m | awk '/^Mem:/{print $2}' 2>/dev/null || echo "512")
+    
+    # 根据内核版本和设备内存选择ath10k驱动
     if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
         log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
+        
+        # 清除之前的ath10k配置
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k/d' .config
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct/d' .config
+        sed -i '/# CONFIG_PACKAGE_kmod-ath10k/d' .config
+        sed -i '/# CONFIG_PACKAGE_kmod-ath10k-ct/d' .config
+        
+        # 根据内核版本选择驱动
+        case "$kernel_version" in
+            6.6|6.7|6.8|6.9|6.10|6.11|6.12)
+                log "🔧 内核版本较新 ($kernel_version)，优先使用 ath10k-ct"
+                if [ "$total_mem" -lt 128 ]; then
+                    log "  📊 检测到内存较小 (${total_mem}MB)，使用 smallbuffers 变体"
+                    echo "CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y" >> .config
+                else
+                    echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+                fi
+                ;;
+            5.15|5.10|5.4)
+                log "🔧 内核版本稳定 ($kernel_version)，使用标准 ath10k-ct"
+                echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+                ;;
+            *)
+                log "🔧 未知内核版本 ($kernel_version)，使用默认 ath10k-ct"
+                echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+                ;;
+        esac
         
         local kernel_patterns=(
             "^CONFIG_USB"
@@ -1592,15 +1569,97 @@ EOF
         if [ "${DEBUG:-false}" = "true" ]; then
             log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
         fi
+        # 如果没有找到内核配置文件，使用默认ath10k-ct
+        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
     fi
     
+    # 检查dnsmasq配置冲突
+    log "🔍 检查 dnsmasq 配置..."
+    if grep -q "^CONFIG_PACKAGE_dnsmasq=y" .config && grep -q "^CONFIG_PACKAGE_dnsmasq-full=y" .config; then
+        log "⚠️ 检测到 dnsmasq 和 dnsmasq-full 同时启用，自动修复..."
+        sed -i 's/^CONFIG_PACKAGE_dnsmasq=y/# CONFIG_PACKAGE_dnsmasq is not set/' .config
+        log "  ✅ 已禁用 dnsmasq，保留 dnsmasq-full"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_dnsmasq-full=y" .config; then
+        log "  ✅ dnsmasq-full 已启用，检查依赖..."
+        if ! grep -q "^CONFIG_PACKAGE_libubus=y" .config; then
+            echo "CONFIG_PACKAGE_libubus=y" >> .config
+            log "  ✅ 添加依赖: libubus"
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_libblobmsg-json=y" .config; then
+            echo "CONFIG_PACKAGE_libblobmsg-json=y" >> .config
+            log "  ✅ 添加依赖: libblobmsg-json"
+        fi
+    fi
+    
+    # 创建缺失的配置文件
+    log "🔧 检查并创建缺失的配置文件..."
+    if [ ! -f "feeds/packages/net/openvpn/Config-wolfssl.in" ]; then
+        mkdir -p "feeds/packages/net/openvpn"
+        cat > "feeds/packages/net/openvpn/Config-wolfssl.in" << 'EOF'
+# dummy Config-wolfssl.in to fix build
+menuconfig PACKAGE_openvpn-wolfssl
+	bool "openvpn-wolfssl (dummy)"
+	default n
+EOF
+        log "  ✅ 创建缺失的 Config-wolfssl.in"
+    fi
+    
+    local common_configs=(
+        "feeds/packages/net/openssh/Config.overridable"
+        "feeds/packages/libs/gnutls/Config.wolfssl"
+    )
+    
+    for config in "${common_configs[@]}"; do
+        if [ ! -f "$config" ]; then
+            mkdir -p "$(dirname "$config")"
+            touch "$config"
+            log "  ✅ 创建缺失的配置文件: $config"
+        fi
+    done
+    
     log "🔄 第一次运行 make defconfig..."
-    make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
-        log "❌ 第一次 make defconfig 失败"
-        tail -50 /tmp/build-logs/defconfig1.log
-        handle_error "第一次依赖解决失败"
-    }
-    log "✅ 第一次 make defconfig 成功"
+    
+    local max_retries=3
+    local retry_count=0
+    local defconfig_success=0
+    
+    while [ $retry_count -lt $max_retries ] && [ $defconfig_success -eq 0 ]; do
+        retry_count=$((retry_count + 1))
+        
+        if [ $retry_count -gt 1 ]; then
+            log "🔄 第 $retry_count 次重试 make defconfig..."
+            if [ $retry_count -eq 2 ]; then
+                log "  🔧 尝试修复常见问题..."
+                # 在第二次重试时，如果ath10k-ct有问题，尝试切换到smallbuffers变体
+                if grep -q "ath10k-ct" /tmp/build-logs/defconfig1.log 2>/dev/null; then
+                    sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
+                    echo "CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y" >> .config
+                    log "  ✅ 切换到 ath10k-ct-smallbuffers 驱动"
+                fi
+            fi
+        fi
+        
+        if make defconfig > /tmp/build-logs/defconfig${retry_count}.log 2>&1; then
+            defconfig_success=1
+            log "✅ 第 $retry_count 次 make defconfig 成功"
+        else
+            log "⚠️ 第 $retry_count 次 make defconfig 失败"
+            if [ $retry_count -lt $max_retries ]; then
+                if grep -q "Config-wolfssl.in" /tmp/build-logs/defconfig${retry_count}.log; then
+                    mkdir -p "feeds/packages/net/openvpn"
+                    touch "feeds/packages/net/openvpn/Config-wolfssl.in"
+                fi
+            fi
+        fi
+    done
+    
+    if [ $defconfig_success -eq 0 ]; then
+        log "❌ 所有 $max_retries 次 make defconfig 都失败"
+        tail -50 /tmp/build-logs/defconfig3.log
+        handle_error "依赖解决失败"
+    fi
     
     log "🔍 动态检测实际生效的USB内核配置..."
     
