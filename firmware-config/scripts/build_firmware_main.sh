@@ -5402,11 +5402,11 @@ workflow_step22_build_firmware() {
     log "  ✅ 内存大小: ${TOTAL_MEM}MB"
     
     # ============================================
-    # 设置环境变量（模拟本地环境）
+    # 设置环境变量
     # ============================================
     log "🔧 设置环境变量..."
     
-    # 设置文件描述符限制（本地环境的典型值）
+    # 设置文件描述符限制
     ulimit -n 65535 2>/dev/null || true
     ulimit -s 8192 2>/dev/null || true
     
@@ -5443,7 +5443,56 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 备份关键文件（仅在出问题时使用）
+    # 根据源码类型设置正确的 feeds
+    # ============================================
+    log "🔧 根据源码类型设置 feeds..."
+    
+    # 恢复原始的 feeds.conf.default（如果存在备份）
+    if [ -f "feeds.conf.default.bak" ]; then
+        mv feeds.conf.default.bak feeds.conf.default
+    fi
+    
+    # 根据源码类型设置正确的 feeds
+    case "$SOURCE_REPO_TYPE" in
+        "lede")
+            log "  LEDE源码模式: 使用 GitHub 原始源（不使用镜像）"
+            cat > feeds.conf.default << 'EOF'
+src-git packages https://github.com/coolsnowwolf/packages.git
+src-git luci https://github.com/coolsnowwolf/luci.git
+src-git routing https://github.com/coolsnowwolf/routing.git
+src-git telephony https://github.com/coolsnowwolf/telephony.git
+EOF
+            ;;
+        "openwrt")
+            log "  OpenWrt源码模式: 使用 OpenWrt 官方源"
+            cat > feeds.conf.default << EOF
+src-git packages https://git.openwrt.org/feed/packages.git
+src-git luci https://git.openwrt.org/project/luci.git
+src-git routing https://git.openwrt.org/feed/routing.git
+src-git telephony https://git.openwrt.org/feed/telephony.git
+EOF
+            ;;
+        "immortalwrt")
+            log "  ImmortalWrt源码模式: 使用 ImmortalWrt 官方源"
+            cat > feeds.conf.default << EOF
+src-git packages https://github.com/immortalwrt/packages.git
+src-git luci https://github.com/immortalwrt/luci.git
+src-git routing https://github.com/immortalwrt/routing.git
+src-git telephony https://github.com/immortalwrt/telephony.git
+EOF
+            ;;
+    esac
+    
+    # 如果需要 TurboACC
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+        log "  ✅ 添加 TurboACC feed"
+    fi
+    
+    log "  ✅ feeds.conf.default 已更新"
+    
+    # ============================================
+    # 备份关键文件
     # ============================================
     log "🔧 创建简单备份..."
     local backup_dir="$BUILD_DIR/.backup"
@@ -5460,7 +5509,6 @@ workflow_step22_build_firmware() {
     echo ""
     echo "🚀 开始按本地编译顺序执行..."
     
-    # 本地编译的典型步骤：
     # 1. 先编译工具链
     log "步骤1: 编译工具链"
     make tools/install -j${CPU_CORES} V=s
