@@ -5356,7 +5356,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（终极备份恢复方案） ==="
+    log "=== 步骤22: 编译固件（模拟本地环境） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5376,409 +5376,142 @@ workflow_step22_build_firmware() {
             make defconfig > /dev/null 2>&1
             log "  ✅ 已禁用 dnsmasq，保留 dnsmasq-full"
         fi
-        
-        mkdir -p "$BUILD_DIR/files/etc/config"
-        mkdir -p "$BUILD_DIR/files/etc/init.d"
-        log "  ✅ 预创建 dnsmasq 配置目录"
     fi
     
     # ============================================
-    # 设置文件描述符限制
+    # 设置环境变量（模拟本地环境）
     # ============================================
-    log "🔧 设置文件描述符限制..."
+    log "🔧 设置环境变量..."
     
-    local current_limit=$(ulimit -n 2>/dev/null || echo "unknown")
-    log "  📊 当前文件描述符限制: $current_limit"
+    # 设置文件描述符限制（本地环境的典型值）
+    ulimit -n 65535 2>/dev/null || true
+    ulimit -s 8192 2>/dev/null || true
     
-    if ulimit -n 65536 2>/dev/null; then
-        log "  ✅ 成功设置文件描述符限制为: 65536"
-    fi
+    # 设置语言环境
+    export LC_ALL=C
+    export LANG=C
     
-    # ============================================
-    # 创建终极备份恢复脚本
-    # ============================================
-    log "🔧 创建终极备份恢复脚本..."
-    
-    local safe_dir="$BUILD_DIR/.firmware_safe"
-    mkdir -p "$safe_dir"/{kernel,rootfs,firmware,final}
-    
-    cat > "$safe_dir/backup.sh" << 'EOF'
-#!/bin/bash
-# 终极备份脚本 - 监控并备份所有关键文件
-SAFE_DIR="$1"
-BUILD_DIR="$2"
-LOG_FILE="$SAFE_DIR/backup.log"
-
-echo "=== 终极备份启动于 $(date) ===" > "$LOG_FILE"
-
-# 关键文件定义
-declare -A CRITICAL_FILES
-CRITICAL_FILES["sysupgrade"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-CRITICAL_FILES["factory"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-CRITICAL_FILES["initramfs"]="openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin"
-
-# 内核文件
-KERNEL_FILES=(
-    "vmlinux"
-    "vmlinux.bin"
-    "vmlinux.elf"
-    "zImage"
-    "zImage.bin"
-    "uImage"
-    "uImage.bin"
-)
-
-# 根文件系统
-ROOTFS_FILES=(
-    "root.squashfs"
-    "root.squashfs-64k"
-    "root.squashfs-4k"
-    "root.ext4"
-    "root.jffs2-64k"
-)
-
-# 备份函数
-backup_file() {
-    local file="$1"
-    local category="$2"
-    local reason="$3"
-    
-    if [ -f "$file" ] && [ -s "$file" ]; then
-        local filename=$(basename "$file")
-        local size=$(stat -c %s "$file" 2>/dev/null || wc -c < "$file")
-        local backup_path="$SAFE_DIR/$category/$filename"
-        
-        # 多重备份
-        cp -f "$file" "$backup_path"
-        cp -f "$file" "$SAFE_DIR/final/$filename"
-        
-        echo "$(date): ✅ [$category] $reason: $filename ($size 字节)" >> "$LOG_FILE"
-        
-        # 如果是关键固件，立即复制到目标目录
-        for key in "${!CRITICAL_FILES[@]}"; do
-            if [ "$filename" = "${CRITICAL_FILES[$key]}" ] && [ $size -gt 5000000 ]; then
-                local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
-                mkdir -p "$target_dir"
-                cp -f "$file" "$target_dir/$filename"
-                echo "  └─> 已复制到目标目录" >> "$LOG_FILE"
-            fi
-        done
-    fi
-}
-
-# 搜索目录
-search_directory() {
-    local dir="$1"
-    local category="$2"
-    
-    if [ ! -d "$dir" ]; then
-        return
-    fi
-    
-    # 备份内核文件
-    for pattern in "${KERNEL_FILES[@]}"; do
-        find "$dir" -name "$pattern" -type f -size +1M 2>/dev/null | while read file; do
-            backup_file "$file" "$category" "内核文件"
-        done
-    done
-    
-    # 备份根文件系统
-    for pattern in "${ROOTFS_FILES[@]}"; do
-        find "$dir" -name "$pattern" -type f -size +1M 2>/dev/null | while read file; do
-            backup_file "$file" "$category" "根文件系统"
-        done
-    done
-    
-    # 备份固件文件
-    for pattern in "*.bin" "*.img"; do
-        find "$dir" -name "$pattern" -type f -size +1M 2>/dev/null | while read file; do
-            backup_file "$file" "$category" "固件文件"
-        done
-    done
-}
-
-# 要监控的目录
-WATCH_DIRS=(
-    "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic"
-    "$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
-    "$BUILD_DIR/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic"
-    "$BUILD_DIR/build_dir/target-aarch64_cortex-a53_musl/linux-mediatek_filogic/tmp"
-    "$BUILD_DIR/build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx"
-    "$BUILD_DIR/build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx/tmp"
-    "$BUILD_DIR/bin/targets"
-)
-
-# 预编译备份
-for watch_dir in "${WATCH_DIRS[@]}"; do
-    search_directory "$watch_dir" "pre"
-done
-
-# 监控循环
-while true; do
-    for watch_dir in "${WATCH_DIRS[@]}"; do
-        search_directory "$watch_dir" "mid"
-    done
-    sleep 2
-done
-EOF
-    chmod +x "$safe_dir/backup.sh"
-    
-    # 启动备份脚本
-    "$safe_dir/backup.sh" "$safe_dir" "$BUILD_DIR" &
-    local backup_pid=$!
-    log "  ✅ 终极备份已启动 (PID: $backup_pid)"
-    
-    # ============================================
-    # 创建终极恢复脚本
-    # ============================================
-    cat > "$safe_dir/restore.sh" << 'EOF'
-#!/bin/bash
-# 终极恢复脚本
-SAFE_DIR="$1"
-BUILD_DIR="$2"
-LOG_FILE="$SAFE_DIR/restore.log"
-
-echo "=== 终极恢复开始于 $(date) ===" > "$LOG_FILE"
-
-# 目标目录
-TARGET_DIRS=(
-    "$BUILD_DIR/bin/targets/ath79/generic"
-    "$BUILD_DIR/bin/targets/mediatek/filogic"
-    "$BUILD_DIR/bin/targets/ipq40xx/generic"
-)
-
-for target_dir in "${TARGET_DIRS[@]}"; do
-    mkdir -p "$target_dir"
-done
-
-# 关键文件列表
-FILES=(
-    "openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-    "openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-    "openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin"
-)
-
-# 从安全目录恢复
-for category in kernel rootfs firmware final; do
-    category_dir="$SAFE_DIR/$category"
-    if [ -d "$category_dir" ]; then
-        find "$category_dir" -type f 2>/dev/null | while read backup; do
-            filename=$(basename "$backup")
-            size=$(stat -c %s "$backup" 2>/dev/null || wc -c < "$backup")
-            
-            # 只恢复大于 5MB 的文件
-            if [ $size -gt 5000000 ]; then
-                for target_file in "${FILES[@]}"; do
-                    if [ "$filename" = "$target_file" ]; then
-                        for target_dir in "${TARGET_DIRS[@]}"; do
-                            cp -f "$backup" "$target_dir/$filename"
-                            echo "✅ [$category] 恢复: $filename ($size 字节) -> $target_dir" >> "$LOG_FILE"
-                        done
-                    fi
-                done
-                
-                # 如果是内核或根文件系统，也保存
-                if [[ "$filename" == vmlinux* ]] || [[ "$filename" == root.squashfs* ]]; then
-                    for target_dir in "${TARGET_DIRS[@]}"; do
-                        cp -f "$backup" "$target_dir/$filename"
-                        echo "✅ [$category] 恢复内核/根文件系统: $filename ($size 字节) -> $target_dir" >> "$LOG_FILE"
-                    done
-                fi
-            fi
-        done
-    fi
-done
-
-# 手动组装固件（如果内核和根文件系统都存在）
-KERNEL_FILE=""
-ROOTFS_FILE=""
-
-for category in kernel final; do
-    find "$SAFE_DIR/$category" -name "vmlinux*" -type f -size +5M 2>/dev/null | while read k; do
-        KERNEL_FILE="$k"
-    done
-    find "$SAFE_DIR/$category" -name "root.squashfs*" -type f -size +5M 2>/dev/null | while read r; do
-        ROOTFS_FILE="$r"
-    done
-done
-
-if [ -n "$KERNEL_FILE" ] && [ -n "$ROOTFS_FILE" ]; then
-    echo "找到内核和根文件系统，尝试组装固件..." >> "$LOG_FILE"
-    
-    KERNEL_SIZE=$(stat -c %s "$KERNEL_FILE" 2>/dev/null || echo "0")
-    ROOTFS_SIZE=$(stat -c %s "$ROOTFS_FILE" 2>/dev/null || echo "0")
-    
-    echo "内核大小: $KERNEL_SIZE 字节" >> "$LOG_FILE"
-    echo "根文件系统大小: $ROOTFS_SIZE 字节" >> "$LOG_FILE"
-    
-    for target_dir in "${TARGET_DIRS[@]}"; do
-        SYSUPGRADE="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-        
-        # 组装 sysupgrade.bin
-        cp -f "$KERNEL_FILE" "$SYSUPGRADE"
-        cat "$ROOTFS_FILE" >> "$SYSUPGRADE"
-        
-        FINAL_SIZE=$(stat -c %s "$SYSUPGRADE" 2>/dev/null || echo "0")
-        echo "✅ 手动组装 sysupgrade.bin: $FINAL_SIZE 字节 -> $target_dir" >> "$LOG_FILE"
-        
-        # 组装 factory.img（直接复制内核作为示例）
-        cp -f "$KERNEL_FILE" "$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-    done
-fi
-
-# 最终统计
-echo "" >> "$LOG_FILE"
-echo "📊 最终恢复统计:" >> "$LOG_FILE"
-
-total_files=0
-for target_dir in "${TARGET_DIRS[@]}"; do
-    if [ -d "$target_dir" ]; then
-        count=$(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-        total_files=$((total_files + count))
-        echo "  $target_dir: $count 个文件" >> "$LOG_FILE"
-        
-        find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
-            size=$(ls -lh "$file" | awk '{print $5}')
-            echo "    📄 $(basename "$file") ($size)" >> "$LOG_FILE"
-        done
-    fi
-done
-
-echo "总文件数: $total_files" >> "$LOG_FILE"
-echo "=== 终极恢复结束于 $(date) ===" >> "$LOG_FILE"
-
-# 输出到控制台
-cat "$LOG_FILE"
-exit 0
-EOF
-    chmod +x "$safe_dir/restore.sh"
-    
-    # ============================================
-    # 清理临时文件
-    # ============================================
-    log "  清理临时文件..."
-    find build_dir -type f \( -name "*.tmp" -o -name "*.new" \) 2>/dev/null -exec rm -f {} \; 2>/dev/null || true
-    
-    export KCFLAGS="-O2 -pipe"
-    
-    # ============================================
-    # 创建固件目录
-    # ============================================
-    log "🔧 创建固件输出目录..."
-    mkdir -p "bin/targets/ath79/generic"
-    mkdir -p "bin/targets/mediatek/filogic"
-    mkdir -p "bin/targets/ipq40xx/generic"
-    log "  ✅ 创建固件目录完成"
-    
-    export OPENWRT_VERBOSE=1
+    # 设置编译环境变量
     export FORCE_UNSAFE_CONFIGURE=1
+    export BUILD_LOG=1
     
-    CPU_CORES=$(nproc)
-    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
-    
-    echo ""
-    echo "🔧 系统信息:"
-    echo "  CPU核心数: $CPU_CORES"
-    echo "  内存大小: ${TOTAL_MEM}MB"
-    echo "  文件描述符限制: $(ulimit -n)"
-    echo "  并行优化: $enable_parallel"
-    echo "  源码类型: $SOURCE_REPO_TYPE"
-    echo "  当前设备: $DEVICE"
-    echo "  目标平台: $TARGET/$SUBTARGET"
+    log "  ✅ 环境变量设置完成"
     
     # ============================================
-    # 智能并行编译
+    # 准备编译环境
     # ============================================
-    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
-        if [ $CPU_CORES -ge 8 ] && [ $TOTAL_MEM -ge 8192 ]; then
-            MAKE_JOBS=8
-        elif [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
-            MAKE_JOBS=4
-        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
-            MAKE_JOBS=2
-        else
-            MAKE_JOBS=1
+    log "🔧 准备编译环境..."
+    
+    # 创建必要的目录
+    mkdir -p dl
+    mkdir -p staging_dir/host/bin
+    
+    # 检查关键工具
+    local missing_tools=()
+    for tool in mkdniimg fwtool padjffs2; do
+        if [ ! -f "staging_dir/host/bin/$tool" ]; then
+            missing_tools+=("$tool")
         fi
-        
-        echo ""
-        echo "🚀 开始并行编译 (make -j$MAKE_JOBS)"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        START_TIME=$(date +%s)
-        
-        set +e
-        make -j$MAKE_JOBS V=s 2>&1 | tee build.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
-        
-    else
-        MAKE_JOBS=1
-        echo ""
-        echo "🚀 开始单线程编译 (make -j1)"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        START_TIME=$(date +%s)
-        
-        set +e
-        make -j1 V=s 2>&1 | tee build.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
+    done
+    
+    if [ ${#missing_tools[@]} -gt 0 ]; then
+        log "  ⚠️ 缺失工具: ${missing_tools[*]}，重新编译..."
+        make tools/install -j1 V=s > /dev/null 2>&1 || true
     fi
     
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
+    # ============================================
+    # 备份关键文件（仅在出问题时使用）
+    # ============================================
+    log "🔧 创建简单备份..."
+    local backup_dir="$BUILD_DIR/.backup"
+    mkdir -p "$backup_dir"
     
+    # 只备份关键文件
+    find "build_dir/target-mips_24kc_musl/linux-ath79_generic" -name "root.squashfs" -o -name "vmlinux" 2>/dev/null | while read file; do
+        cp -f "$file" "$backup_dir/" 2>/dev/null || true
+    done
+    
+    # ============================================
+    # 按本地编译顺序执行
+    # ============================================
     echo ""
-    echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-    echo "   并行数: $MAKE_JOBS, 退出代码: $BUILD_EXIT_CODE"
+    echo "🚀 开始按本地编译顺序执行..."
     
-    # 停止备份脚本
-    kill $backup_pid 2>/dev/null || true
-    log "🔧 终极备份已停止"
+    # 本地编译的典型步骤：
+    # 1. 先编译工具链
+    log "步骤1: 编译工具链"
+    make tools/install -j$((CPU_CORES)) V=s
+    
+    # 2. 编译工具链的依赖
+    log "步骤2: 编译工具链依赖"
+    make toolchain/install -j$((CPU_CORES)) V=s
+    
+    # 3. 更新 feeds
+    log "步骤3: 更新 feeds"
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
+    
+    # 4. 编译目标
+    log "步骤4: 编译目标"
+    make target/linux/compile -j$((CPU_CORES)) V=s
+    
+    # 5. 编译软件包
+    log "步骤5: 编译软件包"
+    make package/compile -j$((CPU_CORES)) V=s
+    
+    # 6. 生成固件
+    log "步骤6: 生成固件"
+    make -j1 V=s
     
     # ============================================
-    # 执行终极恢复
-    # ============================================
-    echo ""
-    echo "🔧 执行终极恢复..."
-    bash "$safe_dir/restore.sh" "$safe_dir" "$BUILD_DIR"
-    
-    # ============================================
-    # 最终固件检查
+    # 最终检查
     # ============================================
     echo ""
     echo "📊 最终固件检查:"
     echo "----------------------------------------"
     
-    local total_files=0
+    local sysupgrade_count=0
+    local factory_count=0
+    local initramfs_count=0
+    
     for target_dir in bin/targets/*/*; do
         if [ -d "$target_dir" ]; then
-            count=$(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
-            if [ $count -gt 0 ]; then
-                echo "📁 $target_dir: $count 个文件"
-                total_files=$((total_files + count))
-                ls -la "$target_dir/" 2>/dev/null | grep -E "\.bin|\.img" | while read line; do
-                    echo "  $line"
-                done
-            fi
+            while IFS= read -r file; do
+                if [ -f "$file" ] && [ -s "$file" ]; then
+                    local size=$(ls -lh "$file" | awk '{print $5}')
+                    if [[ "$file" == *"sysupgrade"* ]]; then
+                        sysupgrade_count=$((sysupgrade_count + 1))
+                        echo "  ✅ sysupgrade: $(basename "$file") ($size)"
+                    elif [[ "$file" == *"factory"* ]]; then
+                        factory_count=$((factory_count + 1))
+                        echo "  ✅ factory: $(basename "$file") ($size)"
+                    elif [[ "$file" == *"initramfs"* ]]; then
+                        initramfs_count=$((initramfs_count + 1))
+                        echo "  🔷 initramfs: $(basename "$file") ($size)"
+                    fi
+                fi
+            done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
         fi
     done
     
     echo "----------------------------------------"
-    echo "📊 总计: $total_files 个固件文件"
+    echo "📊 统计: sysupgrade: $sysupgrade_count, factory: $factory_count, initramfs: $initramfs_count"
     
-    if [ $total_files -eq 0 ]; then
+    if [ $sysupgrade_count -eq 0 ] && [ $factory_count -eq 0 ]; then
         echo ""
-        echo "❌ 错误: 没有找到任何固件文件"
+        echo "❌ 错误: 没有找到固件文件"
+        
+        # 检查备份
+        if [ -d "$backup_dir" ] && [ "$(ls -A $backup_dir)" ]; then
+            echo "📁 备份目录中有文件:"
+            ls -la "$backup_dir/"
+        fi
+        
         exit 1
     else
         echo ""
-        echo "🎉 成功生成 $total_files 个固件文件！"
+        echo "🎉 成功生成固件！"
     fi
-    
-    rm -rf "$safe_dir" 2>/dev/null || true
     
     log "✅ 步骤22 完成"
 }
