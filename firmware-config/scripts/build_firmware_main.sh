@@ -5379,6 +5379,29 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
+    # 获取系统信息
+    # ============================================
+    log "🔧 获取系统信息..."
+    
+    # 获取 CPU 核心数
+    if [ -f /proc/cpuinfo ]; then
+        CPU_CORES=$(grep -c processor /proc/cpuinfo 2>/dev/null || echo "2")
+    else
+        CPU_CORES=$(nproc 2>/dev/null || echo "2")
+    fi
+    
+    # 确保 CPU_CORES 是数字
+    if ! [[ "$CPU_CORES" =~ ^[0-9]+$ ]] || [ "$CPU_CORES" -lt 1 ]; then
+        CPU_CORES=2
+    fi
+    
+    # 获取内存大小
+    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}' 2>/dev/null || echo "4096")
+    
+    log "  ✅ CPU核心数: $CPU_CORES"
+    log "  ✅ 内存大小: ${TOTAL_MEM}MB"
+    
+    # ============================================
     # 设置环境变量（模拟本地环境）
     # ============================================
     log "🔧 设置环境变量..."
@@ -5416,7 +5439,7 @@ workflow_step22_build_firmware() {
     
     if [ ${#missing_tools[@]} -gt 0 ]; then
         log "  ⚠️ 缺失工具: ${missing_tools[*]}，重新编译..."
-        make tools/install -j1 V=s > /dev/null 2>&1 || true
+        make tools/install -j${CPU_CORES} V=s > /dev/null 2>&1 || true
     fi
     
     # ============================================
@@ -5440,11 +5463,11 @@ workflow_step22_build_firmware() {
     # 本地编译的典型步骤：
     # 1. 先编译工具链
     log "步骤1: 编译工具链"
-    make tools/install -j$((CPU_CORES)) V=s
+    make tools/install -j${CPU_CORES} V=s
     
     # 2. 编译工具链的依赖
     log "步骤2: 编译工具链依赖"
-    make toolchain/install -j$((CPU_CORES)) V=s
+    make toolchain/install -j${CPU_CORES} V=s
     
     # 3. 更新 feeds
     log "步骤3: 更新 feeds"
@@ -5453,11 +5476,11 @@ workflow_step22_build_firmware() {
     
     # 4. 编译目标
     log "步骤4: 编译目标"
-    make target/linux/compile -j$((CPU_CORES)) V=s
+    make target/linux/compile -j${CPU_CORES} V=s
     
     # 5. 编译软件包
     log "步骤5: 编译软件包"
-    make package/compile -j$((CPU_CORES)) V=s
+    make package/compile -j${CPU_CORES} V=s
     
     # 6. 生成固件
     log "步骤6: 生成固件"
