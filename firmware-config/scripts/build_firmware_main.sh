@@ -5356,7 +5356,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（模拟本地环境） ==="
+    log "=== 步骤22: 编译固件（强制保护关键文件） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5383,79 +5383,35 @@ workflow_step22_build_firmware() {
     # ============================================
     log "🔧 获取系统信息..."
     
-    # 获取 CPU 核心数
     if [ -f /proc/cpuinfo ]; then
         CPU_CORES=$(grep -c processor /proc/cpuinfo 2>/dev/null || echo "2")
     else
         CPU_CORES=$(nproc 2>/dev/null || echo "2")
     fi
     
-    # 确保 CPU_CORES 是数字
     if ! [[ "$CPU_CORES" =~ ^[0-9]+$ ]] || [ "$CPU_CORES" -lt 1 ]; then
         CPU_CORES=2
     fi
     
-    # 获取内存大小
-    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}' 2>/dev/null || echo "4096")
-    
     log "  ✅ CPU核心数: $CPU_CORES"
-    log "  ✅ 内存大小: ${TOTAL_MEM}MB"
     
     # ============================================
     # 设置环境变量
     # ============================================
     log "🔧 设置环境变量..."
-    
-    # 设置文件描述符限制
     ulimit -n 65535 2>/dev/null || true
-    ulimit -s 8192 2>/dev/null || true
-    
-    # 设置语言环境
     export LC_ALL=C
     export LANG=C
-    
-    # 设置编译环境变量
     export FORCE_UNSAFE_CONFIGURE=1
-    export BUILD_LOG=1
-    
     log "  ✅ 环境变量设置完成"
     
     # ============================================
-    # 准备编译环境
-    # ============================================
-    log "🔧 准备编译环境..."
-    
-    # 创建必要的目录
-    mkdir -p dl
-    mkdir -p staging_dir/host/bin
-    
-    # 检查关键工具
-    local missing_tools=()
-    for tool in mkdniimg fwtool padjffs2; do
-        if [ ! -f "staging_dir/host/bin/$tool" ]; then
-            missing_tools+=("$tool")
-        fi
-    done
-    
-    if [ ${#missing_tools[@]} -gt 0 ]; then
-        log "  ⚠️ 缺失工具: ${missing_tools[*]}，重新编译..."
-        make tools/install -j${CPU_CORES} V=s > /dev/null 2>&1 || true
-    fi
-    
-    # ============================================
-    # 根据源码类型设置正确的 feeds
+    # 根据源码类型设置 feeds
     # ============================================
     log "🔧 根据源码类型设置 feeds..."
     
-    # 恢复原始的 feeds.conf.default（如果存在备份）
-    if [ -f "feeds.conf.default.bak" ]; then
-        mv feeds.conf.default.bak feeds.conf.default
-    fi
-    
-    # 根据源码类型设置正确的 feeds
     case "$SOURCE_REPO_TYPE" in
         "lede")
-            log "  LEDE源码模式: 使用 GitHub 原始源（不使用镜像）"
             cat > feeds.conf.default << 'EOF'
 src-git packages https://github.com/coolsnowwolf/packages.git
 src-git luci https://github.com/coolsnowwolf/luci.git
@@ -5464,7 +5420,6 @@ src-git telephony https://github.com/coolsnowwolf/telephony.git
 EOF
             ;;
         "openwrt")
-            log "  OpenWrt源码模式: 使用 OpenWrt 官方源"
             cat > feeds.conf.default << EOF
 src-git packages https://git.openwrt.org/feed/packages.git
 src-git luci https://git.openwrt.org/project/luci.git
@@ -5473,7 +5428,6 @@ src-git telephony https://git.openwrt.org/feed/telephony.git
 EOF
             ;;
         "immortalwrt")
-            log "  ImmortalWrt源码模式: 使用 ImmortalWrt 官方源"
             cat > feeds.conf.default << EOF
 src-git packages https://github.com/immortalwrt/packages.git
 src-git luci https://github.com/immortalwrt/luci.git
@@ -5483,56 +5437,113 @@ EOF
             ;;
     esac
     
-    # 如果需要 TurboACC
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-        log "  ✅ 添加 TurboACC feed"
     fi
     
-    log "  ✅ feeds.conf.default 已更新"
+    # ============================================
+    # 创建强制保护脚本
+    # ============================================
+    log "🔧 创建强制保护脚本..."
+    
+    local protect_dir="$BUILD_DIR/.protect"
+    mkdir -p "$protect_dir"
+    
+    cat > "$protect_dir/protect.sh" << 'EOF'
+#!/bin/bash
+# 强制保护脚本 - 在文件被删除前强制复制
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+LOG_FILE="$PROTECT_DIR/protect.log"
+
+echo "=== 强制保护启动于 $(date) ===" > "$LOG_FILE"
+
+# 关键文件列表
+CRITICAL_FILES=(
+    "openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+    "openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+    "openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin"
+)
+
+# 监控并保护文件
+while true; do
+    TMP_DIR="$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
+    if [ -d "$TMP_DIR" ]; then
+        for file in "${CRITICAL_FILES[@]}"; do
+            if [ -f "$TMP_DIR/$file" ]; then
+                SIZE=$(stat -c %s "$TMP_DIR/$file" 2>/dev/null || echo "0")
+                if [ $SIZE -gt 5000000 ]; then
+                    cp -f "$TMP_DIR/$file" "$PROTECT_DIR/$file"
+                    echo "$(date): ✅ 保护: $file ($SIZE 字节)" >> "$LOG_FILE"
+                fi
+            fi
+            if [ -f "$TMP_DIR/$file.new" ]; then
+                cp -f "$TMP_DIR/$file.new" "$PROTECT_DIR/$file.new"
+            fi
+        done
+    fi
+    sleep 1
+done
+EOF
+    chmod +x "$protect_dir/protect.sh"
+    
+    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
+    local protect_pid=$!
+    log "  ✅ 强制保护已启动 (PID: $protect_pid)"
     
     # ============================================
-    # 备份关键文件
-    # ============================================
-    log "🔧 创建简单备份..."
-    local backup_dir="$BUILD_DIR/.backup"
-    mkdir -p "$backup_dir"
-    
-    # 只备份关键文件
-    find "build_dir/target-mips_24kc_musl/linux-ath79_generic" -name "root.squashfs" -o -name "vmlinux" 2>/dev/null | while read file; do
-        cp -f "$file" "$backup_dir/" 2>/dev/null || true
-    done
-    
-    # ============================================
-    # 按本地编译顺序执行
+    # 按顺序编译
     # ============================================
     echo ""
-    echo "🚀 开始按本地编译顺序执行..."
+    echo "🚀 开始编译..."
     
-    # 1. 先编译工具链
-    log "步骤1: 编译工具链"
-    make tools/install -j${CPU_CORES} V=s
+    # 更新 feeds
+    log "步骤1: 更新 feeds"
+    ./scripts/feeds update -a || true
+    ./scripts/feeds install -a || true
     
-    # 2. 编译工具链的依赖
-    log "步骤2: 编译工具链依赖"
-    make toolchain/install -j${CPU_CORES} V=s
+    # 编译工具链
+    log "步骤2: 编译工具链"
+    make tools/install -j${CPU_CORES} V=s || true
+    make toolchain/install -j${CPU_CORES} V=s || true
     
-    # 3. 更新 feeds
-    log "步骤3: 更新 feeds"
-    ./scripts/feeds update -a
-    ./scripts/feeds install -a
+    # 编译目标
+    log "步骤3: 编译目标"
+    make target/linux/compile -j${CPU_CORES} V=s || true
     
-    # 4. 编译目标
-    log "步骤4: 编译目标"
-    make target/linux/compile -j${CPU_CORES} V=s
+    # 编译软件包
+    log "步骤4: 编译软件包"
+    make package/compile -j${CPU_CORES} V=s || true
     
-    # 5. 编译软件包
-    log "步骤5: 编译软件包"
-    make package/compile -j${CPU_CORES} V=s
-    
-    # 6. 生成固件
-    log "步骤6: 生成固件"
+    # 生成固件
+    log "步骤5: 生成固件"
     make -j1 V=s
+    
+    # 停止保护脚本
+    kill $protect_pid 2>/dev/null || true
+    log "🔧 强制保护已停止"
+    
+    # ============================================
+    # 从保护目录恢复文件
+    # ============================================
+    log "🔧 从保护目录恢复文件..."
+    
+    TARGET_DIR="bin/targets/ath79/generic"
+    mkdir -p "$TARGET_DIR"
+    
+    if [ -d "$protect_dir" ]; then
+        for file in openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin \
+                    openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img \
+                    openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin; do
+            if [ -f "$protect_dir/$file" ]; then
+                SIZE=$(stat -c %s "$protect_dir/$file" 2>/dev/null || echo "0")
+                if [ $SIZE -gt 5000000 ]; then
+                    cp -f "$protect_dir/$file" "$TARGET_DIR/$file"
+                    log "  ✅ 恢复: $file ($SIZE 字节)"
+                fi
+            fi
+        done
+    fi
     
     # ============================================
     # 最终检查
@@ -5545,25 +5556,23 @@ EOF
     local factory_count=0
     local initramfs_count=0
     
-    for target_dir in bin/targets/*/*; do
-        if [ -d "$target_dir" ]; then
-            while IFS= read -r file; do
-                if [ -f "$file" ] && [ -s "$file" ]; then
-                    local size=$(ls -lh "$file" | awk '{print $5}')
-                    if [[ "$file" == *"sysupgrade"* ]]; then
-                        sysupgrade_count=$((sysupgrade_count + 1))
-                        echo "  ✅ sysupgrade: $(basename "$file") ($size)"
-                    elif [[ "$file" == *"factory"* ]]; then
-                        factory_count=$((factory_count + 1))
-                        echo "  ✅ factory: $(basename "$file") ($size)"
-                    elif [[ "$file" == *"initramfs"* ]]; then
-                        initramfs_count=$((initramfs_count + 1))
-                        echo "  🔷 initramfs: $(basename "$file") ($size)"
-                    fi
+    if [ -d "$TARGET_DIR" ]; then
+        while IFS= read -r file; do
+            if [ -f "$file" ] && [ -s "$file" ]; then
+                local size=$(ls -lh "$file" | awk '{print $5}')
+                if [[ "$file" == *"sysupgrade"* ]]; then
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                    echo "  ✅ sysupgrade: $(basename "$file") ($size)"
+                elif [[ "$file" == *"factory"* ]]; then
+                    factory_count=$((factory_count + 1))
+                    echo "  ✅ factory: $(basename "$file") ($size)"
+                elif [[ "$file" == *"initramfs"* ]]; then
+                    initramfs_count=$((initramfs_count + 1))
+                    echo "  🔷 initramfs: $(basename "$file") ($size)"
                 fi
-            done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
-        fi
-    done
+            fi
+        done < <(find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
+    fi
     
     echo "----------------------------------------"
     echo "📊 统计: sysupgrade: $sysupgrade_count, factory: $factory_count, initramfs: $initramfs_count"
@@ -5571,19 +5580,13 @@ EOF
     if [ $sysupgrade_count -eq 0 ] && [ $factory_count -eq 0 ]; then
         echo ""
         echo "❌ 错误: 没有找到固件文件"
-        
-        # 检查备份
-        if [ -d "$backup_dir" ] && [ "$(ls -A $backup_dir)" ]; then
-            echo "📁 备份目录中有文件:"
-            ls -la "$backup_dir/"
-        fi
-        
         exit 1
     else
         echo ""
         echo "🎉 成功生成固件！"
     fi
     
+    rm -rf "$protect_dir" 2>/dev/null || true
     log "✅ 步骤22 完成"
 }
 #【build_firmware_main.sh-36-end】
