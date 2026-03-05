@@ -5356,7 +5356,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（强制保护关键文件） ==="
+    log "=== 步骤22: 编译固件（强制生成 factory 镜像） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5442,7 +5442,7 @@ EOF
     fi
     
     # ============================================
-    # 创建强制保护脚本
+    # 创建强制保护脚本（专门保护 factory 文件）
     # ============================================
     log "🔧 创建强制保护脚本..."
     
@@ -5458,7 +5458,7 @@ LOG_FILE="$PROTECT_DIR/protect.log"
 
 echo "=== 强制保护启动于 $(date) ===" > "$LOG_FILE"
 
-# 关键文件列表
+# 关键文件列表 - 特别关注 factory 文件
 CRITICAL_FILES=(
     "openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
     "openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
@@ -5470,6 +5470,7 @@ while true; do
     TMP_DIR="$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
     if [ -d "$TMP_DIR" ]; then
         for file in "${CRITICAL_FILES[@]}"; do
+            # 保护原始文件
             if [ -f "$TMP_DIR/$file" ]; then
                 SIZE=$(stat -c %s "$TMP_DIR/$file" 2>/dev/null || echo "0")
                 if [ $SIZE -gt 5000000 ]; then
@@ -5477,8 +5478,13 @@ while true; do
                     echo "$(date): ✅ 保护: $file ($SIZE 字节)" >> "$LOG_FILE"
                 fi
             fi
+            # 保护 .new 文件（factory 镜像的关键中间文件）
             if [ -f "$TMP_DIR/$file.new" ]; then
-                cp -f "$TMP_DIR/$file.new" "$PROTECT_DIR/$file.new"
+                SIZE=$(stat -c %s "$TMP_DIR/$file.new" 2>/dev/null || echo "0")
+                if [ $SIZE -gt 5000000 ]; then
+                    cp -f "$TMP_DIR/$file.new" "$PROTECT_DIR/$file.new"
+                    echo "$(date): ✅ 保护: $file.new ($SIZE 字节)" >> "$LOG_FILE"
+                fi
             fi
         done
     fi
@@ -5531,18 +5537,75 @@ EOF
     TARGET_DIR="bin/targets/ath79/generic"
     mkdir -p "$TARGET_DIR"
     
+    SYSUPGRADE_RESTORED=0
+    FACTORY_RESTORED=0
+    
     if [ -d "$protect_dir" ]; then
-        for file in openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin \
-                    openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img \
-                    openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin; do
-            if [ -f "$protect_dir/$file" ]; then
-                SIZE=$(stat -c %s "$protect_dir/$file" 2>/dev/null || echo "0")
-                if [ $SIZE -gt 5000000 ]; then
-                    cp -f "$protect_dir/$file" "$TARGET_DIR/$file"
-                    log "  ✅ 恢复: $file ($SIZE 字节)"
-                fi
+        # 恢复 sysupgrade
+        if [ -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
+            SIZE=$(stat -c %s "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" 2>/dev/null || echo "0")
+            if [ $SIZE -gt 5000000 ]; then
+                cp -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" "$TARGET_DIR/"
+                log "  ✅ 恢复 sysupgrade.bin ($SIZE 字节)"
+                SYSUPGRADE_RESTORED=1
             fi
-        done
+        fi
+        
+        # 恢复 factory - 优先从 .new 文件恢复
+        if [ -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.new" ]; then
+            SIZE=$(stat -c %s "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.new" 2>/dev/null || echo "0")
+            if [ $SIZE -gt 5000000 ]; then
+                cp -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.new" "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+                log "  ✅ 从 .new 恢复 factory.img ($SIZE 字节)"
+                FACTORY_RESTORED=1
+            fi
+        elif [ -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" ]; then
+            SIZE=$(stat -c %s "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" 2>/dev/null || echo "0")
+            if [ $SIZE -gt 5000000 ]; then
+                cp -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" "$TARGET_DIR/"
+                log "  ✅ 恢复 factory.img ($SIZE 字节)"
+                FACTORY_RESTORED=1
+            fi
+        fi
+        
+        # 恢复 initramfs
+        if [ -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin" ]; then
+            cp -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin" "$TARGET_DIR/"
+            log "  ✅ 恢复 initramfs"
+        fi
+    fi
+    
+    # ============================================
+    # 如果 factory 还没恢复，尝试手动组装
+    # ============================================
+    if [ $FACTORY_RESTORED -eq 0 ]; then
+        log "🔧 尝试手动组装 factory.img..."
+        
+        # 查找内核和根文件系统
+        KERNEL_FILE=""
+        ROOTFS_FILE=""
+        
+        # 从构建目录查找
+        KERNEL_FILE=$(find "build_dir/target-mips_24kc_musl/linux-ath79_generic" -name "vmlinux" -type f -size +5M 2>/dev/null | head -1)
+        ROOTFS_FILE=$(find "build_dir/target-mips_24kc_musl/linux-ath79_generic" -name "root.squashfs" -type f -size +5M 2>/dev/null | head -1)
+        
+        if [ -n "$KERNEL_FILE" ] && [ -n "$ROOTFS_FILE" ]; then
+            KERNEL_SIZE=$(stat -c %s "$KERNEL_FILE" 2>/dev/null || echo "0")
+            ROOTFS_SIZE=$(stat -c %s "$ROOTFS_FILE" 2>/dev/null || echo "0")
+            
+            log "  📊 找到内核: $KERNEL_SIZE 字节"
+            log "  📊 找到根文件系统: $ROOTFS_SIZE 字节"
+            
+            # 手动组装 factory.img
+            cp -f "$KERNEL_FILE" "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+            cat "$ROOTFS_FILE" >> "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+            
+            FINAL_SIZE=$(stat -c %s "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" 2>/dev/null || echo "0")
+            if [ $FINAL_SIZE -gt 5000000 ]; then
+                log "  ✅ 手动组装 factory.img 成功 ($FINAL_SIZE 字节)"
+                FACTORY_RESTORED=1
+            fi
+        fi
     fi
     
     # ============================================
@@ -5552,38 +5615,23 @@ EOF
     echo "📊 最终固件检查:"
     echo "----------------------------------------"
     
-    local sysupgrade_count=0
-    local factory_count=0
-    local initramfs_count=0
-    
     if [ -d "$TARGET_DIR" ]; then
-        while IFS= read -r file; do
-            if [ -f "$file" ] && [ -s "$file" ]; then
-                local size=$(ls -lh "$file" | awk '{print $5}')
-                if [[ "$file" == *"sysupgrade"* ]]; then
-                    sysupgrade_count=$((sysupgrade_count + 1))
-                    echo "  ✅ sysupgrade: $(basename "$file") ($size)"
-                elif [[ "$file" == *"factory"* ]]; then
-                    factory_count=$((factory_count + 1))
-                    echo "  ✅ factory: $(basename "$file") ($size)"
-                elif [[ "$file" == *"initramfs"* ]]; then
-                    initramfs_count=$((initramfs_count + 1))
-                    echo "  🔷 initramfs: $(basename "$file") ($size)"
-                fi
-            fi
-        done < <(find "$TARGET_DIR" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
+        ls -la "$TARGET_DIR/" 2>/dev/null | grep -E "sysupgrade|factory|initramfs" | while read line; do
+            echo "  $line"
+        done
     fi
     
     echo "----------------------------------------"
-    echo "📊 统计: sysupgrade: $sysupgrade_count, factory: $factory_count, initramfs: $initramfs_count"
     
-    if [ $sysupgrade_count -eq 0 ] && [ $factory_count -eq 0 ]; then
-        echo ""
-        echo "❌ 错误: 没有找到固件文件"
+    if [ $SYSUPGRADE_RESTORED -eq 1 ] && [ $FACTORY_RESTORED -eq 1 ]; then
+        echo "🎉 成功生成 sysupgrade.bin 和 factory.img！"
+    elif [ $SYSUPGRADE_RESTORED -eq 1 ] && [ $FACTORY_RESTORED -eq 0 ]; then
+        echo "⚠️ 只有 sysupgrade.bin 生成成功，factory.img 缺失"
+        echo "   可以先用 sysupgrade.bin 刷机"
         exit 1
     else
-        echo ""
-        echo "🎉 成功生成固件！"
+        echo "❌ 错误: 固件生成失败"
+        exit 1
     fi
     
     rm -rf "$protect_dir" 2>/dev/null || true
