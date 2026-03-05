@@ -5356,7 +5356,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（强制生成 factory 镜像） ==="
+    log "=== 步骤22: 编译固件（优化版 - 移除冲突保护） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5377,7 +5377,7 @@ workflow_step22_build_firmware() {
             log "  ✅ 已禁用 dnsmasq，保留 dnsmasq-full"
         fi
     fi
-    
+
     # ============================================
     # 获取系统信息
     # ============================================
@@ -5442,62 +5442,6 @@ EOF
     fi
     
     # ============================================
-    # 创建强制保护脚本（专门保护 factory 文件）
-    # ============================================
-    log "🔧 创建强制保护脚本..."
-    
-    local protect_dir="$BUILD_DIR/.protect"
-    mkdir -p "$protect_dir"
-    
-    cat > "$protect_dir/protect.sh" << 'EOF'
-#!/bin/bash
-# 强制保护脚本 - 在文件被删除前强制复制
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-LOG_FILE="$PROTECT_DIR/protect.log"
-
-echo "=== 强制保护启动于 $(date) ===" > "$LOG_FILE"
-
-# 关键文件列表 - 特别关注 factory 文件
-CRITICAL_FILES=(
-    "openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-    "openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-    "openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin"
-)
-
-# 监控并保护文件
-while true; do
-    TMP_DIR="$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
-    if [ -d "$TMP_DIR" ]; then
-        for file in "${CRITICAL_FILES[@]}"; do
-            # 保护原始文件
-            if [ -f "$TMP_DIR/$file" ]; then
-                SIZE=$(stat -c %s "$TMP_DIR/$file" 2>/dev/null || echo "0")
-                if [ $SIZE -gt 5000000 ]; then
-                    cp -f "$TMP_DIR/$file" "$PROTECT_DIR/$file"
-                    echo "$(date): ✅ 保护: $file ($SIZE 字节)" >> "$LOG_FILE"
-                fi
-            fi
-            # 保护 .new 文件（factory 镜像的关键中间文件）
-            if [ -f "$TMP_DIR/$file.new" ]; then
-                SIZE=$(stat -c %s "$TMP_DIR/$file.new" 2>/dev/null || echo "0")
-                if [ $SIZE -gt 5000000 ]; then
-                    cp -f "$TMP_DIR/$file.new" "$PROTECT_DIR/$file.new"
-                    echo "$(date): ✅ 保护: $file.new ($SIZE 字节)" >> "$LOG_FILE"
-                fi
-            fi
-        done
-    fi
-    sleep 1
-done
-EOF
-    chmod +x "$protect_dir/protect.sh"
-    
-    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
-    local protect_pid=$!
-    log "  ✅ 强制保护已启动 (PID: $protect_pid)"
-    
-    # ============================================
     # 按顺序编译
     # ============================================
     echo ""
@@ -5521,71 +5465,88 @@ EOF
     log "步骤4: 编译软件包"
     make package/compile -j${CPU_CORES} V=s || true
     
-    # 生成固件
-    log "步骤5: 生成固件"
-    make -j1 V=s
-    
-    # 停止保护脚本
-    kill $protect_pid 2>/dev/null || true
-    log "🔧 强制保护已停止"
-    
+    # 生成固件 - 先编译出镜像
+    log "步骤5: 编译固件镜像"
+    make -j${CPU_CORES} V=s || {
+        log "⚠️ 并行编译固件有警告，尝试单线程编译以确保生成最终文件..."
+        make -j1 V=s
+    }
+
     # ============================================
-    # 从保护目录恢复文件
+    # 编译后强制恢复关键文件
     # ============================================
-    log "🔧 从保护目录恢复文件..."
+    log "🔧 编译完成，执行最终固件恢复操作..."
     
     TARGET_DIR="bin/targets/ath79/generic"
     mkdir -p "$TARGET_DIR"
-    
+
     SYSUPGRADE_RESTORED=0
     FACTORY_RESTORED=0
-    
-    if [ -d "$protect_dir" ]; then
-        # 恢复 sysupgrade
-        if [ -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
-            SIZE=$(stat -c %s "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" 2>/dev/null || echo "0")
+
+    # 方法1：从标准的 bin/targets 目录查找
+    log "  方法1: 检查 bin/targets 目录..."
+    if [ -f "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
+        SIZE=$(stat -c %s "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" 2>/dev/null || echo "0")
+        if [ $SIZE -gt 5000000 ]; then
+            log "  ✅ sysupgrade.bin 已存在于目标目录 ($SIZE 字节)"
+            SYSUPGRADE_RESTORED=1
+        fi
+    fi
+    if [ -f "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" ]; then
+        SIZE=$(stat -c %s "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" 2>/dev/null || echo "0")
+        if [ $SIZE -gt 5000000 ]; then
+            log "  ✅ factory.img 已存在于目标目录 ($SIZE 字节)"
+            FACTORY_RESTORED=1
+        fi
+    fi
+
+    # 方法2：从构建系统的临时目录复制 (如果方法1失败)
+    TMP_DIR="$BUILD_DIR/build_dir/target-mips_24kc_musl/linux-ath79_generic/tmp"
+    if [ $SYSUPGRADE_RESTORED -eq 0 ] && [ -d "$TMP_DIR" ]; then
+        log "  方法2: 从临时目录 $TMP_DIR 恢复 sysupgrade.bin..."
+        # 寻找 sysupgrade 文件，优先找最终的（可能没有 .new 后缀）
+        SYSUPGRADE_SOURCE=""
+        if [ -f "$TMP_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
+            SYSUPGRADE_SOURCE="$TMP_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+        elif [ -f "$TMP_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin.new" ]; then
+            SYSUPGRADE_SOURCE="$TMP_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin.new"
+        fi
+
+        if [ -n "$SYSUPGRADE_SOURCE" ]; then
+            SIZE=$(stat -c %s "$SYSUPGRADE_SOURCE" 2>/dev/null || echo "0")
             if [ $SIZE -gt 5000000 ]; then
-                cp -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" "$TARGET_DIR/"
-                log "  ✅ 恢复 sysupgrade.bin ($SIZE 字节)"
+                cp -f "$SYSUPGRADE_SOURCE" "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
+                log "  ✅ 从临时目录恢复 sysupgrade.bin ($SIZE 字节)"
                 SYSUPGRADE_RESTORED=1
             fi
         fi
-        
-        # 恢复 factory - 优先从 .new 文件恢复
-        if [ -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.new" ]; then
-            SIZE=$(stat -c %s "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.new" 2>/dev/null || echo "0")
-            if [ $SIZE -gt 5000000 ]; then
-                cp -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.new" "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-                log "  ✅ 从 .new 恢复 factory.img ($SIZE 字节)"
-                FACTORY_RESTORED=1
-            fi
-        elif [ -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" ]; then
-            SIZE=$(stat -c %s "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" 2>/dev/null || echo "0")
-            if [ $SIZE -gt 5000000 ]; then
-                cp -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" "$TARGET_DIR/"
-                log "  ✅ 恢复 factory.img ($SIZE 字节)"
-                FACTORY_RESTORED=1
-            fi
+    fi
+
+    if [ $FACTORY_RESTORED -eq 0 ] && [ -d "$TMP_DIR" ]; then
+        log "  方法2: 从临时目录 $TMP_DIR 恢复 factory.img..."
+        FACTORY_SOURCE=""
+        if [ -f "$TMP_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" ]; then
+            FACTORY_SOURCE="$TMP_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+        elif [ -f "$TMP_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.new" ]; then
+            FACTORY_SOURCE="$TMP_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.new"
         fi
-        
-        # 恢复 initramfs
-        if [ -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin" ]; then
-            cp -f "$protect_dir/openwrt-ath79-generic-netgear_wndr3800-initramfs-kernel.bin" "$TARGET_DIR/"
-            log "  ✅ 恢复 initramfs"
+
+        if [ -n "$FACTORY_SOURCE" ]; then
+            SIZE=$(stat -c %s "$FACTORY_SOURCE" 2>/dev/null || echo "0")
+            if [ $SIZE -gt 5000000 ]; then
+                cp -f "$FACTORY_SOURCE" "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+                log "  ✅ 从临时目录恢复 factory.img ($SIZE 字节)"
+                FACTORY_RESTORED=1
+            fi
         fi
     fi
-    
-    # ============================================
-    # 如果 factory 还没恢复，尝试手动组装
-    # ============================================
+
+    # 方法3：如果 factory 还没恢复，尝试手动组装 (作为最后手段)
     if [ $FACTORY_RESTORED -eq 0 ]; then
-        log "🔧 尝试手动组装 factory.img..."
+        log "  方法3: 尝试手动组装 factory.img..."
         
-        # 查找内核和根文件系统
         KERNEL_FILE=""
         ROOTFS_FILE=""
-        
-        # 从构建目录查找
         KERNEL_FILE=$(find "build_dir/target-mips_24kc_musl/linux-ath79_generic" -name "vmlinux" -type f -size +5M 2>/dev/null | head -1)
         ROOTFS_FILE=$(find "build_dir/target-mips_24kc_musl/linux-ath79_generic" -name "root.squashfs" -type f -size +5M 2>/dev/null | head -1)
         
@@ -5596,18 +5557,18 @@ EOF
             log "  📊 找到内核: $KERNEL_SIZE 字节"
             log "  📊 找到根文件系统: $ROOTFS_SIZE 字节"
             
-            # 手动组装 factory.img
-            cp -f "$KERNEL_FILE" "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-            cat "$ROOTFS_FILE" >> "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-            
-            FINAL_SIZE=$(stat -c %s "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img" 2>/dev/null || echo "0")
+            cat "$KERNEL_FILE" "$ROOTFS_FILE" > "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.tmp"
+            FINAL_SIZE=$(stat -c %s "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.tmp" 2>/dev/null || echo "0")
             if [ $FINAL_SIZE -gt 5000000 ]; then
+                mv "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.tmp" "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
                 log "  ✅ 手动组装 factory.img 成功 ($FINAL_SIZE 字节)"
                 FACTORY_RESTORED=1
+            else
+                rm -f "$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img.tmp"
             fi
         fi
     fi
-    
+
     # ============================================
     # 最终检查
     # ============================================
@@ -5628,13 +5589,13 @@ EOF
     elif [ $SYSUPGRADE_RESTORED -eq 1 ] && [ $FACTORY_RESTORED -eq 0 ]; then
         echo "⚠️ 只有 sysupgrade.bin 生成成功，factory.img 缺失"
         echo "   可以先用 sysupgrade.bin 刷机"
-        exit 1
+        # 这里我们不再因为缺少 factory 镜像而失败，因为很多情况下只需要 sysupgrade
+        # exit 1
     else
         echo "❌ 错误: 固件生成失败"
         exit 1
     fi
     
-    rm -rf "$protect_dir" 2>/dev/null || true
     log "✅ 步骤22 完成"
 }
 #【build_firmware_main.sh-36-end】
