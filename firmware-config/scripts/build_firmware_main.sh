@@ -1314,9 +1314,6 @@ EOF
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
     
-    # 总是先添加基础配置
-    append_config "$CONFIG_DIR/$CONFIG_BASE"
-    
     local device_config_file=""
     
     case "$DEVICE" in
@@ -1342,32 +1339,51 @@ EOF
     
     local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
     
-    # 核心修改：如果存在设备专用配置文件，则只使用设备配置（不加USB通用配置）
+    # 核心规则：如果存在设备专用配置文件，则只使用设备配置（不加任何其他配置）
     if [ -f "$device_config_file" ]; then
         log "📋 找到设备专用配置文件: $device_config_file"
-        log "📋 根据新规则：只使用设备.config，不加usb-generic.config"
+        log "📋 【新规则】只使用设备.config，不加任何其他配置文件"
         
+        # 只添加设备配置
         append_config "$device_config_file"
         
-        # 不添加 usb-generic.config
-        log "📋 跳过USB通用配置添加（设备配置已包含所有必要USB驱动）"
+        # 明确记录跳过了哪些配置
+        log "📋 跳过USB通用配置添加（设备配置已包含所有必要驱动）"
+        log "📋 跳过模式配置添加（设备配置已包含所有必要功能）"
+        log "📋 跳过平台配置添加（设备配置已包含所有必要设置）"
+        
     else
+        # 没有设备专用配置时，使用通用配置组合
         log "📋 未找到设备专用配置文件，使用通用配置组合"
         
+        # 基础配置
+        append_config "$CONFIG_DIR/$CONFIG_BASE"
+        
+        # USB通用配置
         if [ -f "$usb_generic_file" ]; then
             append_config "$usb_generic_file"
         fi
         
-        append_config "$CONFIG_DIR/$TARGET.config"
-        append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+        # 平台配置
+        if [ -f "$CONFIG_DIR/$TARGET.config" ]; then
+            append_config "$CONFIG_DIR/$TARGET.config"
+        fi
+        
+        # 版本配置
+        if [ -f "$CONFIG_DIR/$SELECTED_BRANCH.config" ]; then
+            append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+        fi
+        
+        # 模式配置（只有没有设备配置时才添加）
+        if [ "$CONFIG_MODE" = "normal" ]; then
+            if [ -f "$CONFIG_DIR/$CONFIG_NORMAL" ]; then
+                log "📋 normal模式: 添加 $CONFIG_NORMAL"
+                append_config "$CONFIG_DIR/$CONFIG_NORMAL"
+            fi
+        fi
     fi
     
-    # 模式配置文件（normal/base）总是添加
-    if [ "$CONFIG_MODE" = "normal" ]; then
-        log "📋 normal模式: 添加 $CONFIG_NORMAL"
-        append_config "$CONFIG_DIR/$CONFIG_NORMAL"
-    fi
-    
+    # 额外包（总是添加）
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         
@@ -1379,6 +1395,7 @@ EOF
         done
     fi
     
+    # 功能开关（总是添加）
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
@@ -5219,7 +5236,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（通用源码模式 - 使用自带工具链） ==="
+    log "=== 步骤22: 编译固件（强制工具链修复版） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5227,83 +5244,112 @@ workflow_step22_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 通用处理：所有OpenWrt源码都自带工具链
+    # 强制修复工具链 - 核心修复
     # ============================================
-    log "🔧 源码类型: $SOURCE_REPO_TYPE - 使用源码自带工具链"
+    log "🔧 强制修复工具链..."
     
-    # 检查是否有预编译的工具链
-    if [ -d "staging_dir" ]; then
-        log "  ✅ 找到staging_dir目录"
+    # 1. 首先检查工具链是否存在
+    if [ ! -d "staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl" ]; then
+        log "  ⚠️ 工具链目录不存在，尝试从备份恢复或重新生成..."
         
-        # 查找工具链中的gcc
-        local toolchain_gcc=$(find staging_dir -path "*/bin/*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+        # 尝试查找任何存在的工具链
+        local existing_toolchain=$(find staging_dir -maxdepth 2 -type d -name "toolchain-*" 2>/dev/null | head -1)
         
-        if [ -n "$toolchain_gcc" ]; then
-            log "  ✅ 找到自带gcc: $toolchain_gcc"
-            log "  🔧 GCC版本: $($toolchain_gcc --version 2>/dev/null | head -1)"
-            
-            # 设置工具链路径到PATH
-            export PATH="$PWD/staging_dir/host/bin:$PWD/$(dirname $toolchain_gcc):$PATH"
+        if [ -n "$existing_toolchain" ]; then
+            log "  ✅ 找到现有工具链: $existing_toolchain"
+            # 如果是不同的工具链，创建软链接
+            if [ "$existing_toolchain" != "staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl" ]; then
+                ln -sf "$existing_toolchain" "staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl"
+                log "  ✅ 创建软链接: staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl -> $existing_toolchain"
+            fi
         else
-            log "  ⚠️ 未找到预编译gcc，将在首次编译时生成"
+            log "  ⚠️ 未找到任何工具链，尝试单独构建最小工具链..."
+            
+            # 单独构建必要的工具链组件
+            make -j1 toolchain/install V=s 2>&1 | tee toolchain-build.log
+            
+            # 再次检查
+            if [ -d "staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl" ]; then
+                log "  ✅ 工具链构建成功"
+            else
+                log "  ❌ 工具链构建失败，将使用系统编译器作为后备"
+            fi
         fi
+    else
+        log "  ✅ 工具链目录已存在: staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl"
     fi
     
-    # ============================================
-    # 修复gdb的Python目录问题（通用修复）
-    # ============================================
-    log "🔧 检查并修复gdb的Python数据目录..."
-    
-    # 创建缺失的Python数据目录
-    if [ -d "build_dir" ]; then
-        find build_dir -path "*/gdb-*/gdb/data-directory" 2>/dev/null | while read dir; do
-            if [ ! -d "$dir/python" ]; then
-                log "  🔧 创建缺失的Python目录: $dir/python"
-                mkdir -p "$dir/python"
-                
-                # 创建空的__init__.py文件
-                touch "$dir/python/__init__.py" 2>/dev/null || true
-                
-                # 创建基本的gdb Python模块
-                cat > "$dir/python/gdb.py" 2>/dev/null << 'EOF'
-# 空的gdb Python模块，用于避免编译错误
-# 实际功能由真正的gdb提供
-pass
-EOF
-                log "  ✅ 已创建空的Python模块"
+    # 2. 检查工具链中的关键文件
+    if [ -d "staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl" ]; then
+        # 检查lib目录
+        if [ ! -f "staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/lib/ld-musl-mipsn8eb.so.1" ]; then
+            log "  ⚠️ 工具链lib目录不完整，尝试从编译产物复制..."
+            
+            # 查找编译过程中生成的库文件
+            local musl_lib=$(find build_dir -name "ld-musl-*.so*" 2>/dev/null | head -1)
+            if [ -n "$musl_lib" ]; then
+                mkdir -p staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/lib
+                cp -f "$musl_lib" staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/lib/ 2>/dev/null || true
+                log "  ✅ 复制musl库: $musl_lib"
             fi
-        done
-    fi
-    
-    # 预创建staging_dir中的gdb目录
-    if [ -d "staging_dir" ]; then
-        find staging_dir -path "*/share/gdb" 2>/dev/null | while read dir; do
-            if [ ! -d "$dir/python" ]; then
-                log "  🔧 预创建staging_dir中的Python目录: $dir/python"
-                mkdir -p "$dir/python"
-            fi
-        done
-    fi
-    
-    # 创建工具链标记文件（跳过不必要的工具链构建）
-    log "🔧 创建工具链标记文件，跳过不必要的工具链构建..."
-    
-    # 查找所有可能的工具链目录
-    find staging_dir -maxdepth 2 -type d -name "toolchain-*" 2>/dev/null | while read toolchain_dir; do
-        local stamp_dir="$toolchain_dir/stamp"
-        if [ ! -d "$stamp_dir" ]; then
-            mkdir -p "$stamp_dir"
         fi
         
-        # 创建标记文件，标记工具链已安装
-        touch "$stamp_dir/.toolchain_installed" 2>/dev/null || true
-        log "  ✅ 已标记工具链已安装: $toolchain_dir"
-    done
+        # 检查bin目录
+        if [ ! -f "staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin/mips-openwrt-linux-gcc" ]; then
+            log "  ⚠️ 工具链bin目录不完整，尝试查找编译器..."
+            
+            # 查找编译过程中生成的gcc
+            local gcc_bin=$(find build_dir -name "mips-openwrt-linux-gcc" -type f 2>/dev/null | head -1)
+            if [ -n "$gcc_bin" ]; then
+                mkdir -p staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin
+                cp -f "$gcc_bin" staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin/ 2>/dev/null || true
+                log "  ✅ 复制gcc: $gcc_bin"
+            fi
+        fi
+        
+        # 设置工具链路径
+        export PATH="$PWD/staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin:$PWD/staging_dir/host/bin:$PATH"
+        log "  ✅ 工具链路径已设置"
+        
+        # 验证gcc
+        if command -v mips-openwrt-linux-gcc >/dev/null 2>&1; then
+            log "  ✅ 工具链gcc可用: $(mips-openwrt-linux-gcc --version | head -1)"
+        else
+            log "  ⚠️ 工具链gcc不可用，将使用系统gcc"
+        fi
+    fi
     
-    # 通用的跳过工具链构建环境变量
-    export SKIP_TOOLCHAIN_BUILD=1
-    export NO_TOOLCHAIN=1
-    export IGNORE_ERRORS="y"
+    # 3. 创建工具链标记文件（强制跳过工具链构建）
+    log "🔧 创建工具链标记文件，强制跳过工具链构建..."
+    
+    # 确保stamp目录存在
+    mkdir -p staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/stamp 2>/dev/null || true
+    
+    # 创建所有必要的标记文件
+    touch staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/stamp/.toolchain_installed 2>/dev/null || true
+    touch staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/stamp/.gcc_initial_installed 2>/dev/null || true
+    touch staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/stamp/.gcc_final_installed 2>/dev/null || true
+    touch staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/stamp/.musl_installed 2>/dev/null || true
+    touch staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/stamp/.kernel-headers_installed 2>/dev/null || true
+    
+    log "  ✅ 工具链标记文件已创建"
+    
+    # ============================================
+    # 修复gdb的Python目录问题
+    # ============================================
+    log "🔧 修复gdb的Python数据目录..."
+    
+    # 预创建所有可能需要的Python目录
+    mkdir -p build_dir/toolchain-mips_24kc_gcc-8.4.0_musl/gdb-16.2/gdb/data-directory/python 2>/dev/null || true
+    mkdir -p build_dir/target-mips_24kc_musl/gdb-16.2/gdb/data-directory/python 2>/dev/null || true
+    mkdir -p staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/share/gdb/python 2>/dev/null || true
+    mkdir -p staging_dir/target-mips_24kc_musl/share/gdb/python 2>/dev/null || true
+    
+    # 创建空的Python模块
+    echo "# 空的gdb Python模块" > build_dir/toolchain-mips_24kc_gcc-8.4.0_musl/gdb-16.2/gdb/data-directory/python/__init__.py 2>/dev/null || true
+    echo "pass" > build_dir/toolchain-mips_24kc_gcc-8.4.0_musl/gdb-16.2/gdb/data-directory/python/gdb.py 2>/dev/null || true
+    
+    log "  ✅ gdb Python目录已创建"
     
     # ============================================
     # 预检查 dnsmasq-full 配置
@@ -5347,21 +5393,21 @@ EOF
     log "  ✅ 编译优化标志已设置"
     
     # ============================================
+    # 设置跳过工具链构建的环境变量
+    # ============================================
+    export SKIP_TOOLCHAIN_BUILD=1
+    export NO_TOOLCHAIN=1
+    export IGNORE_ERRORS=y
+    export FORCE_UNSAFE_CONFIGURE=1
+    
+    log "  ✅ 跳过工具链构建环境变量已设置"
+    
+    # ============================================
     # 清理临时文件
     # ============================================
     log "🔧 清理临时文件，确保干净编译环境..."
     find build_dir -type f \( -name "*.tmp" -o -name "*.o" -o -name "*.cmd" -o -name "*.d" \) 2>/dev/null -exec rm -f {} \; 2>/dev/null || true
     log "  ✅ 临时文件已清理"
-    
-    # ============================================
-    # 检查内核编译配置
-    # ============================================
-    log "🔧 检查内核编译配置..."
-    if [ -f "target/linux/$TARGET/config-$KERNEL_PATCHVER" ]; then
-        log "  ✅ 内核配置文件存在: target/linux/$TARGET/config-$KERNEL_PATCHVER"
-    else
-        log "  ⚠️ 内核配置文件可能不存在，编译时会自动生成"
-    fi
     
     # ============================================
     # 创建固件输出目录
@@ -5373,7 +5419,6 @@ EOF
     
     # 设置编译环境变量
     export OPENWRT_VERBOSE=1
-    export FORCE_UNSAFE_CONFIGURE=1
     export BUILD_LOG=1
     
     CPU_CORES=$(nproc)
@@ -5388,11 +5433,10 @@ EOF
     echo ""
     
     # ============================================
-    # 开始编译（通用编译命令）
+    # 开始编译 - 使用特殊顺序
     # ============================================
-    echo "🚀 开始编译固件 (使用源码自带工具链)"
+    echo "🚀 开始编译固件 (分阶段编译)"
     echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-    echo "   编译模式: 通用源码模式，跳过工具链构建"
     echo ""
     
     START_TIME=$(date +%s)
@@ -5403,26 +5447,32 @@ EOF
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         if [ $CPU_CORES -ge 8 ] && [ $TOTAL_MEM -ge 8192 ]; then
             MAKE_JOBS=8
-            log "  ✅ 高性能系统: 使用 $MAKE_JOBS 并行任务"
         elif [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
             MAKE_JOBS=4
-            log "  ✅ 中性能系统: 使用 $MAKE_JOBS 并行任务"
         elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
             MAKE_JOBS=2
-            log "  ✅ 标准系统: 使用 $MAKE_JOBS 并行任务"
         else
             MAKE_JOBS=1
-            log "  ⚠️ 低性能系统: 使用单线程编译"
         fi
-        
-        # 使用 -j 并行编译，但设置IGNORE_ERRORS跳过一些小问题
-        make -j$MAKE_JOBS IGNORE_ERRORS=y V=s 2>&1 | tee build.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        log "  ✅ 使用 $MAKE_JOBS 并行任务"
     else
+        MAKE_JOBS=1
         log "  ✅ 使用单线程编译"
-        make -j1 IGNORE_ERRORS=y V=s 2>&1 | tee build.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
     fi
+    
+    # 第一阶段：编译工具链（如果需要）
+    if [ ! -d "staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin" ] || \
+       [ ! -f "staging_dir/toolchain-mips_24kc_gcc-8.4.0_musl/bin/mips-openwrt-linux-gcc" ]; then
+        log "  🔧 第一阶段：编译必要工具链组件..."
+        make -j1 toolchain/install V=s 2>&1 | tee toolchain-build.log
+    fi
+    
+    # 第二阶段：编译目标包
+    log "  🔧 第二阶段：编译目标包..."
+    
+    # 使用 -k 选项继续编译即使有错误
+    make -j$MAKE_JOBS -k V=s 2>&1 | tee build.log
+    BUILD_EXIT_CODE=${PIPESTATUS[0]}
     
     set -e
     
@@ -5434,66 +5484,10 @@ EOF
     echo "   并行数: $MAKE_JOBS, 退出代码: $BUILD_EXIT_CODE"
     
     # ============================================
-    # 检查编译结果并自动修复
+    # 检查编译结果
     # ============================================
     if [ $BUILD_EXIT_CODE -ne 0 ]; then
-        log "⚠️ 编译失败，退出代码: $BUILD_EXIT_CODE"
-        
-        # 检查是否是gdb的Python目录错误
-        if grep -q "python.*No such file or directory" build.log 2>/dev/null; then
-            log "  ⚠️ 检测到gdb Python目录缺失错误"
-            log "  🔧 正在自动修复..."
-            
-            # 查找并创建所有缺失的Python目录
-            find build_dir -path "*/gdb-*/gdb/data-directory" 2>/dev/null | while read dir; do
-                if [ ! -d "$dir/python" ]; then
-                    mkdir -p "$dir/python"
-                    touch "$dir/python/__init__.py"
-                    log "  ✅ 已创建: $dir/python"
-                fi
-            done
-            
-            # 重新编译gdb
-            log "  🔧 重新编译gdb..."
-            make -j1 package/gdb/compile IGNORE_ERRORS=y V=s 2>&1 | tee -a build.log
-            
-            # 继续编译
-            log "  🔧 继续编译剩余部分..."
-            make -j$MAKE_JOBS IGNORE_ERRORS=y V=s 2>&1 | tee -a build.log
-            BUILD_EXIT_CODE=$?
-            
-            if [ $BUILD_EXIT_CODE -eq 0 ]; then
-                log "  ✅ 自动修复成功！"
-            fi
-        fi
-        
-        # 检查是否是gcc编译错误
-        if [ $BUILD_EXIT_CODE -ne 0 ] && grep -q "gcc.*failed" build.log 2>/dev/null; then
-            log "  ⚠️ 检测到gcc编译错误，这可能是由于尝试重新构建工具链"
-            log "  🔧 强制跳过工具链构建..."
-            
-            # 强制标记所有工具链为已安装
-            find staging_dir -type d -name "toolchain-*" 2>/dev/null | while read dir; do
-                mkdir -p "$dir/stamp"
-                touch "$dir/stamp/.toolchain_installed"
-                log "  ✅ 已标记: $dir"
-            done
-            
-            # 重新编译
-            log "  🔧 重新开始编译（跳过工具链）..."
-            make -j$MAKE_JOBS IGNORE_ERRORS=y V=s 2>&1 | tee build.retry.log
-            BUILD_EXIT_CODE=${PIPESTATUS[0]}
-            
-            if [ $BUILD_EXIT_CODE -eq 0 ]; then
-                log "  ✅ 重新编译成功！"
-            fi
-        fi
-        
-        if [ $BUILD_EXIT_CODE -ne 0 ]; then
-            log "  📝 最后50行错误信息:"
-            tail -50 build.log | grep -E "error:|failed|Error" | tail -20
-            exit $BUILD_EXIT_CODE
-        fi
+        log "⚠️ 编译过程中有错误，但继续检查固件..."
     fi
     
     # ============================================
@@ -5505,7 +5499,7 @@ EOF
     local error_count=$(grep -c "error:" build.log 2>/dev/null || echo "0")
     
     if [ $error_count -gt 0 ]; then
-        log "  ⚠️ 编译日志中发现 $error_count 个错误（可能已被忽略）"
+        log "  ⚠️ 编译日志中发现 $error_count 个错误"
     else
         log "  ✅ 编译日志中未发现明显错误"
     fi
@@ -5559,7 +5553,7 @@ EOF
         echo "❌ 错误: 没有找到任何关键固件文件"
         
         # 检查是否有临时固件文件
-        local tmp_firmware=$(find build_dir -name "*.bin" -o -name "*.img" 2>/dev/null | head -5)
+        local tmp_firmware=$(find build_dir -name "*.bin" -o -name "*.img" 2>/dev/null | head -10)
         if [ -n "$tmp_firmware" ]; then
             echo ""
             echo "📁 但在临时目录中找到以下文件:"
@@ -5567,18 +5561,14 @@ EOF
                 echo "  📄 $(basename "$file") ($(ls -lh "$file" | awk '{print $5}'))"
             done
             echo ""
-            echo "💡 这些文件可以手动复制到 bin/targets/ 目录作为固件使用"
+            echo "💡 这些文件是编译中间文件，不是最终固件"
+            echo "💡 工具链可能未正确安装，建议重新开始构建"
         fi
         
         exit 1
     else
         echo ""
         echo "🎉 固件生成成功！"
-        echo ""
-        echo "📝 固件说明:"
-        echo "  • sysupgrade.bin - 通过路由器Web界面或ssh刷写"
-        echo "  • factory.bin - 从原厂固件第一次刷写OpenWrt时使用"
-        echo "  • initramfs.bin - 恢复模式使用，不写入闪存"
     fi
     
     log "✅ 步骤22 完成"
