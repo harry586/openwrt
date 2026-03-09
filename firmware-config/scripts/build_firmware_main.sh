@@ -1166,9 +1166,19 @@ generate_config() {
             search_device="ac42u"
             log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
             ;;
-        acrh17|rt-acrh17|asus_rt-acrh17)
-            openwrt_device="asus_rt-acrh17"
-            search_device="acrh17"
+        cmcc_rax3000m-nand)
+            openwrt_device="cmcc_rax3000m-nand"
+            search_device="rax3000m"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
+        cmcc_rax3000m-emmc)
+            openwrt_device="cmcc_rax3000m-emmc"
+            search_device="rax3000m"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
+        netgear_wndr3800)
+            openwrt_device="netgear_wndr3800"
+            search_device="wndr3800"
             log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
             ;;
         *)
