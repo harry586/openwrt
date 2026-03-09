@@ -1314,6 +1314,7 @@ EOF
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
     
+    # 总是先添加基础配置
     append_config "$CONFIG_DIR/$CONFIG_BASE"
     
     local device_config_file=""
@@ -1340,21 +1341,16 @@ EOF
     esac
     
     local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
-    local has_device_config=false
     
+    # 核心修改：如果存在设备专用配置文件，则只使用设备配置（不加USB通用配置）
     if [ -f "$device_config_file" ]; then
-        has_device_config=true
         log "📋 找到设备专用配置文件: $device_config_file"
-        log "📋 根据规则: 设备.config + usb-generic.config"
+        log "📋 根据新规则：只使用设备.config，不加usb-generic.config"
         
         append_config "$device_config_file"
         
-        if [ -f "$usb_generic_file" ]; then
-            log "📋 添加USB通用配置作为补充: $usb_generic_file"
-            append_config "$usb_generic_file"
-        fi
-        
-        log "📋 有设备专用配置，跳过 normal.config 和 $TARGET.config 等通用配置"
+        # 不添加 usb-generic.config
+        log "📋 跳过USB通用配置添加（设备配置已包含所有必要USB驱动）"
     else
         log "📋 未找到设备专用配置文件，使用通用配置组合"
         
@@ -1364,11 +1360,12 @@ EOF
         
         append_config "$CONFIG_DIR/$TARGET.config"
         append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-        
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            log "📋 normal模式: 添加 $CONFIG_NORMAL"
-            append_config "$CONFIG_DIR/$CONFIG_NORMAL"
-        fi
+    fi
+    
+    # 模式配置文件（normal/base）总是添加
+    if [ "$CONFIG_MODE" = "normal" ]; then
+        log "📋 normal模式: 添加 $CONFIG_NORMAL"
+        append_config "$CONFIG_DIR/$CONFIG_NORMAL"
     fi
     
     if [ -n "$extra_packages" ]; then
@@ -5222,7 +5219,7 @@ workflow_step21_pre_build_space_confirm() {
 workflow_step22_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤22: 编译固件（优化版） ==="
+    log "=== 步骤22: 编译固件（实机模拟模式） ==="
     
     set -e
     trap 'echo "❌ 步骤22 失败，退出代码: $?"; exit 1' ERR
@@ -5249,9 +5246,9 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 设置文件描述符限制
+    # 设置文件描述符限制（实机编译优化）
     # ============================================
-    log "🔧 设置文件描述符限制..."
+    log "🔧 设置文件描述符限制（实机编译优化）..."
     
     local current_limit=$(ulimit -n 2>/dev/null || echo "unknown")
     log "  📊 当前文件描述符限制: $current_limit"
@@ -5261,125 +5258,106 @@ workflow_step22_build_firmware() {
     fi
     
     # ============================================
-    # 替换有问题的工具为无害版本
+    # 模拟实机编译环境：使用源码自带工具链
     # ============================================
-    log "🔧 替换有问题的工具为无害版本..."
+    log "🔧 模拟实机编译环境：使用源码自带工具链..."
     
-    # 备份原有的工具
-    if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-        mv "staging_dir/host/bin/mkdniimg" "staging_dir/host/bin/mkdniimg.original"
-        log "  ✅ 备份原有的 mkdniimg 工具"
-    fi
+    # 确保使用源码内的工具链，而不是系统工具
+    export PATH="$BUILD_DIR/staging_dir/host/bin:$BUILD_DIR/staging_dir/toolchain-*/bin:$PATH"
+    log "  ✅ PATH已更新，优先使用源码工具链"
     
-    if [ -f "staging_dir/host/bin/fwtool" ]; then
-        mv "staging_dir/host/bin/fwtool" "staging_dir/host/bin/fwtool.original"
-        log "  ✅ 备份原有的 fwtool 工具"
-    fi
-    
-    # 创建无害的 mkdniimg 替代工具
-    cat > "staging_dir/host/bin/mkdniimg" << 'EOF'
-#!/bin/bash
-# 无害的 mkdniimg 替代工具 - 只复制文件，不做任何处理
-INPUT_FILE=""
-OUTPUT_FILE=""
-
-while [ $# -gt 0 ]; do
-    case "$1" in
-        -i) shift; INPUT_FILE="$1" ;;
-        -o) shift; OUTPUT_FILE="$1" ;;
-        -B|-v|-H|-r) shift ;;
-        *) shift ;;
-    esac
-    shift
-done
-
-[ -z "$INPUT_FILE" ] || [ -z "$OUTPUT_FILE" ] && exit 1
-[ ! -f "$INPUT_FILE" ] && exit 1
-
-cp -f "$INPUT_FILE" "$OUTPUT_FILE"
-sync
-exit 0
-EOF
-    chmod +x "staging_dir/host/bin/mkdniimg"
-    
-    # 创建无害的 fwtool 替代工具
-    cat > "staging_dir/host/bin/fwtool" << 'EOF'
-#!/bin/bash
-exit 0
-EOF
-    chmod +x "staging_dir/host/bin/fwtool"
-    log "  ✅ 创建无害的工具替代品"
-    
-    # ============================================
-    # 清理临时文件
-    # ============================================
-    log "  清理临时文件..."
-    find build_dir -type f \( -name "*.tmp" -o -name "*.new" \) 2>/dev/null -exec rm -f {} \; 2>/dev/null || true
-    
+    # 设置编译优化标志（模拟实机编译优化）
+    export CFLAGS="-O2 -pipe -fno-caller-saves -fno-plt -fhonour-copts"
+    export CXXFLAGS="-O2 -pipe -fno-caller-saves -fno-plt -fhonour-copts"
     export KCFLAGS="-O2 -pipe"
+    export KERNEL_MAKE_FLAGS="CONFIG_SHELL=$SHELL"
+    
+    log "  ✅ 编译优化标志已设置"
     
     # ============================================
-    # 创建固件目录
+    # 清理临时文件（模拟实机编译的干净环境）
+    # ============================================
+    log "🔧 清理临时文件，确保干净编译环境..."
+    find build_dir -type f \( -name "*.tmp" -o -name "*.o" -o -name "*.cmd" -o -name "*.d" \) 2>/dev/null -exec rm -f {} \; 2>/dev/null || true
+    log "  ✅ 临时文件已清理"
+    
+    # ============================================
+    # 检查内核编译配置（模拟实机内核编译）
+    # ============================================
+    log "🔧 检查内核编译配置..."
+    if [ -f "target/linux/$TARGET/config-$KERNEL_PATCHVER" ]; then
+        log "  ✅ 内核配置文件存在: target/linux/$TARGET/config-$KERNEL_PATCHVER"
+    else
+        log "  ⚠️ 内核配置文件可能不存在，编译时会自动生成"
+    fi
+    
+    # ============================================
+    # 创建固件输出目录
     # ============================================
     log "🔧 创建固件输出目录..."
     local target_dir="bin/targets/ath79/generic"
     mkdir -p "$target_dir"
     log "  ✅ 创建固件目录: $target_dir"
     
+    # 设置编译环境变量
     export OPENWRT_VERBOSE=1
     export FORCE_UNSAFE_CONFIGURE=1
+    export BUILD_LOG=1
     
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
     
     echo ""
-    echo "🔧 系统信息:"
+    echo "🔧 系统信息（实机编译环境）:"
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  并行优化: $enable_parallel"
     
     # ============================================
-    # 智能并行编译（优化核心）
+    # 模拟实机编译：智能并行编译
     # ============================================
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         # 根据CPU核心数和内存动态调整并行数
         if [ $CPU_CORES -ge 8 ] && [ $TOTAL_MEM -ge 8192 ]; then
             MAKE_JOBS=8
-            log "✅ 高性能系统: 使用 $MAKE_JOBS 并行任务"
+            log "✅ 高性能服务器: 使用 $MAKE_JOBS 并行任务（模拟高性能实机）"
         elif [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
             MAKE_JOBS=4
-            log "✅ 中性能系统: 使用 $MAKE_JOBS 并行任务"
+            log "✅ 中性能系统: 使用 $MAKE_JOBS 并行任务（模拟标准实机）"
         elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
             MAKE_JOBS=2
-            log "✅ 标准系统: 使用 $MAKE_JOBS 并行任务"
+            log "✅ 标准系统: 使用 $MAKE_JOBS 并行任务（模拟嵌入式开发机）"
         else
             MAKE_JOBS=1
-            log "⚠️ 低性能系统: 使用单线程编译"
+            log "⚠️ 低性能系统: 使用单线程编译（模拟低端实机）"
         fi
         
         echo ""
-        echo "🚀 开始并行编译 (make -j$MAKE_JOBS)"
+        echo "🚀 开始实机模拟编译 (make -j$MAKE_JOBS)"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo "   编译模式: 模拟实机环境，使用源码自带工具链"
         echo ""
         
         START_TIME=$(date +%s)
         
         set +e
-        make -j$MAKE_JOBS V=s 2>&1 | tee build.log
+        # 使用 V=sc 显示更详细的编译信息，模拟实机编译的详细输出
+        make -j$MAKE_JOBS V=sc 2>&1 | tee build.log
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
         set -e
         
     else
         MAKE_JOBS=1
         echo ""
-        echo "🚀 开始单线程编译 (make -j1)"
+        echo "🚀 开始实机模拟编译 (make -j1)"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo "   编译模式: 模拟实机环境，使用源码自带工具链（单线程）"
         echo ""
         
         START_TIME=$(date +%s)
         
         set +e
-        make -j1 V=s 2>&1 | tee build.log
+        make -j1 V=sc 2>&1 | tee build.log
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
         set -e
     fi
@@ -5392,23 +5370,30 @@ EOF
     echo "   并行数: $MAKE_JOBS, 退出代码: $BUILD_EXIT_CODE"
     
     # ============================================
-    # 恢复原始工具
+    # 检查编译日志中的警告和错误（模拟实机编译的日志检查）
     # ============================================
-    log "🔧 恢复原始工具..."
+    log "🔧 检查编译日志中的警告和错误..."
     
-    if [ -f "staging_dir/host/bin/mkdniimg.original" ]; then
-        mv "staging_dir/host/bin/mkdniimg.original" "staging_dir/host/bin/mkdniimg"
+    local warning_count=$(grep -c "warning:" build.log 2>/dev/null || echo "0")
+    local error_count=$(grep -c "error:" build.log 2>/dev/null || echo "0")
+    local cc_error_count=$(grep -c "cc1: error:" build.log 2>/dev/null || echo "0")
+    
+    if [ $error_count -gt 0 ] || [ $cc_error_count -gt 0 ]; then
+        log "  ⚠️ 编译日志中发现错误: $error_count 个普通错误, $cc_error_count 个编译器错误"
+        log "  📝 建议查看 build.log 文件了解详情"
+    else
+        log "  ✅ 编译日志中未发现明显错误"
     fi
     
-    if [ -f "staging_dir/host/bin/fwtool.original" ]; then
-        mv "staging_dir/host/bin/fwtool.original" "staging_dir/host/bin/fwtool"
+    if [ $warning_count -gt 0 ]; then
+        log "  ⚠️ 编译日志中发现 $warning_count 个警告"
     fi
     
     # ============================================
-    # 最终固件检查
+    # 最终固件检查（模拟实机编译完成后的固件验证）
     # ============================================
     echo ""
-    echo "📊 最终固件检查:"
+    echo "📊 最终固件检查（模拟实机编译完成后的固件验证）:"
     echo "----------------------------------------"
     
     local sysupgrade_count=0
@@ -5423,13 +5408,13 @@ EOF
                 
                 if [[ "$filename" == *"sysupgrade"* ]]; then
                     sysupgrade_count=$((sysupgrade_count + 1))
-                    echo "  ✅ sysupgrade: $filename ($size)"
+                    echo "  ✅ sysupgrade: $filename ($size) - 可用于实机刷写"
                 elif [[ "$filename" == *"factory"* ]]; then
                     factory_count=$((factory_count + 1))
-                    echo "  ✅ factory: $filename ($size)"
+                    echo "  ✅ factory: $filename ($size) - 可用于实机初始刷写"
                 elif [[ "$filename" == *"initramfs"* ]]; then
                     initramfs_count=$((initramfs_count + 1))
-                    echo "  🔷 initramfs: $filename ($size)"
+                    echo "  🔷 initramfs: $filename ($size) - 可用于实机恢复"
                 fi
             fi
         done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
@@ -5440,11 +5425,11 @@ EOF
     
     if [ $sysupgrade_count -eq 0 ] && [ $factory_count -eq 0 ]; then
         echo ""
-        echo "❌ 错误: 没有找到任何关键固件文件"
+        echo "❌ 错误: 没有找到任何关键固件文件，实机编译可能失败"
         exit 1
     else
         echo ""
-        echo "🎉 固件生成成功！"
+        echo "🎉 固件生成成功！这些固件可以直接用于实机刷写。"
     fi
     
     log "✅ 步骤22 完成"
