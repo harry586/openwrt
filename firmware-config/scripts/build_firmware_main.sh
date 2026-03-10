@@ -5428,109 +5428,123 @@ EOF
     log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
     
     local recover_script="$protect_dir/recover.sh"
-    cat > "$recover_script" << 'EOF'
+    
+    local target_platform="${TARGET:-ath79}"
+    local target_subtarget="${SUBTARGET:-generic}"
+    local device_lower=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+    local source_prefix="immortalwrt"
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        source_prefix="openwrt"
+    elif [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        source_prefix="lede"
+    fi
+    
+    local sysupgrade_filename="${source_prefix}-${target_platform}-${target_subtarget}-${device_lower}-squashfs-sysupgrade.bin"
+    local factory_filename="${source_prefix}-${target_platform}-${target_subtarget}-${device_lower}-squashfs-factory.img"
+    
+    cat > "$recover_script" << EOF
 #!/bin/bash
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-TARGET_DIR="$BUILD_DIR/bin/targets/ath79/generic"
+PROTECT_DIR="\$1"
+BUILD_DIR="\$2"
+TARGET_DIR="\$BUILD_DIR/bin/targets/${target_platform}/${target_subtarget}"
 
-mkdir -p "$TARGET_DIR"
+mkdir -p "\$TARGET_DIR"
 
-echo "=== 强制恢复开始于 $(date) ==="
-echo "目标目录: $TARGET_DIR"
+echo "=== 强制恢复开始于 \$(date) ==="
+echo "目标目录: \$TARGET_DIR"
 
-SYSUPGRADE_TARGET="$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-FACTORY_TARGET="$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+SYSUPGRADE_TARGET="\$TARGET_DIR/${sysupgrade_filename}"
+FACTORY_TARGET="\$TARGET_DIR/${factory_filename}"
 
 RECOVERED=0
 
-echo "📁 检查保护目录: $PROTECT_DIR"
-find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
-    filename=$(basename "$backup" .backup)
+echo "📁 检查保护目录: \$PROTECT_DIR"
+find "\$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
+    filename=\$(basename "\$backup" .backup)
     
-    if [[ "$filename" == *"sysupgrade"* ]] && [[ "$filename" == *".bin" ]]; then
-        if [ ! -f "$SYSUPGRADE_TARGET" ]; then
-            echo "  ✅ 恢复 sysupgrade: $filename"
-            cp -f "$backup" "$SYSUPGRADE_TARGET"
-            RECOVERED=$((RECOVERED + 1))
+    if [[ "\$filename" == *"sysupgrade"* ]] && [[ "\$filename" == *".bin" ]]; then
+        if [ ! -f "\$SYSUPGRADE_TARGET" ]; then
+            echo "  ✅ 恢复 sysupgrade: \$filename"
+            cp -f "\$backup" "\$SYSUPGRADE_TARGET"
+            RECOVERED=\$((RECOVERED + 1))
         fi
-    elif [[ "$filename" == *"factory"* ]] && [[ "$filename" == *".img" || "$filename" == *".bin" ]]; then
-        if [ ! -f "$FACTORY_TARGET" ]; then
-            echo "  ✅ 恢复 factory: $filename"
-            cp -f "$backup" "$FACTORY_TARGET"
-            RECOVERED=$((RECOVERED + 1))
+    elif [[ "\$filename" == *"factory"* ]] && [[ "\$filename" == *".img" || "\$filename" == *".bin" ]]; then
+        if [ ! -f "\$FACTORY_TARGET" ]; then
+            echo "  ✅ 恢复 factory: \$filename"
+            cp -f "\$backup" "\$FACTORY_TARGET"
+            RECOVERED=\$((RECOVERED + 1))
         fi
-    elif [[ "$filename" == *.new ]]; then
-        base_name=$(echo "$filename" | sed 's/.new$//')
-        if [[ "$base_name" == *"factory"* ]]; then
-            if [ ! -f "$FACTORY_TARGET" ]; then
-                echo "  ✅ 从.new恢复 factory: $filename -> $base_name"
-                cp -f "$backup" "$FACTORY_TARGET"
-                RECOVERED=$((RECOVERED + 1))
+    elif [[ "\$filename" == *.new ]]; then
+        base_name=\$(echo "\$filename" | sed 's/.new\$//')
+        if [[ "\$base_name" == *"factory"* ]]; then
+            if [ ! -f "\$FACTORY_TARGET" ]; then
+                echo "  ✅ 从.new恢复 factory: \$filename -> \$base_name"
+                cp -f "\$backup" "\$FACTORY_TARGET"
+                RECOVERED=\$((RECOVERED + 1))
             fi
         fi
     fi
 done
 
 echo "🔍 搜索临时目录..."
-TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+TMP_DIRS=\$(find "\$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
 
-for tmp_dir in $TMP_DIRS; do
-    if [ ! -f "$SYSUPGRADE_TARGET" ]; then
-        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
-            echo "  ✅ 从临时目录恢复 sysupgrade: $(basename "$file")"
-            cp -f "$file" "$SYSUPGRADE_TARGET"
-            RECOVERED=$((RECOVERED + 1))
+for tmp_dir in \$TMP_DIRS; do
+    if [ ! -f "\$SYSUPGRADE_TARGET" ]; then
+        find "\$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
+            echo "  ✅ 从临时目录恢复 sysupgrade: \$(basename "\$file")"
+            cp -f "\$file" "\$SYSUPGRADE_TARGET"
+            RECOVERED=\$((RECOVERED + 1))
         done
     fi
     
-    if [ ! -f "$FACTORY_TARGET" ]; then
-        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
-            echo "  ✅ 从临时目录恢复 factory: $(basename "$file")"
-            cp -f "$file" "$FACTORY_TARGET"
-            RECOVERED=$((RECOVERED + 1))
+    if [ ! -f "\$FACTORY_TARGET" ]; then
+        find "\$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
+            echo "  ✅ 从临时目录恢复 factory: \$(basename "\$file")"
+            cp -f "\$file" "\$FACTORY_TARGET"
+            RECOVERED=\$((RECOVERED + 1))
         done
     fi
 done
 
-if [ ! -f "$SYSUPGRADE_TARGET" ]; then
+if [ ! -f "\$SYSUPGRADE_TARGET" ]; then
     echo "🔧 sysupgrade不存在，尝试用initramfs..."
-    find "$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1 | while read file; do
-        echo "  ✅ 从initramfs创建 sysupgrade: $(basename "$file")"
-        cp -f "$file" "$SYSUPGRADE_TARGET"
-        RECOVERED=$((RECOVERED + 1))
+    find "\$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1 | while read file; do
+        echo "  ✅ 从initramfs创建 sysupgrade: \$(basename "\$file")"
+        cp -f "\$file" "\$SYSUPGRADE_TARGET"
+        RECOVERED=\$((RECOVERED + 1))
     done
 fi
 
-if [ ! -f "$FACTORY_TARGET" ] && [ -f "$SYSUPGRADE_TARGET" ]; then
+if [ ! -f "\$FACTORY_TARGET" ] && [ -f "\$SYSUPGRADE_TARGET" ]; then
     echo "🔧 factory不存在，复制 sysupgrade 作为 factory"
-    cp -f "$SYSUPGRADE_TARGET" "$FACTORY_TARGET"
-    RECOVERED=$((RECOVERED + 1))
+    cp -f "\$SYSUPGRADE_TARGET" "\$FACTORY_TARGET"
+    RECOVERED=\$((RECOVERED + 1))
 fi
 
-if [ -f "$SYSUPGRADE_TARGET" ]; then
-    (cd "$TARGET_DIR" && sha256sum "$(basename "$SYSUPGRADE_TARGET")" > "$(basename "$SYSUPGRADE_TARGET").sha256sum")
+if [ -f "\$SYSUPGRADE_TARGET" ]; then
+    (cd "\$TARGET_DIR" && sha256sum "\$(basename "\$SYSUPGRADE_TARGET")" > "\$(basename "\$SYSUPGRADE_TARGET").sha256sum")
     echo "  ✅ 创建 sha256sum"
 fi
 
 echo ""
 echo "📊 最终检查:"
-if [ -f "$SYSUPGRADE_TARGET" ]; then
-    size=$(ls -lh "$SYSUPGRADE_TARGET" | awk '{print $5}')
-    echo "  ✅ sysupgrade.bin: 存在 ($size)"
+if [ -f "\$SYSUPGRADE_TARGET" ]; then
+    size=\$(ls -lh "\$SYSUPGRADE_TARGET" | awk '{print \$5}')
+    echo "  ✅ sysupgrade.bin: 存在 (\$size)"
 else
     echo "  ❌ sysupgrade.bin: 不存在"
 fi
 
-if [ -f "$FACTORY_TARGET" ]; then
-    size=$(ls -lh "$FACTORY_TARGET" | awk '{print $5}')
-    echo "  ✅ factory.img: 存在 ($size)"
+if [ -f "\$FACTORY_TARGET" ]; then
+    size=\$(ls -lh "\$FACTORY_TARGET" | awk '{print \$5}')
+    echo "  ✅ factory.img: 存在 (\$size)"
 else
     echo "  ❌ factory.img: 不存在"
 fi
 
-echo "  📊 恢复文件数: $RECOVERED"
-echo "=== 强制恢复结束于 $(date) ==="
+echo "  📊 恢复文件数: \$RECOVERED"
+echo "=== 强制恢复结束于 \$(date) ==="
 EOF
     chmod +x "$recover_script"
     
@@ -5615,9 +5629,9 @@ EOF
     echo "🔧 执行强制恢复，确保双固件存在..."
     bash "$recover_script" "$protect_dir" "$BUILD_DIR"
     
-    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
-    local sysupgrade_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-    local factory_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+    local target_dir="$BUILD_DIR/bin/targets/${target_platform}/${target_subtarget}"
+    local sysupgrade_file="$target_dir/${sysupgrade_filename}"
+    local factory_file="$target_dir/${factory_filename}"
     
     echo ""
     echo "📊 最终固件状态:"
