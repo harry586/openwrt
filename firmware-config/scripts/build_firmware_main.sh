@@ -3988,8 +3988,13 @@ workflow_step15_generate_config() {
             device_for_config="asus_rt-acrh17"
             log "🔧 设备名转换: $DEVICE -> $device_for_config"
             ;;
+        cmcc_rax3000m-nand|cmcc_rax3000m-emmc)
+            device_for_config="cmcc_rax3000m"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config (基础设备名，DTS覆盖层自动处理存储类型)"
+            ;;
         *)
-            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            device_for_config="$DEVICE"
+            log "🔧 使用原始设备名: $device_for_config"
             ;;
     esac
     
@@ -4005,6 +4010,10 @@ workflow_step15_generate_config() {
             ;;
         acrh17|rt-acrh17|asus_rt-acrh17)
             search_device="acrh17"
+            ;;
+        cmcc_rax3000m-nand|cmcc_rax3000m-emmc)
+            search_device="cmcc_rax3000m"
+            log "🔧 搜索设备名使用基础名: $search_device (DTS覆盖层: mt7981b-cmcc-rax3000m-${DEVICE#cmcc_rax3000m-})"
             ;;
         *)
             search_device="$DEVICE"
@@ -4042,7 +4051,7 @@ workflow_step15_generate_config() {
     done
     
     if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
-        log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
+        log "❌ 错误：未找到设备 $DEVICE 的定义文件"
         log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
         exit 1
     fi
@@ -4059,6 +4068,19 @@ workflow_step15_generate_config() {
         echo "$device_block" | grep -E "define Device" | head -1
         echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
         echo "----------------------------------------"
+        
+        # 检查是否有 DTS_OVERLAY
+        local dts_overlay=$(echo "$device_block" | grep -E "^[[:space:]]*DEVICE_DTS_OVERLAY[[:space:]]*:=")
+        if [ -n "$dts_overlay" ]; then
+            echo "📋 设备支持 DTS 覆盖层:"
+            echo "$dts_overlay"
+            
+            # 如果是 cmcc_rax3000m，显示可用的覆盖层
+            if [ "$search_device" = "cmcc_rax3000m" ] && [[ "$DEVICE" =~ ^cmcc_rax3000m-(nand|emmc)$ ]]; then
+                local storage_type="${DEVICE#cmcc_rax3000m-}"
+                echo "   ✅ 将使用 $storage_type 存储类型的 DTS 覆盖层"
+            fi
+        fi
     else
         log "⚠️ 警告：无法提取设备 $search_device 的配置块"
     fi
@@ -4114,18 +4136,15 @@ workflow_step15_generate_config() {
     log ""
     log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
     
-    # 获取基础禁用列表
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
     IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
     
-    # 生成完整禁用列表
     local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
     
     log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
     
     cp .config .config.before_disable
     
-    # 第一轮：禁用所有主包和子包
     log "🔧 第一轮禁用..."
     for plugin in "${full_forbidden_list[@]}"; do
         [ -z "$plugin" ] && continue
@@ -4135,7 +4154,6 @@ workflow_step15_generate_config() {
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
     done
     
-    # 特别处理 nlbwmon 和 wol（确保彻底禁用）
     log "🔧 特别处理 nlbwmon 和 wol..."
     local special_plugins=(
         "nlbwmon"
@@ -4155,7 +4173,6 @@ workflow_step15_generate_config() {
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
     done
     
-    # 删除所有 INCLUDE 子选项
     sed -i '/CONFIG_PACKAGE_luci-app-.*_INCLUDE_/d' .config
     
     sort -u .config > .config.tmp && mv .config.tmp .config
@@ -4169,7 +4186,6 @@ workflow_step15_generate_config() {
         }
         
         local still_enabled=0
-        # 检查基础包
         for plugin in "${BASE_PKGS[@]}"; do
             if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
                 still_enabled=$((still_enabled + 1))
@@ -4201,7 +4217,6 @@ workflow_step15_generate_config() {
     log "📊 最终插件状态验证:"
     local still_enabled_final=0
     
-    # 检查所有需要禁用的插件
     for plugin in "${BASE_PKGS[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
             log "  ❌ $plugin 仍然被启用"
@@ -4225,7 +4240,6 @@ workflow_step15_generate_config() {
     else
         log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
         
-        # 最终强力禁用
         log "🔧 执行最终强力禁用..."
         for plugin in "${BASE_PKGS[@]}"; do
             sed -i "/${plugin}/d" .config
@@ -5349,6 +5363,106 @@ workflow_step25_build_firmware() {
     
     cd $BUILD_DIR
     
+    # 通用补丁失败处理函数
+    handle_patch_failure() {
+        local platform="$1"
+        local patch_file="$2"
+        local log_file="$3"
+        
+        log "  ⚠️ 检测到补丁失败: $patch_file"
+        log "  尝试自动修复..."
+        
+        # 备份原补丁
+        cp "$patch_file" "${patch_file}.bak"
+        
+        # 获取补丁的目标文件
+        local target_file=$(grep -E "^\+\+\+ " "$patch_file" | head -1 | awk '{print $2}' | sed 's/^[^/]*\///')
+        
+        if [ -n "$target_file" ]; then
+            log "  补丁目标文件: $target_file"
+            
+            # 查找内核源码中的原文件
+            local kernel_version=$(ls -d build_dir/target-*/linux-${platform}*/ 2>/dev/null | head -1)
+            if [ -n "$kernel_version" ] && [ -d "$kernel_version" ]; then
+                local full_target_file=$(find "$kernel_version" -name "$(basename "$target_file")" -type f 2>/dev/null | head -1)
+                
+                if [ -n "$full_target_file" ]; then
+                    log "  找到目标文件: $full_target_file"
+                    
+                    # 创建新补丁目录
+                    local patch_dir=$(dirname "$patch_file")
+                    local new_patch_dir="${patch_dir}/auto-fixed"
+                    mkdir -p "$new_patch_dir"
+                    
+                    # 生成新的补丁
+                    local new_patch="${new_patch_dir}/$(basename "$patch_file")"
+                    (cd "$(dirname "$full_target_file")" && \
+                     diff -uN "a/$(basename "$target_file")" "b/$(basename "$target_file")" 2>/dev/null > "$new_patch" || true)
+                    
+                    if [ -s "$new_patch" ]; then
+                        log "  ✅ 生成新的补丁文件: $new_patch"
+                        # 使用新补丁
+                        cp "$new_patch" "$patch_file"
+                    else
+                        log "  ⚠️ 无法生成新补丁，尝试禁用此补丁"
+                        mv "$patch_file" "${patch_file}.disabled"
+                    fi
+                else
+                    log "  ⚠️ 找不到目标文件，尝试禁用此补丁"
+                    mv "$patch_file" "${patch_file}.disabled"
+                fi
+            else
+                log "  ⚠️ 找不到内核源码目录，尝试禁用此补丁"
+                mv "$patch_file" "${patch_file}.disabled"
+            fi
+        else
+            log "  ⚠️ 无法解析补丁目标文件，尝试禁用此补丁"
+            mv "$patch_file" "${patch_file}.disabled"
+        fi
+    }
+    
+    # 检查并处理编译错误
+    check_and_fix_errors() {
+        local build_log="$1"
+        local max_retries=3
+        local retry_count=0
+        
+        while [ $retry_count -lt $max_retries ]; do
+            # 检查是否有补丁失败
+            if grep -q "Patch failed!" "$build_log" 2>/dev/null; then
+                log "  检测到补丁失败，尝试修复..."
+                
+                # 提取失败的补丁文件
+                local failed_patches=$(grep -B1 "Patch failed!" "$build_log" | grep "Applying" | sed 's/.*Applying //g' | sed 's/ using plaintext://g' | sort -u)
+                
+                if [ -n "$failed_patches" ]; then
+                    echo "$failed_patches" | while read patch_file; do
+                        if [ -f "$patch_file" ]; then
+                            # 确定平台
+                            local platform=$(echo "$patch_file" | grep -o "target/linux/[^/]*" | cut -d'/' -f3)
+                            handle_patch_failure "$platform" "$patch_file" "$build_log"
+                        fi
+                    done
+                    
+                    log "  补丁修复完成，继续编译..."
+                    return 0
+                fi
+            fi
+            
+            # 检查是否有其他常见错误
+            if grep -q "No rule to make target" "$build_log" 2>/dev/null; then
+                log "  检测到依赖错误，尝试清理并重试..."
+                make clean > /dev/null 2>&1 || true
+                return 0
+            fi
+            
+            # 没有可修复的错误
+            break
+        done
+        
+        return 1
+    }
+    
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "  ✅ 检测到LEDE源码，应用特定修复..."
         
@@ -5583,8 +5697,16 @@ EOF
     
     if [ ! -d "staging_dir" ] || [ ! -f "staging_dir/host/bin/gcc" ]; then
         echo "🔧 第一阶段：编译工具链"
-        make tools/install -j1 V=s || make tools/install -j1 V=s
-        make toolchain/install -j1 V=s || make toolchain/install -j1 V=s
+        make tools/install -j1 V=s || {
+            echo "⚠️ tools/install 失败，检查并修复..."
+            check_and_fix_errors "tools_install.log"
+            make tools/install -j1 V=s
+        }
+        make toolchain/install -j1 V=s || {
+            echo "⚠️ toolchain/install 失败，检查并修复..."
+            check_and_fix_errors "toolchain_install.log"
+            make toolchain/install -j1 V=s
+        }
         echo "✅ 工具链编译完成"
         echo ""
     fi
@@ -5593,17 +5715,24 @@ EOF
     echo "   使用单线程编译，避免并行依赖问题"
     echo ""
     
-    if ! make -j1 V=s 2>&1 | tee build.log; then
+    # 记录编译日志并实时检查错误
+    BUILD_EXIT_CODE=0
+    {
+        make -j1 V=s 2>&1 | tee build.log
+    } || {
+        BUILD_EXIT_CODE=$?
         echo ""
-        echo "⚠️ 首次编译遇到错误，尝试清理并重试..."
+        echo "⚠️ 编译遇到错误，尝试自动修复..."
         echo ""
         
-        make target/linux/clean V=s > /dev/null 2>&1 || true
-        
-        make -j1 V=s 2>&1 | tee -a build.log
-    fi
-    
-    BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        # 检查并修复错误
+        if check_and_fix_errors "build.log"; then
+            echo "🔄 修复完成，重新编译..."
+            make -j1 V=s 2>&1 | tee -a build.log || BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        else
+            BUILD_EXIT_CODE=1
+        fi
+    }
     
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
@@ -5621,6 +5750,18 @@ EOF
         echo ""
         echo "🔍 最后50行错误日志:"
         tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
+        
+        # 保存失败的补丁信息
+        if [ -f "build.log" ]; then
+            echo ""
+            echo "📝 失败的补丁信息:"
+            grep -B5 -A5 "Patch failed" build.log | head -30 || true
+            
+            # 保存到单独的文件
+            grep -B5 -A5 "Patch failed" build.log > "$BUILD_DIR/failed_patches.log" 2>/dev/null || true
+            echo "📝 失败补丁已保存到: $BUILD_DIR/failed_patches.log"
+        fi
+        
         echo ""
         echo "📝 完整日志请查看: build.log"
     fi
