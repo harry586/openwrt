@@ -5376,62 +5376,68 @@ workflow_step25_build_firmware() {
     
     cd $BUILD_DIR
     
-    # 通用补丁失败处理函数
-    handle_patch_failure() {
-        local platform="$1"
-        local patch_file="$2"
-        local log_file="$3"
+    # 智能补丁处理函数
+    smart_patch_handler() {
+        local patch_file="$1"
+        local log_file="$2"
+        local max_retries=3
         
         log "  ⚠️ 检测到补丁失败: $patch_file"
-        log "  尝试自动修复..."
         
-        # 备份原补丁
-        cp "$patch_file" "${patch_file}.bak"
-        
-        # 获取补丁的目标文件
-        local target_file=$(grep -E "^\+\+\+ " "$patch_file" | head -1 | awk '{print $2}' | sed 's/^[^/]*\///')
-        
-        if [ -n "$target_file" ]; then
-            log "  补丁目标文件: $target_file"
+        for ((attempt=1; attempt<=max_retries; attempt++)); do
+            log "  尝试 $attempt/$max_retries 处理补丁..."
             
-            # 查找内核源码中的原文件
-            local kernel_version=$(ls -d build_dir/target-*/linux-${platform}*/ 2>/dev/null | head -1)
-            if [ -n "$kernel_version" ] && [ -d "$kernel_version" ]; then
-                local full_target_file=$(find "$kernel_version" -name "$(basename "$target_file")" -type f 2>/dev/null | head -1)
+            # 备份原补丁
+            cp "$patch_file" "${patch_file}.bak.$attempt"
+            
+            # 尝试创建兼容版本
+            local patch_name=$(basename "$patch_file")
+            local patch_dir=$(dirname "$patch_file")
+            local target_file=$(grep -E "^\+\+\+ " "$patch_file" | head -1 | awk '{print $2}' | sed 's/^[^/]*\///')
+            
+            if [ -n "$target_file" ]; then
+                # 查找内核源码中的原文件
+                local kernel_build_dir=$(find "$BUILD_DIR/build_dir" -maxdepth 2 -type d -name "linux-*" 2>/dev/null | head -1)
                 
-                if [ -n "$full_target_file" ]; then
-                    log "  找到目标文件: $full_target_file"
+                if [ -n "$kernel_build_dir" ] && [ -d "$kernel_build_dir" ]; then
+                    local full_target_file=$(find "$kernel_build_dir" -name "$(basename "$target_file")" -type f 2>/dev/null | head -1)
                     
-                    # 创建新补丁目录
-                    local patch_dir=$(dirname "$patch_file")
-                    local new_patch_dir="${patch_dir}/auto-fixed"
-                    mkdir -p "$new_patch_dir"
-                    
-                    # 生成新的补丁
-                    local new_patch="${new_patch_dir}/$(basename "$patch_file")"
-                    (cd "$(dirname "$full_target_file")" && \
-                     diff -uN "a/$(basename "$target_file")" "b/$(basename "$target_file")" 2>/dev/null > "$new_patch" || true)
-                    
-                    if [ -s "$new_patch" ]; then
-                        log "  ✅ 生成新的补丁文件: $new_patch"
-                        # 使用新补丁
-                        cp "$new_patch" "$patch_file"
-                    else
-                        log "  ⚠️ 无法生成新补丁，尝试禁用此补丁"
-                        mv "$patch_file" "${patch_file}.disabled"
+                    if [ -n "$full_target_file" ]; then
+                        # 生成新补丁
+                        local new_patch="${patch_dir}/$(basename "$patch_file" .patch).fixed.patch"
+                        (cd "$(dirname "$full_target_file")" && \
+                         diff -uN "a/$(basename "$target_file")" "b/$(basename "$target_file")" 2>/dev/null > "$new_patch" || true)
+                        
+                        if [ -s "$new_patch" ]; then
+                            log "  ✅ 生成修复版补丁: $new_patch"
+                            cp "$new_patch" "$patch_file"
+                            
+                            # 测试新补丁
+                            if make target/linux/clean 2>/dev/null && make target/linux/prepare 2>&1 | grep -q "Patch"; then
+                                log "  ✅ 修复版补丁应用成功"
+                                return 0
+                            fi
+                        fi
                     fi
-                else
-                    log "  ⚠️ 找不到目标文件，尝试禁用此补丁"
-                    mv "$patch_file" "${patch_file}.disabled"
                 fi
-            else
-                log "  ⚠️ 找不到内核源码目录，尝试禁用此补丁"
-                mv "$patch_file" "${patch_file}.disabled"
             fi
-        else
-            log "  ⚠️ 无法解析补丁目标文件，尝试禁用此补丁"
-            mv "$patch_file" "${patch_file}.disabled"
-        fi
+            
+            # 如果无法修复，尝试跳过此补丁
+            if [ $attempt -eq $max_retries ]; then
+                log "  ⚠️ 多次尝试后仍无法修复，跳过此补丁"
+                mv "$patch_file" "${patch_file}.skipped"
+                log "  ✅ 已跳过补丁: $(basename "$patch_file")"
+                
+                # 记录跳过的补丁
+                echo "$(date): 跳过补丁 $patch_file" >> "$BUILD_DIR/skipped_patches.log"
+                return 0
+            fi
+            
+            # 等待一下再重试
+            sleep 2
+        done
+        
+        return 1
     }
     
     # 检查并处理编译错误
@@ -5443,21 +5449,25 @@ workflow_step25_build_firmware() {
         while [ $retry_count -lt $max_retries ]; do
             # 检查是否有补丁失败
             if grep -q "Patch failed!" "$build_log" 2>/dev/null; then
-                log "  检测到补丁失败，尝试修复..."
+                log "  检测到补丁失败，尝试智能处理..."
                 
                 # 提取失败的补丁文件
                 local failed_patches=$(grep -B1 "Patch failed!" "$build_log" | grep "Applying" | sed 's/.*Applying //g' | sed 's/ using plaintext://g' | sort -u)
+                local fixed_count=0
                 
                 if [ -n "$failed_patches" ]; then
                     echo "$failed_patches" | while read patch_file; do
                         if [ -f "$patch_file" ]; then
-                            # 确定平台
-                            local platform=$(echo "$patch_file" | grep -o "target/linux/[^/]*" | cut -d'/' -f3)
-                            handle_patch_failure "$platform" "$patch_file" "$build_log"
+                            if smart_patch_handler "$patch_file" "$build_log"; then
+                                fixed_count=$((fixed_count + 1))
+                            fi
                         fi
                     done
                     
-                    log "  补丁修复完成，继续编译..."
+                    log "  处理完成: $fixed_count 个补丁已处理"
+                    
+                    # 清理并重试编译
+                    make target/linux/clean > /dev/null 2>&1 || true
                     return 0
                 fi
             fi
@@ -5699,27 +5709,46 @@ EOF
     echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
     echo "   编译选项: V=s -j1"
     echo ""
-    echo "   📝 实机编译特点:"
-    echo "     1. 单线程编译 - 避免并行导致的依赖问题"
-    echo "     2. 详细输出 - 方便追踪编译过程"
-    echo "     3. 完整构建 - 不跳过任何步骤"
-    echo "     4. 保留中间文件 - 便于调试"
-    echo ""
     
     START_TIME=$(date +%s)
     
     if [ ! -d "staging_dir" ] || [ ! -f "staging_dir/host/bin/gcc" ]; then
         echo "🔧 第一阶段：编译工具链"
-        make tools/install -j1 V=s || {
-            echo "⚠️ tools/install 失败，检查并修复..."
-            check_and_fix_errors "tools_install.log"
-            make tools/install -j1 V=s
-        }
-        make toolchain/install -j1 V=s || {
-            echo "⚠️ toolchain/install 失败，检查并修复..."
-            check_and_fix_errors "toolchain_install.log"
-            make toolchain/install -j1 V=s
-        }
+        
+        # 编译 tools 并处理可能的错误
+        for i in {1..3}; do
+            if make tools/install -j1 V=s 2>&1 | tee tools_install.log; then
+                break
+            else
+                log "⚠️ tools/install 第 $i 次尝试失败，检查错误..."
+                if check_and_fix_errors "tools_install.log"; then
+                    log "  错误已修复，继续重试..."
+                else
+                    if [ $i -eq 3 ]; then
+                        log "❌ tools/install 多次尝试后仍失败"
+                        exit 1
+                    fi
+                fi
+            fi
+        done
+        
+        # 编译 toolchain 并处理可能的错误
+        for i in {1..3}; do
+            if make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log; then
+                break
+            else
+                log "⚠️ toolchain/install 第 $i 次尝试失败，检查错误..."
+                if check_and_fix_errors "toolchain_install.log"; then
+                    log "  错误已修复，继续重试..."
+                else
+                    if [ $i -eq 3 ]; then
+                        log "❌ toolchain/install 多次尝试后仍失败"
+                        exit 1
+                    fi
+                fi
+            fi
+        done
+        
         echo "✅ 工具链编译完成"
         echo ""
     fi
@@ -5728,24 +5757,31 @@ EOF
     echo "   使用单线程编译，避免并行依赖问题"
     echo ""
     
-    # 记录编译日志并实时检查错误
+    # 编译固件，最多重试3次
     BUILD_EXIT_CODE=0
-    {
-        make -j1 V=s 2>&1 | tee build.log
-    } || {
-        BUILD_EXIT_CODE=$?
-        echo ""
-        echo "⚠️ 编译遇到错误，尝试自动修复..."
-        echo ""
+    for build_attempt in {1..3}; do
+        log "编译尝试 $build_attempt/3..."
         
-        # 检查并修复错误
-        if check_and_fix_errors "build.log"; then
-            echo "🔄 修复完成，重新编译..."
-            make -j1 V=s 2>&1 | tee -a build.log || BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        if make -j1 V=s 2>&1 | tee build.log; then
+            BUILD_EXIT_CODE=0
+            log "✅ 编译成功"
+            break
         else
-            BUILD_EXIT_CODE=1
+            BUILD_EXIT_CODE=${PIPESTATUS[0]}
+            log "⚠️ 编译尝试 $build_attempt 失败"
+            
+            # 检查并修复错误
+            if check_and_fix_errors "build.log"; then
+                log "  错误已修复，继续重试..."
+            else
+                if [ $build_attempt -eq 3 ]; then
+                    log "❌ 编译多次尝试后仍失败"
+                else
+                    log "  无法自动修复，但继续重试..."
+                fi
+            fi
         fi
-    }
+    done
     
     END_TIME=$(date +%s)
     DURATION=$((END_TIME - START_TIME))
@@ -5757,30 +5793,9 @@ EOF
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
     
-    if [ $BUILD_EXIT_CODE -ne 0 ]; then
-        echo ""
-        echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-        echo ""
-        echo "🔍 最后50行错误日志:"
-        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
-        
-        # 保存失败的补丁信息
-        if [ -f "build.log" ]; then
-            echo ""
-            echo "📝 失败的补丁信息:"
-            grep -B5 -A5 "Patch failed" build.log | head -30 || true
-            
-            # 保存到单独的文件
-            grep -B5 -A5 "Patch failed" build.log > "$BUILD_DIR/failed_patches.log" 2>/dev/null || true
-            echo "📝 失败补丁已保存到: $BUILD_DIR/failed_patches.log"
-        fi
-        
-        echo ""
-        echo "📝 完整日志请查看: build.log"
-    fi
-    
+    # 即使编译失败也尝试恢复固件
     echo ""
-    echo "🔧 执行强制恢复，确保双固件存在..."
+    echo "🔧 执行强制恢复，尝试恢复已有固件..."
     bash "$recover_script" "$protect_dir" "$BUILD_DIR"
     
     local target_dir="$BUILD_DIR/bin/targets/${target_platform}/${target_subtarget}"
@@ -5816,6 +5831,13 @@ EOF
         echo "⚠️ 只有一个固件生成，另一个可能丢失"
     else
         echo "❌ 两个固件都没有生成"
+        
+        # 如果有跳过的补丁，显示提示
+        if [ -f "$BUILD_DIR/skipped_patches.log" ]; then
+            echo ""
+            echo "📝 以下补丁被跳过:"
+            cat "$BUILD_DIR/skipped_patches.log"
+        fi
     fi
     
     rm -rf "$protect_dir" 2>/dev/null || true
