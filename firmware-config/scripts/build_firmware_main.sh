@@ -3614,24 +3614,15 @@ workflow_step09_prepare_toolchain() {
     
     cd $BUILD_DIR
     
-    # 修复终端类型错误
+    # 设置终端环境，防止菜单弹出
     export TERM=${TERM:-linux}
-    export TERMINFO=/usr/share/terminfo
-    export TERMINFO_DIRS=/usr/share/terminfo
-    
-    # 如果系统没有终端定义，创建一个基本的
-    if [ ! -f /usr/share/terminfo/l/linux ] && [ ! -f /usr/share/terminfo/x/xterm ]; then
-        log "⚠️ 未找到终端定义，尝试安装..."
-        if command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq ncurses-term 2>/dev/null || true
-        fi
-    fi
-    
-    # 强制设置 make 不使用终端菜单
-    export MAKE_TERMERR=""
-    export MAKE_TERMOUT=""
     export NCURSES_NO_UTF8_ACS=1
     export NCURSES_NO_MULTIBYTE=1
+    
+    # 确保有基本的 .config 文件
+    if [ ! -f ".config" ]; then
+        echo "# Auto generated config" > .config
+    fi
     
     log "📦 源码仓库类型: $SOURCE_REPO_TYPE"
     log "📁 构建目录: $BUILD_DIR"
@@ -3695,159 +3686,23 @@ workflow_step09_prepare_toolchain() {
             echo "📋 工具链编译信息:"
             echo "  工具链源码位置: toolchain/"
             echo "  编译命令: make tools/install -j1 V=s && make toolchain/install -j1 V=s"
-            echo "  超时设置: 每个步骤最多30分钟"
             echo ""
             
             START_TIME=$(date +%s)
             
-            # 编译 tools/install，带超时和进度监控
+            # 先运行 defconfig 确保配置完成
+            make defconfig > /dev/null 2>&1 || true
+            
+            # 编译 tools/install
             log "📦 开始编译 tools/install..."
-            
-            # 在后台启动进度监控
-            {
-                local last_size=0
-                local stall_count=0
-                while true; do
-                    sleep 30
-                    if [ -f "tools_install.log" ]; then
-                        local current_size=$(stat -c %s tools_install.log 2>/dev/null || echo "0")
-                        if [ "$current_size" = "$last_size" ]; then
-                            stall_count=$((stall_count + 1))
-                            if [ $stall_count -ge 4 ]; then  # 2分钟无进展
-                                log "⚠️ tools/install 可能卡住，尝试终止..."
-                                pkill -P $$ make 2>/dev/null || true
-                                break
-                            fi
-                        else
-                            stall_count=0
-                            last_size=$current_size
-                            log "⏱️ tools/install 仍在运行... (日志大小: $(($current_size/1024))KB)"
-                        fi
-                    fi
-                done
-            } &
-            local monitor_pid=$!
-            
-            # 使用 timeout 命令限制编译时间
-            if command -v timeout >/dev/null 2>&1; then
-                timeout 30m make tools/install -j1 V=s 2>&1 | tee tools_install.log
-                local tools_exit=${PIPESTATUS[0]}
-            else
-                make tools/install -j1 V=s 2>&1 | tee tools_install.log &
-                local tools_pid=$!
-                
-                # 等待最多30分钟
-                local tools_timeout=1800
-                local tools_elapsed=0
-                while kill -0 $tools_pid 2>/dev/null; do
-                    sleep 10
-                    tools_elapsed=$((tools_elapsed + 10))
-                    if [ $tools_elapsed -ge $tools_timeout ]; then
-                        log "❌ tools/install 超时 (30分钟)，强制终止"
-                        kill -9 $tools_pid 2>/dev/null || true
-                        tools_exit=124
-                        break
-                    fi
-                done
-                
-                if [ $tools_elapsed -lt $tools_timeout ]; then
-                    wait $tools_pid
-                    tools_exit=$?
-                fi
+            if ! make tools/install -j1 V=s 2>&1 | tee tools_install.log; then
+                log "⚠️ tools/install 编译有警告，继续尝试..."
             fi
             
-            kill $monitor_pid 2>/dev/null || true
-            
-            if [ $tools_exit -eq 0 ]; then
-                log "✅ tools/install 编译完成"
-            elif [ $tools_exit -eq 124 ]; then
-                log "❌ tools/install 超时，尝试跳过..."
-                # 超时后尝试继续，有些包可以跳过
-            else
-                # 检查是否有终端错误
-                if grep -q "Error opening terminal" tools_install.log; then
-                    log "⚠️ 检测到终端错误，尝试修复..."
-                    export TERM=dumb
-                    export NCURSES_NO_UTF8_ACS=1
-                    # 再次尝试，但禁用任何菜单
-                    make tools/install -j1 V=s 2>&1 | tee -a tools_install.log || true
-                else
-                    log "⚠️ tools/install 编译有警告，继续尝试..."
-                fi
-            fi
-            
-            # 编译 toolchain/install，带超时和进度监控
+            # 编译 toolchain/install
             log "📦 开始编译 toolchain/install..."
-            
-            # 再次启动进度监控
-            {
-                local last_size=0
-                local stall_count=0
-                while true; do
-                    sleep 30
-                    if [ -f "toolchain_install.log" ]; then
-                        local current_size=$(stat -c %s toolchain_install.log 2>/dev/null || echo "0")
-                        if [ "$current_size" = "$last_size" ]; then
-                            stall_count=$((stall_count + 1))
-                            if [ $stall_count -ge 4 ]; then  # 2分钟无进展
-                                log "⚠️ toolchain/install 可能卡住，尝试终止..."
-                                pkill -P $$ make 2>/dev/null || true
-                                break
-                            fi
-                        else
-                            stall_count=0
-                            last_size=$current_size
-                            log "⏱️ toolchain/install 仍在运行... (日志大小: $(($current_size/1024))KB)"
-                        fi
-                    fi
-                done
-            } &
-            local monitor_pid2=$!
-            
-            if command -v timeout >/dev/null 2>&1; then
-                timeout 30m make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log
-                local toolchain_exit=${PIPESTATUS[0]}
-            else
-                make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log &
-                local toolchain_pid=$!
-                
-                # 等待最多30分钟
-                local toolchain_timeout=1800
-                local toolchain_elapsed=0
-                while kill -0 $toolchain_pid 2>/dev/null; do
-                    sleep 10
-                    toolchain_elapsed=$((toolchain_elapsed + 10))
-                    if [ $toolchain_elapsed -ge $toolchain_timeout ]; then
-                        log "❌ toolchain/install 超时 (30分钟)，强制终止"
-                        kill -9 $toolchain_pid 2>/dev/null || true
-                        toolchain_exit=124
-                        break
-                    fi
-                done
-                
-                if [ $toolchain_elapsed -lt $toolchain_timeout ]; then
-                    wait $toolchain_pid
-                    toolchain_exit=$?
-                fi
-            fi
-            
-            kill $monitor_pid2 2>/dev/null || true
-            
-            if [ $toolchain_exit -eq 0 ]; then
-                log "✅ toolchain/install 编译完成"
-            elif [ $toolchain_exit -eq 124 ]; then
-                log "❌ toolchain/install 超时，尝试继续..."
-                # 超时后检查是否部分完成
-            else
-                # 检查是否有终端错误
-                if grep -q "Error opening terminal" toolchain_install.log; then
-                    log "⚠️ 检测到终端错误，尝试修复..."
-                    export TERM=dumb
-                    export NCURSES_NO_UTF8_ACS=1
-                    make toolchain/install -j1 V=s 2>&1 | tee -a toolchain_install.log || true
-                else
-                    log "⚠️ toolchain/install 编译有警告，继续尝试..."
-                fi
+            if ! make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log; then
+                log "⚠️ toolchain/install 编译有警告，继续尝试..."
             fi
             
             END_TIME=$(date +%s)
@@ -3860,7 +3715,6 @@ workflow_step09_prepare_toolchain() {
         
         log "🔍 验证编译后的工具链..."
         
-        # 查找真正的 GCC 编译器
         local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable \
             -name "*gcc" \
             ! -name "*gcc-ar" \
@@ -3877,12 +3731,6 @@ workflow_step09_prepare_toolchain() {
             echo "  📁 位置: $(dirname "$gcc_file")"
         else
             log "⚠️ 工具链编译后未找到 GCC，但将继续执行"
-            
-            # 检查 staging_dir 结构
-            if [ -d "$BUILD_DIR/staging_dir" ]; then
-                log "📁 staging_dir 结构:"
-                ls -la "$BUILD_DIR/staging_dir/" | head -10
-            fi
         fi
     else
         log "❌ 错误: 未找到 Makefile，无法编译工具链"
@@ -3895,110 +3743,10 @@ TOOLCHAIN_SOURCE="源码编译"
 TOOLCHAIN_DATE="$(date)"
 TOOLCHAIN_TYPE="$SOURCE_REPO_TYPE"
 TOOLCHAIN_DIR="$BUILD_DIR/staging_dir"
-TERM_SETTING="$TERM"
-NCURSES_SETTING="disabled"
 EOF
     
     log "✅ 工具链信息已保存到: $toolchain_info"
     log "✅ 步骤09 完成"
-}
-
-workflow_step10_verify_sdk() {
-    log "=== 步骤10: 验证源码自带工具链 ==="
-    
-    trap 'echo "⚠️ 步骤10 验证过程中出现错误，继续执行..."' ERR
-    
-    # 修复终端类型错误
-    export TERM=${TERM:-linux}
-    export NCURSES_NO_UTF8_ACS=1
-    
-    echo "🔍 检查源码自带工具链..."
-    
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        echo "✅ 从环境文件加载变量: COMPILER_DIR=$COMPILER_DIR, SOURCE_REPO_TYPE=$SOURCE_REPO_TYPE"
-    fi
-    
-    echo "✅ 源码仓库类型: $SOURCE_REPO_TYPE"
-    echo "📊 源码目录大小: $(du -sh "$BUILD_DIR" 2>/dev/null | awk '{print $1}' || echo '未知')"
-    
-    if [ -d "$BUILD_DIR/staging_dir" ]; then
-        echo "✅ 找到staging_dir目录，源码工具链已准备就绪"
-        echo "📊 staging_dir大小: $(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}' || echo '未知')"
-        
-        GCC_FILE=$(find "$BUILD_DIR/staging_dir" -type f -executable \
-            -name "*gcc" \
-            ! -name "*gcc-ar" \
-            ! -name "*gcc-ranlib" \
-            ! -name "*gcc-nm" \
-            ! -path "*dummy-tools*" \
-            ! -path "*scripts*" \
-            2>/dev/null | head -1)
-        
-        if [ -n "$GCC_FILE" ]; then
-            echo "✅ 找到工具链中的GCC编译器: $(basename "$GCC_FILE")"
-            echo "🔧 GCC版本测试:"
-            "$GCC_FILE" --version 2>&1 | head -1
-            
-            GCC_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            MAJOR_VERSION=$(echo "$GCC_VERSION" | grep -o "[0-9]\+" | head -1)
-            
-            case "$SOURCE_REPO_TYPE" in
-                "lede")
-                    echo "💡 LEDE源码工具链"
-                    ;;
-                "openwrt")
-                    if [ "$MAJOR_VERSION" = "12" ]; then
-                        echo "💡 OpenWrt 23.05源码工具链 (GCC 12.x)"
-                    elif [ "$MAJOR_VERSION" = "8" ]; then
-                        echo "💡 OpenWrt 21.02源码工具链 (GCC 8.x)"
-                    else
-                        echo "💡 OpenWrt源码工具链 (GCC $MAJOR_VERSION.x)"
-                    fi
-                    ;;
-                "immortalwrt")
-                    if [ "$MAJOR_VERSION" = "12" ]; then
-                        echo "💡 ImmortalWrt 23.05源码工具链 (GCC 12.x)"
-                    elif [ "$MAJOR_VERSION" = "8" ]; then
-                        echo "💡 ImmortalWrt 21.02源码工具链 (GCC 8.x)"
-                    else
-                        echo "💡 ImmortalWrt源码工具链 (GCC $MAJOR_VERSION.x)"
-                    fi
-                    ;;
-                *)
-                    echo "💡 源码工具链 (GCC $MAJOR_VERSION.x)"
-                    ;;
-            esac
-        else
-            echo "ℹ️ 工具链将在编译过程中自动生成"
-        fi
-    else
-        echo "ℹ️ staging_dir目录尚未生成，将在编译过程中自动创建"
-    fi
-    
-    echo ""
-    echo "📁 源码关键目录检查:"
-    if [ -d "$BUILD_DIR/scripts" ]; then
-        echo "  ✅ scripts目录: 存在"
-    else
-        echo "  ❌ scripts目录: 不存在"
-    fi
-    
-    if [ -f "$BUILD_DIR/Makefile" ]; then
-        echo "  ✅ Makefile: 存在"
-    else
-        echo "  ❌ Makefile: 不存在"
-    fi
-    
-    if [ -f "$BUILD_DIR/feeds.conf.default" ]; then
-        echo "  ✅ feeds.conf.default: 存在"
-    else
-        echo "  ❌ feeds.conf.default: 不存在"
-    fi
-    
-    echo ""
-    echo "✅ 源码工具链验证完成"
-    log "✅ 步骤10 完成"
 }
 #【build_firmware_main.sh-26-end】
 
