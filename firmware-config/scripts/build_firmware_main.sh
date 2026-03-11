@@ -3614,8 +3614,28 @@ workflow_step09_prepare_toolchain() {
     
     cd $BUILD_DIR
     
+    # 修复终端类型错误
+    export TERM=${TERM:-linux}
+    export TERMINFO=/usr/share/terminfo
+    export TERMINFO_DIRS=/usr/share/terminfo
+    
+    # 如果系统没有终端定义，创建一个基本的
+    if [ ! -f /usr/share/terminfo/l/linux ] && [ ! -f /usr/share/terminfo/x/xterm ]; then
+        log "⚠️ 未找到终端定义，尝试安装..."
+        if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ncurses-term 2>/dev/null || true
+        fi
+    fi
+    
+    # 强制设置 make 不使用终端菜单
+    export MAKE_TERMERR=""
+    export MAKE_TERMOUT=""
+    export NCURSES_NO_UTF8_ACS=1
+    export NCURSES_NO_MULTIBYTE=1
+    
     log "📦 源码仓库类型: $SOURCE_REPO_TYPE"
     log "📁 构建目录: $BUILD_DIR"
+    log "🔧 终端设置: TERM=$TERM"
     
     log "🔍 检查源码工具链..."
     
@@ -3679,18 +3699,38 @@ workflow_step09_prepare_toolchain() {
             
             START_TIME=$(date +%s)
             
-            make tools/install -j1 V=s | tee tools_install.log
+            # 编译 tools/install，禁用菜单配置
+            make tools/install -j1 V=s 2>&1 | tee tools_install.log
             if [ ${PIPESTATUS[0]} -eq 0 ]; then
                 log "✅ tools/install 编译完成"
             else
-                log "⚠️ tools/install 编译有警告，继续尝试..."
+                # 检查是否有终端错误
+                if grep -q "Error opening terminal" tools_install.log; then
+                    log "⚠️ 检测到终端错误，尝试修复..."
+                    export TERM=linux
+                    export NCURSES_NO_UTF8_ACS=1
+                    # 禁用任何可能调用 menuconfig 的操作
+                    make tools/install -j1 V=s 2>&1 | tee -a tools_install.log
+                else
+                    log "⚠️ tools/install 编译有警告，继续尝试..."
+                fi
             fi
             
-            make toolchain/install -j1 V=s | tee toolchain_install.log
+            # 编译 toolchain/install，禁用菜单配置
+            make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log
             if [ ${PIPESTATUS[0]} -eq 0 ]; then
                 log "✅ toolchain/install 编译完成"
             else
-                log "⚠️ toolchain/install 编译有警告，继续尝试..."
+                # 检查是否有终端错误
+                if grep -q "Error opening terminal" toolchain_install.log; then
+                    log "⚠️ 检测到终端错误，尝试修复..."
+                    export TERM=linux
+                    export NCURSES_NO_UTF8_ACS=1
+                    # 禁用任何可能调用 menuconfig 的操作
+                    make toolchain/install -j1 V=s 2>&1 | tee -a toolchain_install.log
+                else
+                    log "⚠️ toolchain/install 编译有警告，继续尝试..."
+                fi
             fi
             
             END_TIME=$(date +%s)
@@ -3703,15 +3743,29 @@ workflow_step09_prepare_toolchain() {
         
         log "🔍 验证编译后的工具链..."
         
-        local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+        # 查找真正的 GCC 编译器，排除包装脚本
+        local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable \
+            -name "*gcc" \
+            ! -name "*gcc-ar" \
+            ! -name "*gcc-ranlib" \
+            ! -name "*gcc-nm" \
+            ! -path "*dummy-tools*" \
+            ! -path "*scripts*" \
+            2>/dev/null | head -1)
         
-        if [ -n "$gcc_file" ]; then
+        if [ -n "$gcc_file" ] && [ -x "$gcc_file" ]; then
             log "✅ 工具链编译成功:"
             echo "  🔧 编译器: $(basename "$gcc_file")"
             echo "  📋 版本: $("$gcc_file" --version 2>&1 | head -1)"
             echo "  📁 位置: $(dirname "$gcc_file")"
         else
             log "⚠️ 工具链编译后未找到 GCC，但将继续执行"
+            
+            # 查找是否有任何编译器
+            local any_compiler=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc*" 2>/dev/null | head -1)
+            if [ -n "$any_compiler" ]; then
+                log "  找到相关文件: $(basename "$any_compiler")"
+            fi
         fi
     else
         log "❌ 错误: 未找到 Makefile，无法编译工具链"
@@ -3724,6 +3778,8 @@ TOOLCHAIN_SOURCE="源码编译"
 TOOLCHAIN_DATE="$(date)"
 TOOLCHAIN_TYPE="$SOURCE_REPO_TYPE"
 TOOLCHAIN_DIR="$BUILD_DIR/staging_dir"
+TERM_SETTING="$TERM"
+NCURSES_SETTING="disabled"
 EOF
     
     log "✅ 工具链信息已保存到: $toolchain_info"
@@ -3734,6 +3790,10 @@ workflow_step10_verify_sdk() {
     log "=== 步骤10: 验证源码自带工具链 ==="
     
     trap 'echo "⚠️ 步骤10 验证过程中出现错误，继续执行..."' ERR
+    
+    # 修复终端类型错误
+    export TERM=${TERM:-linux}
+    export NCURSES_NO_UTF8_ACS=1
     
     echo "🔍 检查源码自带工具链..."
     
@@ -3749,7 +3809,14 @@ workflow_step10_verify_sdk() {
         echo "✅ 找到staging_dir目录，源码工具链已准备就绪"
         echo "📊 staging_dir大小: $(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}' || echo '未知')"
         
-        GCC_FILE=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+        GCC_FILE=$(find "$BUILD_DIR/staging_dir" -type f -executable \
+            -name "*gcc" \
+            ! -name "*gcc-ar" \
+            ! -name "*gcc-ranlib" \
+            ! -name "*gcc-nm" \
+            ! -path "*dummy-tools*" \
+            ! -path "*scripts*" \
+            2>/dev/null | head -1)
         
         if [ -n "$GCC_FILE" ]; then
             echo "✅ 找到工具链中的GCC编译器: $(basename "$GCC_FILE")"
@@ -3978,7 +4045,7 @@ workflow_step15_generate_config() {
         log "⚠️ DEVICE为空，使用参数: $DEVICE"
     fi
     
-    # 设备名转换：保持原始设备名，不转换连字符为下划线
+    # 设备名转换：统一使用基础设备名
     local device_for_config="$DEVICE"
     case "$DEVICE" in
         ac42u|rt-ac42u)
@@ -3989,10 +4056,13 @@ workflow_step15_generate_config() {
             device_for_config="asus_rt-acrh17"
             log "🔧 设备名转换: $DEVICE -> $device_for_config"
             ;;
-        cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m_nand|cmcc_rax3000m_emmc)
-            # 统一转换为带连字符的格式（因为mk文件中是带连字符的）
-            device_for_config=$(echo "$DEVICE" | tr '_' '-')
-            log "🔧 设备名转换: $DEVICE -> $device_for_config (统一为连字符格式)"
+        cmcc_rax3000m-nand|cmcc_rax3000m_nand)
+            device_for_config="cmcc_rax3000m"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config (基础设备名，通过 DTS 覆盖层支持 NAND)"
+            ;;
+        cmcc_rax3000m-emmc|cmcc_rax3000m_emmc)
+            device_for_config="cmcc_rax3000m"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config (基础设备名，通过 DTS 覆盖层支持 eMMC)"
             ;;
         *)
             device_for_config="$DEVICE"
@@ -4005,26 +4075,26 @@ workflow_step15_generate_config() {
     log ""
     log "=== 🔍 设备定义文件验证（前置检查） ==="
     
-    # 生成多种可能的搜索设备名
-    local search_device=""
+    # 优先匹配基础设备名
+    local base_device=""
     local search_variants=()
     
     case "$DEVICE" in
         ac42u|rt-ac42u|asus_rt-ac42u)
-            search_variants=("ac42u" "asus_rt-ac42u" "asus_rt_ac42u")
+            base_device="asus_rt-ac42u"
+            search_variants=("$base_device" "ac42u")
             ;;
         acrh17|rt-acrh17|asus_rt-acrh17)
-            search_variants=("acrh17" "asus_rt-acrh17" "asus_rt_acrh17")
+            base_device="asus_rt-acrh17"
+            search_variants=("$base_device" "acrh17")
             ;;
-        cmcc_rax3000m-nand|cmcc_rax3000m_nand)
-            search_variants=("cmcc_rax3000m-nand" "cmcc_rax3000m_nand" "cmcc_rax3000m")
-            log "🔧 搜索设备名变体: NAND版本"
-            ;;
-        cmcc_rax3000m-emmc|cmcc_rax3000m_emmc)
-            search_variants=("cmcc_rax3000m-emmc" "cmcc_rax3000m_emmc" "cmcc_rax3000m")
-            log "🔧 搜索设备名变体: eMMC版本"
+        cmcc_rax3000m-nand|cmcc_rax3000m_nand|cmcc_rax3000m-emmc|cmcc_rax3000m_emmc)
+            base_device="cmcc_rax3000m"
+            search_variants=("$base_device" "cmcc_rax3000m" "cmcc_rax3000m-nand" "cmcc_rax3000m-emmc" "cmcc_rax3000m_nand" "cmcc_rax3000m_emmc")
+            log "🔧 使用基础设备名: $base_device (DTS 覆盖层支持存储类型)"
             ;;
         *)
+            base_device="$DEVICE"
             search_variants=("$DEVICE" "$(echo "$DEVICE" | tr '-' '_')" "$(echo "$DEVICE" | tr '_' '-')")
             ;;
     esac
@@ -4053,12 +4123,19 @@ workflow_step15_generate_config() {
     
     local device_file=""
     local found_variant=""
+    local found_device_name=""
     
+    # 优先匹配基础设备名（完整的 define Device 块）
     for variant in "${search_variants[@]}"; do
         for mkfile in "${mk_files[@]}"; do
-            if grep -q "define Device.*$variant" "$mkfile" 2>/dev/null; then
+            # 查找完整的设备定义块
+            if grep -q "^define Device/$variant$" "$mkfile" 2>/dev/null || \
+               grep -q "^define Device[[:space:]]*$variant" "$mkfile" 2>/dev/null || \
+               grep -q "^define Device.*$variant" "$mkfile" 2>/dev/null; then
                 device_file="$mkfile"
                 found_variant="$variant"
+                # 提取实际的设备名
+                found_device_name=$(grep -m1 "^define Device.*$variant" "$mkfile" | sed 's/^define Device[[:space:]]*//g' | cut -d' ' -f1)
                 break 2
             fi
         done
@@ -4070,17 +4147,39 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    log "✅ 找到设备定义文件: $device_file (匹配变体: $found_variant)"
+    log "✅ 找到设备定义文件: $device_file"
+    log "✅ 匹配的设备名: $found_device_name (变体: $found_variant)"
     
+    # 提取设备定义块
     local device_block=""
-    device_block=$(awk "/define Device.*$found_variant/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+    if [ -n "$found_device_name" ]; then
+        device_block=$(awk "/^define Device[[:space:]]*$found_device_name/,/^endef/" "$device_file" 2>/dev/null)
+    fi
+    
+    if [ -z "$device_block" ]; then
+        device_block=$(awk "/define Device.*$found_variant/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+    fi
     
     if [ -n "$device_block" ]; then
         echo ""
         echo "📋 设备定义信息（关键字段）:"
         echo "----------------------------------------"
         echo "$device_block" | grep -E "define Device" | head -1
-        echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
+        echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS|DEVICE_DTS_OVERLAY)[[:space:]]*:="
+        
+        # 检查是否有 DTS 覆盖层
+        local dts_overlay=$(echo "$device_block" | grep -E "^[[:space:]]*DEVICE_DTS_OVERLAY[[:space:]]*:=")
+        if [ -n "$dts_overlay" ]; then
+            echo ""
+            echo "📋 DTS 覆盖层支持:"
+            echo "$dts_overlay"
+            
+            # 如果是 cmcc_rax3000m，显示可用的存储类型
+            if [[ "$found_device_name" == "cmcc_rax3000m" ]] && [[ "$DEVICE" =~ (nand|emmc) ]]; then
+                local storage_type="${DEVICE##*-}"
+                echo "   ✅ 将使用 $storage_type 存储类型的 DTS 覆盖层"
+            fi
+        fi
         echo "----------------------------------------"
     else
         log "⚠️ 警告：无法提取设备 $found_variant 的配置块"
@@ -4132,7 +4231,7 @@ workflow_step15_generate_config() {
     
     log "✅ 设备定义文件验证通过，继续生成配置"
     
-    # 调用 generate_config 函数，传入统一的设备名（带连字符）
+    # 调用 generate_config 函数，传入基础设备名
     generate_config "$extra_packages" "$device_for_config"
     
     log ""
