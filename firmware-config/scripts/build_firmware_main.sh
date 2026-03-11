@@ -3695,39 +3695,156 @@ workflow_step09_prepare_toolchain() {
             echo "📋 工具链编译信息:"
             echo "  工具链源码位置: toolchain/"
             echo "  编译命令: make tools/install -j1 V=s && make toolchain/install -j1 V=s"
+            echo "  超时设置: 每个步骤最多30分钟"
             echo ""
             
             START_TIME=$(date +%s)
             
-            # 编译 tools/install，禁用菜单配置
-            make tools/install -j1 V=s 2>&1 | tee tools_install.log
-            if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            # 编译 tools/install，带超时和进度监控
+            log "📦 开始编译 tools/install..."
+            
+            # 在后台启动进度监控
+            {
+                local last_size=0
+                local stall_count=0
+                while true; do
+                    sleep 30
+                    if [ -f "tools_install.log" ]; then
+                        local current_size=$(stat -c %s tools_install.log 2>/dev/null || echo "0")
+                        if [ "$current_size" = "$last_size" ]; then
+                            stall_count=$((stall_count + 1))
+                            if [ $stall_count -ge 4 ]; then  # 2分钟无进展
+                                log "⚠️ tools/install 可能卡住，尝试终止..."
+                                pkill -P $$ make 2>/dev/null || true
+                                break
+                            fi
+                        else
+                            stall_count=0
+                            last_size=$current_size
+                            log "⏱️ tools/install 仍在运行... (日志大小: $(($current_size/1024))KB)"
+                        fi
+                    fi
+                done
+            } &
+            local monitor_pid=$!
+            
+            # 使用 timeout 命令限制编译时间
+            if command -v timeout >/dev/null 2>&1; then
+                timeout 30m make tools/install -j1 V=s 2>&1 | tee tools_install.log
+                local tools_exit=${PIPESTATUS[0]}
+            else
+                make tools/install -j1 V=s 2>&1 | tee tools_install.log &
+                local tools_pid=$!
+                
+                # 等待最多30分钟
+                local tools_timeout=1800
+                local tools_elapsed=0
+                while kill -0 $tools_pid 2>/dev/null; do
+                    sleep 10
+                    tools_elapsed=$((tools_elapsed + 10))
+                    if [ $tools_elapsed -ge $tools_timeout ]; then
+                        log "❌ tools/install 超时 (30分钟)，强制终止"
+                        kill -9 $tools_pid 2>/dev/null || true
+                        tools_exit=124
+                        break
+                    fi
+                done
+                
+                if [ $tools_elapsed -lt $tools_timeout ]; then
+                    wait $tools_pid
+                    tools_exit=$?
+                fi
+            fi
+            
+            kill $monitor_pid 2>/dev/null || true
+            
+            if [ $tools_exit -eq 0 ]; then
                 log "✅ tools/install 编译完成"
+            elif [ $tools_exit -eq 124 ]; then
+                log "❌ tools/install 超时，尝试跳过..."
+                # 超时后尝试继续，有些包可以跳过
             else
                 # 检查是否有终端错误
                 if grep -q "Error opening terminal" tools_install.log; then
                     log "⚠️ 检测到终端错误，尝试修复..."
-                    export TERM=linux
+                    export TERM=dumb
                     export NCURSES_NO_UTF8_ACS=1
-                    # 禁用任何可能调用 menuconfig 的操作
-                    make tools/install -j1 V=s 2>&1 | tee -a tools_install.log
+                    # 再次尝试，但禁用任何菜单
+                    make tools/install -j1 V=s 2>&1 | tee -a tools_install.log || true
                 else
                     log "⚠️ tools/install 编译有警告，继续尝试..."
                 fi
             fi
             
-            # 编译 toolchain/install，禁用菜单配置
-            make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log
-            if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            # 编译 toolchain/install，带超时和进度监控
+            log "📦 开始编译 toolchain/install..."
+            
+            # 再次启动进度监控
+            {
+                local last_size=0
+                local stall_count=0
+                while true; do
+                    sleep 30
+                    if [ -f "toolchain_install.log" ]; then
+                        local current_size=$(stat -c %s toolchain_install.log 2>/dev/null || echo "0")
+                        if [ "$current_size" = "$last_size" ]; then
+                            stall_count=$((stall_count + 1))
+                            if [ $stall_count -ge 4 ]; then  # 2分钟无进展
+                                log "⚠️ toolchain/install 可能卡住，尝试终止..."
+                                pkill -P $$ make 2>/dev/null || true
+                                break
+                            fi
+                        else
+                            stall_count=0
+                            last_size=$current_size
+                            log "⏱️ toolchain/install 仍在运行... (日志大小: $(($current_size/1024))KB)"
+                        fi
+                    fi
+                done
+            } &
+            local monitor_pid2=$!
+            
+            if command -v timeout >/dev/null 2>&1; then
+                timeout 30m make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log
+                local toolchain_exit=${PIPESTATUS[0]}
+            else
+                make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log &
+                local toolchain_pid=$!
+                
+                # 等待最多30分钟
+                local toolchain_timeout=1800
+                local toolchain_elapsed=0
+                while kill -0 $toolchain_pid 2>/dev/null; do
+                    sleep 10
+                    toolchain_elapsed=$((toolchain_elapsed + 10))
+                    if [ $toolchain_elapsed -ge $toolchain_timeout ]; then
+                        log "❌ toolchain/install 超时 (30分钟)，强制终止"
+                        kill -9 $toolchain_pid 2>/dev/null || true
+                        toolchain_exit=124
+                        break
+                    fi
+                done
+                
+                if [ $toolchain_elapsed -lt $toolchain_timeout ]; then
+                    wait $toolchain_pid
+                    toolchain_exit=$?
+                fi
+            fi
+            
+            kill $monitor_pid2 2>/dev/null || true
+            
+            if [ $toolchain_exit -eq 0 ]; then
                 log "✅ toolchain/install 编译完成"
+            elif [ $toolchain_exit -eq 124 ]; then
+                log "❌ toolchain/install 超时，尝试继续..."
+                # 超时后检查是否部分完成
             else
                 # 检查是否有终端错误
                 if grep -q "Error opening terminal" toolchain_install.log; then
                     log "⚠️ 检测到终端错误，尝试修复..."
-                    export TERM=linux
+                    export TERM=dumb
                     export NCURSES_NO_UTF8_ACS=1
-                    # 禁用任何可能调用 menuconfig 的操作
-                    make toolchain/install -j1 V=s 2>&1 | tee -a toolchain_install.log
+                    make toolchain/install -j1 V=s 2>&1 | tee -a toolchain_install.log || true
                 else
                     log "⚠️ toolchain/install 编译有警告，继续尝试..."
                 fi
@@ -3743,7 +3860,7 @@ workflow_step09_prepare_toolchain() {
         
         log "🔍 验证编译后的工具链..."
         
-        # 查找真正的 GCC 编译器，排除包装脚本
+        # 查找真正的 GCC 编译器
         local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable \
             -name "*gcc" \
             ! -name "*gcc-ar" \
@@ -3761,10 +3878,10 @@ workflow_step09_prepare_toolchain() {
         else
             log "⚠️ 工具链编译后未找到 GCC，但将继续执行"
             
-            # 查找是否有任何编译器
-            local any_compiler=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc*" 2>/dev/null | head -1)
-            if [ -n "$any_compiler" ]; then
-                log "  找到相关文件: $(basename "$any_compiler")"
+            # 检查 staging_dir 结构
+            if [ -d "$BUILD_DIR/staging_dir" ]; then
+                log "📁 staging_dir 结构:"
+                ls -la "$BUILD_DIR/staging_dir/" | head -10
             fi
         fi
     else
