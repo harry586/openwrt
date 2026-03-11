@@ -5380,9 +5380,30 @@ workflow_step25_build_firmware() {
     smart_patch_handler() {
         local patch_file="$1"
         local log_file="$2"
-        local max_retries=3
+        local platform="$3"
+        local max_retries=2
         
         log "  ⚠️ 检测到补丁失败: $patch_file"
+        
+        # 记录失败的补丁
+        echo "$(date): 补丁失败 $patch_file" >> "$BUILD_DIR/failed_patches.log"
+        
+        # 检查补丁的重要程度
+        local patch_name=$(basename "$patch_file")
+        local is_critical=0
+        
+        # 关键补丁列表（如果这些补丁失败，编译一定会失败）
+        critical_patches=(
+            "401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+        )
+        
+        for critical in "${critical_patches[@]}"; do
+            if [[ "$patch_name" == *"$critical"* ]]; then
+                is_critical=1
+                log "  ⚠️ 这是一个关键补丁，必须处理"
+                break
+            fi
+        done
         
         for ((attempt=1; attempt<=max_retries; attempt++)); do
             log "  尝试 $attempt/$max_retries 处理补丁..."
@@ -5391,8 +5412,6 @@ workflow_step25_build_firmware() {
             cp "$patch_file" "${patch_file}.bak.$attempt"
             
             # 尝试创建兼容版本
-            local patch_name=$(basename "$patch_file")
-            local patch_dir=$(dirname "$patch_file")
             local target_file=$(grep -E "^\+\+\+ " "$patch_file" | head -1 | awk '{print $2}' | sed 's/^[^/]*\///')
             
             if [ -n "$target_file" ]; then
@@ -5404,7 +5423,7 @@ workflow_step25_build_firmware() {
                     
                     if [ -n "$full_target_file" ]; then
                         # 生成新补丁
-                        local new_patch="${patch_dir}/$(basename "$patch_file" .patch).fixed.patch"
+                        local new_patch="${patch_file}.fixed"
                         (cd "$(dirname "$full_target_file")" && \
                          diff -uN "a/$(basename "$target_file")" "b/$(basename "$target_file")" 2>/dev/null > "$new_patch" || true)
                         
@@ -5412,32 +5431,31 @@ workflow_step25_build_firmware() {
                             log "  ✅ 生成修复版补丁: $new_patch"
                             cp "$new_patch" "$patch_file"
                             
-                            # 测试新补丁
-                            if make target/linux/clean 2>/dev/null && make target/linux/prepare 2>&1 | grep -q "Patch"; then
-                                log "  ✅ 修复版补丁应用成功"
-                                return 0
-                            fi
+                            # 清理内核构建目录，强制重新应用补丁
+                            rm -rf "$BUILD_DIR/build_dir/linux-${platform}*" 2>/dev/null || true
+                            
+                            return 0
                         fi
                     fi
                 fi
             fi
             
-            # 如果无法修复，尝试跳过此补丁
-            if [ $attempt -eq $max_retries ]; then
-                log "  ⚠️ 多次尝试后仍无法修复，跳过此补丁"
-                mv "$patch_file" "${patch_file}.skipped"
-                log "  ✅ 已跳过补丁: $(basename "$patch_file")"
-                
-                # 记录跳过的补丁
-                echo "$(date): 跳过补丁 $patch_file" >> "$BUILD_DIR/skipped_patches.log"
-                return 0
-            fi
-            
-            # 等待一下再重试
             sleep 2
         done
         
-        return 1
+        # 如果多次尝试后仍然失败
+        if [ $is_critical -eq 1 ]; then
+            log "  ❌ 关键补丁无法修复，编译将失败"
+            return 1
+        else
+            log "  ⚠️ 非关键补丁无法修复，将跳过此补丁"
+            mv "$patch_file" "${patch_file}.skipped"
+            echo "$(date): 跳过补丁 $patch_file" >> "$BUILD_DIR/skipped_patches.log"
+            
+            # 清理内核构建目录，确保重新应用剩余补丁
+            rm -rf "$BUILD_DIR/build_dir/linux-${platform}*" 2>/dev/null || true
+            return 0
+        fi
     }
     
     # 检查并处理编译错误
@@ -5451,20 +5469,30 @@ workflow_step25_build_firmware() {
             if grep -q "Patch failed!" "$build_log" 2>/dev/null; then
                 log "  检测到补丁失败，尝试智能处理..."
                 
-                # 提取失败的补丁文件
+                # 提取失败的补丁文件和平台
                 local failed_patches=$(grep -B1 "Patch failed!" "$build_log" | grep "Applying" | sed 's/.*Applying //g' | sed 's/ using plaintext://g' | sort -u)
-                local fixed_count=0
+                local platform=$(grep -o "target/linux/[^/]*" "$build_log" | head -1 | cut -d'/' -f3)
                 
                 if [ -n "$failed_patches" ]; then
+                    local all_fixed=0
+                    local any_critical=0
+                    
                     echo "$failed_patches" | while read patch_file; do
                         if [ -f "$patch_file" ]; then
-                            if smart_patch_handler "$patch_file" "$build_log"; then
-                                fixed_count=$((fixed_count + 1))
+                            if smart_patch_handler "$patch_file" "$build_log" "$platform"; then
+                                all_fixed=$((all_fixed + 1))
+                            else
+                                any_critical=1
                             fi
                         fi
                     done
                     
-                    log "  处理完成: $fixed_count 个补丁已处理"
+                    if [ $any_critical -eq 1 ]; then
+                        log "  ❌ 存在无法修复的关键补丁，编译将失败"
+                        return 1
+                    fi
+                    
+                    log "  处理完成: $all_fixed 个补丁已处理"
                     
                     # 清理并重试编译
                     make target/linux/clean > /dev/null 2>&1 || true
@@ -5472,10 +5500,10 @@ workflow_step25_build_firmware() {
                 fi
             fi
             
-            # 检查是否有其他常见错误
-            if grep -q "No rule to make target" "$build_log" 2>/dev/null; then
-                log "  检测到依赖错误，尝试清理并重试..."
-                make clean > /dev/null 2>&1 || true
+            # 检查是否有内核编译错误
+            if grep -q "make[4]:.*Error" "$build_log" 2>/dev/null; then
+                log "  检测到内核编译错误，尝试清理内核并重试..."
+                rm -rf "$BUILD_DIR/build_dir/linux-*" 2>/dev/null || true
                 return 0
             fi
             
@@ -5484,6 +5512,45 @@ workflow_step25_build_firmware() {
         done
         
         return 1
+    }
+    
+    # 验证固件是否生成
+    verify_firmware() {
+        local target_platform="$1"
+        local target_subtarget="$2"
+        local expected_count=0
+        local found_count=0
+        
+        # 检查预期位置
+        local target_dir="$BUILD_DIR/bin/targets/${target_platform}/${target_subtarget}"
+        if [ -d "$target_dir" ]; then
+            expected_count=$(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+            log "  预期位置找到 $expected_count 个固件文件"
+        fi
+        
+        # 检查所有可能的位置
+        local all_found=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        log "  所有位置找到 $all_found 个固件文件"
+        
+        if [ $all_found -eq 0 ]; then
+            log "  ❌ 没有找到任何固件文件"
+            
+            # 检查编译日志中的错误
+            if [ -f "build.log" ]; then
+                local error_count=$(grep -c "error:" build.log 2>/dev/null || echo "0")
+                local warning_count=$(grep -c "warning:" build.log 2>/dev/null || echo "0")
+                log "  编译错误数: $error_count, 警告数: $warning_count"
+                
+                # 检查是否有固件打包相关的错误
+                if grep -q "Image .* failed" build.log; then
+                    log "  ⚠️ 固件打包失败"
+                fi
+            fi
+            
+            return 1
+        fi
+        
+        return 0
     }
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
@@ -5712,20 +5779,25 @@ EOF
     
     START_TIME=$(date +%s)
     
+    # 清理之前可能失败的构建
+    if [ -f "$BUILD_DIR/skipped_patches.log" ]; then
+        log "📝 发现之前跳过的补丁记录，清理内核构建目录..."
+        rm -rf "$BUILD_DIR/build_dir/linux-*" 2>/dev/null || true
+        rm -f "$BUILD_DIR/skipped_patches.log"
+    fi
+    
     if [ ! -d "staging_dir" ] || [ ! -f "staging_dir/host/bin/gcc" ]; then
         echo "🔧 第一阶段：编译工具链"
         
         # 编译 tools 并处理可能的错误
-        for i in {1..3}; do
+        for i in {1..2}; do
             if make tools/install -j1 V=s 2>&1 | tee tools_install.log; then
                 break
             else
                 log "⚠️ tools/install 第 $i 次尝试失败，检查错误..."
-                if check_and_fix_errors "tools_install.log"; then
-                    log "  错误已修复，继续重试..."
-                else
-                    if [ $i -eq 3 ]; then
-                        log "❌ tools/install 多次尝试后仍失败"
+                if ! check_and_fix_errors "tools_install.log"; then
+                    if [ $i -eq 2 ]; then
+                        log "❌ tools/install 无法修复"
                         exit 1
                     fi
                 fi
@@ -5733,16 +5805,14 @@ EOF
         done
         
         # 编译 toolchain 并处理可能的错误
-        for i in {1..3}; do
+        for i in {1..2}; do
             if make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log; then
                 break
             else
                 log "⚠️ toolchain/install 第 $i 次尝试失败，检查错误..."
-                if check_and_fix_errors "toolchain_install.log"; then
-                    log "  错误已修复，继续重试..."
-                else
-                    if [ $i -eq 3 ]; then
-                        log "❌ toolchain/install 多次尝试后仍失败"
+                if ! check_and_fix_errors "toolchain_install.log"; then
+                    if [ $i -eq 2 ]; then
+                        log "❌ toolchain/install 无法修复"
                         exit 1
                     fi
                 fi
@@ -5757,27 +5827,39 @@ EOF
     echo "   使用单线程编译，避免并行依赖问题"
     echo ""
     
-    # 编译固件，最多重试3次
+    # 编译固件，最多重试2次
     BUILD_EXIT_CODE=0
-    for build_attempt in {1..3}; do
-        log "编译尝试 $build_attempt/3..."
+    FIRMWARE_GENERATED=0
+    
+    for build_attempt in {1..2}; do
+        log "编译尝试 $build_attempt/2..."
+        
+        # 清理之前的内核构建目录，确保补丁重新应用
+        if [ $build_attempt -gt 1 ]; then
+            log "  清理内核构建目录，重新应用补丁..."
+            rm -rf "$BUILD_DIR/build_dir/linux-*" 2>/dev/null || true
+        fi
         
         if make -j1 V=s 2>&1 | tee build.log; then
             BUILD_EXIT_CODE=0
-            log "✅ 编译成功"
-            break
+            log "✅ 编译命令执行成功"
+            
+            # 验证固件是否生成
+            if verify_firmware "$target_platform" "$target_subtarget"; then
+                FIRMWARE_GENERATED=1
+                break
+            else
+                log "⚠️ 编译成功但没有生成固件，可能内核模块有问题"
+                # 继续下一次尝试
+            fi
         else
             BUILD_EXIT_CODE=${PIPESTATUS[0]}
             log "⚠️ 编译尝试 $build_attempt 失败"
             
             # 检查并修复错误
-            if check_and_fix_errors "build.log"; then
-                log "  错误已修复，继续重试..."
-            else
-                if [ $build_attempt -eq 3 ]; then
-                    log "❌ 编译多次尝试后仍失败"
-                else
-                    log "  无法自动修复，但继续重试..."
+            if ! check_and_fix_errors "build.log"; then
+                if [ $build_attempt -eq 2 ]; then
+                    log "❌ 编译无法修复"
                 fi
             fi
         fi
@@ -5789,11 +5871,12 @@ EOF
     echo ""
     echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
     echo "   退出代码: $BUILD_EXIT_CODE"
+    echo "   固件生成: $([ $FIRMWARE_GENERATED -eq 1 ] && echo "✅ 是" || echo "❌ 否")"
     
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
     
-    # 即使编译失败也尝试恢复固件
+    # 执行强制恢复
     echo ""
     echo "🔧 执行强制恢复，尝试恢复已有固件..."
     bash "$recover_script" "$protect_dir" "$BUILD_DIR"
@@ -5832,11 +5915,30 @@ EOF
     else
         echo "❌ 两个固件都没有生成"
         
-        # 如果有跳过的补丁，显示提示
+        # 分析失败原因
+        echo ""
+        echo "🔍 失败原因分析:"
+        
+        if [ -f "$BUILD_DIR/failed_patches.log" ]; then
+            echo "  存在无法修复的关键补丁:"
+            cat "$BUILD_DIR/failed_patches.log"
+        fi
+        
         if [ -f "$BUILD_DIR/skipped_patches.log" ]; then
-            echo ""
-            echo "📝 以下补丁被跳过:"
+            echo "  跳过的补丁可能导致内核模块缺失:"
             cat "$BUILD_DIR/skipped_patches.log"
+        fi
+        
+        if [ -f "build.log" ]; then
+            local kernel_errors=$(grep -c "kernel.*error:" build.log 2>/dev/null || echo "0")
+            local mmc_errors=$(grep -c "mmc.*error:" build.log 2>/dev/null || echo "0")
+            
+            if [ $kernel_errors -gt 0 ]; then
+                echo "  内核编译错误数: $kernel_errors"
+            fi
+            if [ $mmc_errors -gt 0 ]; then
+                echo "  MMC驱动错误数: $mmc_errors"
+            fi
         fi
     fi
     
