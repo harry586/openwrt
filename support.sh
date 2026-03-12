@@ -775,9 +775,6 @@ main() {
                 error "请提供设备名称"
             fi
             get_device_platform "$2"
-            if [ $? -ne 0 ]; then
-                error "获取设备平台信息失败: $2"
-            fi
             ;;
         "get-sdk-info")
             if [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ]; then
