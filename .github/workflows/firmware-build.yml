@@ -22,7 +22,7 @@ on:
         required: false
         type: choice
         default: "ac42u"
-        options: ["ac42u", "cmcc_rax3000m-nand", "netgear_wndr3800"]
+        options: ["ac42u", "cmcc_rax3000m", "netgear_wndr3800"]
       
       # 手动输入框（竖向排列）
       manual_device_name:
@@ -265,24 +265,24 @@ jobs:
             "${{ github.event.inputs.manual_subtarget }}"
       #【firmware-build.yml-08-end】
 
-#【firmware-build.yml-09】
-      - name: "09. 准备编译工具链（优先使用源码编译）"
+      #【firmware-build.yml-09】
+      - name: "09. 下载OpenWrt官方SDK"
         run: |
-          echo "=== 步骤09: 准备编译工具链（优先使用源码编译） ==="
+          echo "=== 步骤09: 下载OpenWrt官方SDK ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step09_prepare_toolchain \
+            step09_download_sdk \
             "$FINAL_DEVICE_NAME"
-#【firmware-build.yml-09-end】
+      #【firmware-build.yml-09-end】
 
-#【firmware-build.yml-10】
-      - name: "10. 验证源码自带工具链"
+      #【firmware-build.yml-10】
+      - name: "10. 验证SDK下载结果"
         run: |
-          echo "=== 步骤10: 验证源码自带工具链 ==="
+          echo "=== 步骤10: 验证SDK下载结果 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step10_verify_sdk
-#【firmware-build.yml-10-end】
+      #【firmware-build.yml-10-end】
 
       #【firmware-build.yml-11】
       - name: "11. 添加TurboACC支持"
