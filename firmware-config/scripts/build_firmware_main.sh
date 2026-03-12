@@ -3619,14 +3619,8 @@ workflow_step09_prepare_toolchain() {
     export NCURSES_NO_UTF8_ACS=1
     export NCURSES_NO_MULTIBYTE=1
     
-    # 确保有基本的 .config 文件
-    if [ ! -f ".config" ]; then
-        echo "# Auto generated config" > .config
-    fi
-    
     log "📦 源码仓库类型: $SOURCE_REPO_TYPE"
     log "📁 构建目录: $BUILD_DIR"
-    log "🔧 终端设置: TERM=$TERM"
     
     log "🔍 检查源码工具链..."
     
@@ -3635,118 +3629,66 @@ workflow_step09_prepare_toolchain() {
         
         if [ -f "$BUILD_DIR/toolchain/Makefile" ]; then
             log "✅ 找到 toolchain/Makefile"
-            
-            echo ""
-            echo "📋 toolchain/Makefile 内容摘要:"
-            head -20 "$BUILD_DIR/toolchain/Makefile" | grep -E "Package|Description|GCC_VERSION|BINUTILS_VERSION|LIBC" || true
-            echo ""
-        else
-            log "⚠️ toolchain/Makefile 不存在"
         fi
-        
-        echo ""
-        echo "📁 toolchain 目录结构:"
-        ls -la "$BUILD_DIR/toolchain/" | head -20
-        echo ""
-    else
-        log "ℹ️ toolchain 目录不存在，将在编译过程中自动生成"
     fi
     
     log "🔍 检查 staging_dir 中的工具链..."
     
-    if [ -d "$BUILD_DIR/staging_dir" ]; then
-        log "✅ staging_dir 目录存在"
-        
-        local gcc_files=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -3)
-        
-        if [ -n "$gcc_files" ]; then
-            log "✅ 找到已编译的工具链:"
-            echo "$gcc_files" | while read gcc; do
-                echo "  🔧 $(basename "$gcc"): $("$gcc" --version 2>&1 | head -1)"
-            done
-            log "✅ 工具链已就绪，无需额外下载"
-            log "✅ 步骤09 完成"
-            return 0
-        else
-            log "ℹ️ staging_dir 存在但未找到 GCC，将在编译过程中生成"
-        fi
-    else
-        log "ℹ️ staging_dir 不存在，将在编译过程中生成"
+    if [ -d "$BUILD_DIR/staging_dir" ] && [ -f "$BUILD_DIR/staging_dir/host/bin/gcc" ]; then
+        log "✅ 工具链已存在，无需编译"
+        log "✅ 步骤09 完成"
+        return 0
     fi
     
     log ""
-    log "🔧 优先使用源码编译工具链..."
+    log "🔧 开始编译工具链..."
     
     if [ -f "$BUILD_DIR/Makefile" ]; then
-        log "✅ 找到主 Makefile，可以编译工具链"
+        log "✅ 找到主 Makefile"
         
-        if [ ! -d "$BUILD_DIR/staging_dir" ] || [ ! -f "$BUILD_DIR/staging_dir/host/bin/gcc" ]; then
-            log "⏳ 开始编译工具链（这将花费一些时间）..."
-            echo ""
-            echo "📋 工具链编译信息:"
-            echo "  工具链源码位置: toolchain/"
-            echo "  编译命令: make tools/install -j1 V=s && make toolchain/install -j1 V=s"
-            echo ""
-            
-            START_TIME=$(date +%s)
-            
-            # 先运行 defconfig 确保配置完成
-            make defconfig > /dev/null 2>&1 || true
-            
-            # 编译 tools/install
-            log "📦 开始编译 tools/install..."
-            if ! make tools/install -j1 V=s 2>&1 | tee tools_install.log; then
-                log "⚠️ tools/install 编译有警告，继续尝试..."
-            fi
-            
-            # 编译 toolchain/install
-            log "📦 开始编译 toolchain/install..."
-            if ! make toolchain/install -j1 V=s 2>&1 | tee toolchain_install.log; then
-                log "⚠️ toolchain/install 编译有警告，继续尝试..."
-            fi
-            
-            END_TIME=$(date +%s)
-            DURATION=$((END_TIME - START_TIME))
-            
-            log "✅ 工具链编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-        else
-            log "✅ 工具链已存在，无需编译"
-        fi
+        START_TIME=$(date +%s)
         
-        log "🔍 验证编译后的工具链..."
+        # 先运行 defconfig 确保配置完成
+        make defconfig > /dev/null 2>&1 || true
         
-        local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable \
-            -name "*gcc" \
-            ! -name "*gcc-ar" \
-            ! -name "*gcc-ranlib" \
-            ! -name "*gcc-nm" \
-            ! -path "*dummy-tools*" \
-            ! -path "*scripts*" \
-            2>/dev/null | head -1)
+        # 编译 tools/install
+        make tools/install -j1 V=s || {
+            log "⚠️ tools/install 编译有警告，继续..."
+        }
         
-        if [ -n "$gcc_file" ] && [ -x "$gcc_file" ]; then
-            log "✅ 工具链编译成功:"
-            echo "  🔧 编译器: $(basename "$gcc_file")"
-            echo "  📋 版本: $("$gcc_file" --version 2>&1 | head -1)"
-            echo "  📁 位置: $(dirname "$gcc_file")"
-        else
-            log "⚠️ 工具链编译后未找到 GCC，但将继续执行"
-        fi
+        # 编译 toolchain/install
+        make toolchain/install -j1 V=s || {
+            log "⚠️ toolchain/install 编译有警告，继续..."
+        }
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        log "✅ 工具链编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
     else
-        log "❌ 错误: 未找到 Makefile，无法编译工具链"
+        log "❌ 错误: 未找到 Makefile"
         exit 1
     fi
     
-    local toolchain_info="$BUILD_DIR/toolchain_info.txt"
-    cat > "$toolchain_info" << EOF
-TOOLCHAIN_SOURCE="源码编译"
-TOOLCHAIN_DATE="$(date)"
-TOOLCHAIN_TYPE="$SOURCE_REPO_TYPE"
-TOOLCHAIN_DIR="$BUILD_DIR/staging_dir"
-EOF
-    
-    log "✅ 工具链信息已保存到: $toolchain_info"
     log "✅ 步骤09 完成"
+}
+
+workflow_step10_verify_sdk() {
+    log "=== 步骤10: 验证源码自带工具链 ==="
+    
+    trap 'echo "⚠️ 步骤10 验证过程中出现错误，继续执行..."' ERR
+    
+    export TERM=${TERM:-linux}
+    
+    echo "🔍 检查源码自带工具链..."
+    
+    if [ -d "$BUILD_DIR/staging_dir" ] && [ -f "$BUILD_DIR/staging_dir/host/bin/gcc" ]; then
+        echo "✅ 工具链已就绪"
+    else
+        echo "ℹ️ 工具链将在后续步骤中生成"
+    fi
+    
+    log "✅ 步骤10 完成"
 }
 #【build_firmware_main.sh-26-end】
 
