@@ -3564,60 +3564,146 @@ workflow_step08_initialize_build_env_hybrid() {
 #【firmware-build.yml-14】
 # ============================================
 #【build_firmware_main.sh-30】
-workflow_step14_pre_build_space_check() {
-    log "=== 步骤14: 编译前空间检查 ==="
+# ============================================
+# 步骤09: 编译源码自带工具链
+# 对应 firmware-build.yml 步骤09
+# ============================================
+workflow_step09_download_sdk() {
+    local device_name="$1"
+    
+    log "=== 步骤09: 编译源码自带工具链 ==="
     
     set -e
-    trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
     
-    # 调用空间检查函数
-    pre_build_space_check
+    cd $BUILD_DIR
     
-    if [ $? -ne 0 ]; then
-        echo "❌ 错误: 编译前空间检查失败"
+    # 加载环境变量
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+    fi
+    
+    log "📌 开始编译工具链..."
+    log "   源码类型: $SOURCE_REPO_TYPE"
+    log "   目标平台: $TARGET/$SUBTARGET"
+    log "   设备: $device_name"
+    
+    # 检查是否已经编译过工具链
+    if [ -d "staging_dir" ] && [ -f "staging_dir/host/bin/gcc" ]; then
+        log "  ✅ 工具链已存在，跳过编译"
+        COMPILER_DIR="$BUILD_DIR"
+        save_env
+        log "✅ 步骤09 完成"
+        return 0
+    fi
+    
+    # 步骤1: 更新feeds
+    log ""
+    log "🔄 步骤1: 更新feeds..."
+    ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
+        log "⚠️ feeds更新有警告，继续..."
+    }
+    
+    # 步骤2: 安装基础feed
+    log ""
+    log "🔄 步骤2: 安装基础feed..."
+    ./scripts/feeds install base > /tmp/build-logs/base_install.log 2>&1 || true
+    
+    # 步骤3: 准备编译工具链
+    log ""
+    log "🔄 步骤3: 配置工具链..."
+    
+    # 获取目标平台和子平台
+    local target="${TARGET:-ipq40xx}"
+    local subtarget="${SUBTARGET:-generic}"
+    
+    # 创建最小配置（只编译工具链）
+    cat > .config.toolchain << EOF
+CONFIG_TARGET_${target}=y
+CONFIG_TARGET_${target}_${subtarget}=y
+# 只编译工具链，不编译固件
+CONFIG_DEVEL=y
+CONFIG_TOOLCHAINOPTS=y
+# 禁用所有固件相关的配置
+CONFIG_TARGET_ROOTFS_INITRAMFS=n
+CONFIG_TARGET_ROOTFS_SQUASHFS=n
+CONFIG_TARGET_ROOTFS_EXT4FS=n
+CONFIG_TARGET_ROOTFS_JFFS2=n
+# 禁用内核编译（只编译工具链）
+CONFIG_KERNEL_NONE=y
+EOF
+    
+    # 使用最小配置
+    cp .config.toolchain .config
+    
+    # 运行defconfig
+    log "  运行 make defconfig..."
+    make defconfig > /tmp/build-logs/toolchain_defconfig.log 2>&1
+    
+    # 步骤4: 编译工具链
+    log ""
+    log "🔄 步骤4: 编译工具链..."
+    log "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+    log ""
+    
+    START_TIME=$(date +%s)
+    
+    # 先编译tools（基础工具）
+    log "  编译 tools (基础工具)..."
+    if make tools/compile -j$(nproc) V=s > /tmp/build-logs/tools_compile.log 2>&1; then
+        log "  ✅ tools编译完成"
+    else
+        log "  ⚠️ tools编译有警告，检查日志..."
+        tail -50 /tmp/build-logs/tools_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
+    fi
+    
+    # 再编译toolchain（交叉编译工具链）
+    log "  编译 toolchain (交叉工具链)..."
+    if make toolchain/compile -j$(nproc) V=s > /tmp/build-logs/toolchain_compile.log 2>&1; then
+        log "  ✅ toolchain编译完成"
+    else
+        log "  ⚠️ toolchain编译有警告，检查日志..."
+        tail -50 /tmp/build-logs/toolchain_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
+    fi
+    
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    
+    log ""
+    log "✅ 工具链编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
+    
+    # 验证工具链
+    log ""
+    log "🔍 验证工具链..."
+    
+    if [ -d "staging_dir" ]; then
+        log "  ✅ staging_dir目录存在"
+        
+        # 查找GCC编译器
+        GCC_FILE=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+        
+        if [ -n "$GCC_FILE" ]; then
+            log "  ✅ GCC编译器已生成: $(basename "$GCC_FILE")"
+            GCC_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
+            log "     版本: $GCC_VERSION"
+        else
+            log "  ⚠️ GCC编译器未找到，但可能正在生成中"
+        fi
+        
+        # 统计工具链大小
+        TOOLCHAIN_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
+        log "  📊 工具链大小: $TOOLCHAIN_SIZE"
+    else
+        log "  ❌ staging_dir目录不存在，工具链编译可能失败"
         exit 1
     fi
     
-    log "✅ 步骤14 完成"
-}
-
-# ============================================
-# 编译前空间检查函数
-# ============================================
-pre_build_space_check() {
-    log "=== 编译前空间检查 ==="
+    # 保存工具链信息到环境变量
+    COMPILER_DIR="$BUILD_DIR"
+    save_env
     
-    echo "当前目录: $(pwd)"
-    echo "构建目录: $BUILD_DIR"
-    
-    echo "=== 磁盘使用情况 ==="
-    df -h
-    
-    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | awk '{print $1}') || echo "无法获取构建目录大小"
-    echo "构建目录大小: $build_dir_usage"
-    
-    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
-    local available_gb=$((available_space / 1024 / 1024))
-    echo "/mnt 可用空间: ${available_gb}G"
-    
-    local root_available_space=$(df / --output=avail | tail -1)
-    local root_available_gb=$((root_available_space / 1024 / 1024))
-    echo "/ 可用空间: ${root_available_gb}G"
-    
-    echo "=== 内存使用情况 ==="
-    free -h
-    
-    echo "=== CPU信息 ==="
-    echo "CPU核心数: $(nproc)"
-    
-    local estimated_space=15
-    if [ $available_gb -lt $estimated_space ]; then
-        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
-    else
-        log "✅ 磁盘空间充足: ${available_gb}G 可用"
-    fi
-    
-    log "✅ 空间检查完成"
+    log "✅ 步骤09 完成"
 }
 #【build_firmware_main.sh-30-end】
 
@@ -3627,290 +3713,184 @@ pre_build_space_check() {
 #【firmware-build.yml-15】
 # ============================================
 #【build_firmware_main.sh-31】
-workflow_step15_generate_config() {
-    local extra_packages="$1"
-    
-    log "=== 步骤15: 智能配置生成【优化版 - 最多2次尝试】 ==="
-    log "当前设备: $DEVICE"
-    log "当前目标: $TARGET"
-    log "当前子目标: $SUBTARGET"
+# ============================================
+# 步骤10: 验证工具链编译结果
+# 对应 firmware-build.yml 步骤10
+# ============================================
+workflow_step10_verify_sdk() {
+    log "=== 步骤10: 验证工具链编译结果 ==="
     
     set -e
-    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤10 失败，退出代码: $?"; exit 1' ERR
     
+    cd $BUILD_DIR
+    
+    # 加载环境变量
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
-        log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
+        log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
     fi
     
-    if [ -z "$DEVICE" ] && [ -n "$2" ]; then
-        DEVICE="$2"
-        log "⚠️ DEVICE为空，使用参数: $DEVICE"
-    fi
+    log "🔍 检查工具链编译结果..."
     
-    local device_for_config="$DEVICE"
-    case "$DEVICE" in
-        ac42u|rt-ac42u)
-            device_for_config="asus_rt-ac42u"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        acrh17|rt-acrh17)
-            device_for_config="asus_rt-acrh17"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        *)
-            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-            ;;
-    esac
-    
-    cd "$BUILD_DIR" || handle_error "无法进入构建目录"
-    
+    # 检查关键目录
     log ""
-    log "=== 🔍 设备定义文件验证（前置检查） ==="
+    log "📁 检查关键目录:"
     
-    local search_device=""
-    case "$DEVICE" in
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            search_device="ac42u"
-            ;;
-        acrh17|rt-acrh17|asus_rt-acrh17)
-            search_device="acrh17"
-            ;;
-        *)
-            search_device="$DEVICE"
-            ;;
-    esac
+    local missing_items=0
+    local warning_items=0
     
-    log "搜索设备名: $search_device"
-    log "搜索路径: target/linux/$TARGET"
-    
-    echo ""
-    echo "📁 所有子平台 .mk 文件列表:"
-    local mk_files=()
-    while IFS= read -r file; do
-        mk_files+=("$file")
-    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
-    
-    if [ ${#mk_files[@]} -gt 0 ]; then
-        echo "----------------------------------------"
-        for i in "${!mk_files[@]}"; do
-            printf "[%2d] %s\n" $((i+1)) "${mk_files[$i]}"
-        done
-        echo "----------------------------------------"
-        echo "📊 共找到 ${#mk_files[@]} 个 .mk 文件"
-    else
-        echo "   未找到 .mk 文件"
-    fi
-    echo ""
-    
-    local device_file=""
-    for mkfile in "${mk_files[@]}"; do
-        if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
-            device_file="$mkfile"
-            break
+    # 检查staging_dir
+    if [ -d "staging_dir" ]; then
+        log "  ✅ staging_dir: 存在"
+        
+        # 检查host目录
+        if [ -d "staging_dir/host" ]; then
+            log "    ✅ host工具: 存在"
+            HOST_BIN_COUNT=$(find staging_dir/host/bin -type f 2>/dev/null | wc -l)
+            log "       host工具数量: $HOST_BIN_COUNT"
+            
+            # 列出关键host工具
+            local host_tools="make sed awk grep patch tar gzip bzip2"
+            for tool in $host_tools; do
+                if [ -f "staging_dir/host/bin/$tool" ] || [ -f "staging_dir/host/bin/$tool.exe" ]; then
+                    log "      ✅ $tool: 存在"
+                else
+                    log "      ⚠️ $tool: 未找到"
+                    warning_items=$((warning_items + 1))
+                fi
+            done
+        else
+            log "    ❌ host工具: 不存在"
+            missing_items=$((missing_items + 1))
         fi
-    done
+        
+        # 检查target目录
+        TARGET_DIRS=$(find staging_dir -maxdepth 1 -type d -name "target-*" 2>/dev/null)
+        if [ -n "$TARGET_DIRS" ]; then
+            log "    ✅ target工具链: 存在"
+            for target_dir in $TARGET_DIRS; do
+                log "       📁 $(basename "$target_dir")"
+                
+                # 检查bin目录
+                if [ -d "$target_dir/bin" ]; then
+                    BIN_COUNT=$(find "$target_dir/bin" -type f 2>/dev/null | wc -l)
+                    log "         工具数量: $BIN_COUNT"
+                    
+                    # 检查关键编译工具
+                    local compile_tools="gcc g++ ar as ld objcopy strip"
+                    for tool in $compile_tools; do
+                        if [ -f "$target_dir/bin/"*"-$tool" ] || [ -f "$target_dir/bin/$tool" ]; then
+                            log "          ✅ $tool: 存在"
+                        fi
+                    done
+                fi
+            done
+        else
+            log "    ❌ target工具链: 不存在"
+            missing_items=$((missing_items + 1))
+        fi
+    else
+        log "  ❌ staging_dir: 不存在"
+        missing_items=$((missing_items + 1))
+    fi
     
-    if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
-        log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
-        log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
+    # 检查工具链GCC
+    log ""
+    log "🔧 检查GCC编译器:"
+    
+    GCC_FILES=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null)
+    GCC_COUNT=$(echo "$GCC_FILES" | wc -l)
+    
+    if [ $GCC_COUNT -gt 0 ]; then
+        log "  ✅ 找到 $GCC_COUNT 个GCC编译器"
+        
+        # 显示第一个GCC的信息
+        FIRST_GCC=$(echo "$GCC_FILES" | head -1)
+        log "  📌 示例: $(basename "$FIRST_GCC")"
+        log "     路径: $FIRST_GCC"
+        
+        # 检查GCC版本
+        if [ -x "$FIRST_GCC" ]; then
+            GCC_VERSION=$("$FIRST_GCC" --version 2>&1 | head -1)
+            log "     版本: $GCC_VERSION"
+            
+            # 检查是否为目标平台编译器
+            if [[ "$FIRST_GCC" == *"$TARGET"* ]] || [[ "$FIRST_GCC" == *"openwrt"* ]]; then
+                log "     ✅ 是目标平台交叉编译器"
+            fi
+        fi
+    else
+        log "  ❌ 未找到GCC编译器"
+        missing_items=$((missing_items + 1))
+    fi
+    
+    # 检查关键头文件
+    log ""
+    log "📋 检查关键头文件:"
+    
+    KERNEL_HEADERS=$(find staging_dir -name "linux" -type d 2>/dev/null | grep -E "include/linux$" | head -1)
+    if [ -n "$KERNEL_HEADERS" ]; then
+        log "  ✅ 内核头文件: 存在"
+        log "     📁 $KERNEL_HEADERS"
+        
+        # 检查几个关键头文件
+        local headers="kernel.h types.h fs.h"
+        for header in $headers; do
+            if [ -f "$KERNEL_HEADERS/$header" ]; then
+                log "      ✅ $header: 存在"
+            fi
+        done
+    else
+        log "  ⚠️ 内核头文件: 未找到（可能正在生成）"
+        warning_items=$((warning_items + 1))
+    fi
+    
+    # 检查库文件
+    log ""
+    log "📚 检查基础库文件:"
+    
+    LIBS=$(find staging_dir -name "libc.so" -o -name "libgcc_s.so" -o -name "libstdc++.so" 2>/dev/null | head -5)
+    if [ -n "$LIBS" ]; then
+        log "  ✅ 基础库文件: 存在"
+        echo "$LIBS" | while read lib; do
+            log "     📄 $(basename "$lib")"
+        done
+    else
+        log "  ⚠️ 基础库文件: 未找到"
+        warning_items=$((warning_items + 1))
+    fi
+    
+    # 统计工具链大小
+    log ""
+    log "📊 工具链统计:"
+    if [ -d "staging_dir" ]; then
+        TOTAL_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
+        log "  总大小: $TOTAL_SIZE"
+        
+        HOST_SIZE=$(du -sh staging_dir/host 2>/dev/null | awk '{print $1}' || echo "0B")
+        log "  host工具: $HOST_SIZE"
+        
+        TARGET_SIZE=$(du -sh staging_dir/target-* 2>/dev/null | awk '{print $1}' || echo "0B")
+        log "  target工具链: $TARGET_SIZE"
+    fi
+    
+    # 根据检查结果决定是否继续
+    log ""
+    if [ $missing_items -eq 0 ]; then
+        if [ $warning_items -eq 0 ]; then
+            log "✅✅✅ 工具链验证完全通过，所有组件都存在 ✅✅✅"
+        else
+            log "✅ 工具链验证通过，但有 $warning_items 个警告（不影响编译）"
+        fi
+        return 0
+    else
+        log "❌ 工具链验证失败，缺少 $missing_items 个关键组件"
+        log "   请检查工具链编译日志: /tmp/build-logs/tools_compile.log 和 /tmp/build-logs/toolchain_compile.log"
         exit 1
     fi
     
-    log "✅ 找到设备定义文件: $device_file"
-    
-    local device_block=""
-    device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
-    
-    if [ -n "$device_block" ]; then
-        echo ""
-        echo "📋 设备定义信息（关键字段）:"
-        echo "----------------------------------------"
-        echo "$device_block" | grep -E "define Device" | head -1
-        echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
-        echo "----------------------------------------"
-    else
-        log "⚠️ 警告：无法提取设备 $search_device 的配置块"
-    fi
-    
-    local soc_define=""
-    local model_define=""
-    local title_define=""
-    local kernel_define=""
-    local packages_define=""
-    
-    if [ -n "$device_block" ]; then
-        soc_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*SOC[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-        model_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_MODEL[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-        title_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_TITLE[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-        kernel_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-        packages_define=$(echo "$device_block" | awk -F':=' '/^[[:space:]]*DEVICE_PACKAGES[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')
-    fi
-    
-    log ""
-    log "📊 与 support.sh 信息对比:"
-    
-    local support_info
-    support_info=$("$SUPPORT_SCRIPT" get-platform "$DEVICE" 2>/dev/null)
-    if [ -n "$support_info" ]; then
-        local support_target
-        local support_subtarget
-        support_target=$(echo "$support_info" | awk '{print $1}')
-        support_subtarget=$(echo "$support_info" | awk '{print $2}')
-        
-        echo ""
-        echo "  来源          | 目标平台       | 子目标         | SOC/型号       | 内核版本"
-        echo "  --------------|----------------|----------------|----------------|----------------"
-        
-        printf "  support.sh    | %-14s | %-14s | %-14s | %s\n"                "$support_target" "$support_subtarget"                "${soc_define:-N/A}" "${kernel_define:-N/A}"
-        
-        printf "  定义文件      | %-14s | %-14s | %-14s | %s\n"                "$TARGET" "$SUBTARGET"                "${soc_define:-N/A}" "${kernel_define:-N/A}"
-        
-        if [ "$support_target" = "$TARGET" ] && [ "$support_subtarget" = "$SUBTARGET" ]; then
-            log "  ✅ 目标/子目标与 support.sh 一致"
-        else
-            log "  ⚠️ 警告：目标/子目标与 support.sh 不一致"
-            log "     support.sh: $support_target/$support_subtarget"
-            log "     当前配置:   $TARGET/$SUBTARGET"
-        fi
-    else
-        log "  ⚠️ 无法从 support.sh 获取信息，跳过对比"
-    fi
-    
-    log "✅ 设备定义文件验证通过，继续生成配置"
-    
-    generate_config "$extra_packages" "$device_for_config"
-    
-    log ""
-    log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
-    
-    # 获取基础禁用列表
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
-    
-    # 生成完整禁用列表
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
-    
-    cp .config .config.before_disable
-    
-    # 第一轮：禁用所有主包和子包
-    log "🔧 第一轮禁用..."
-    for plugin in "${full_forbidden_list[@]}"; do
-        [ -z "$plugin" ] && continue
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-    done
-    
-    # 特别处理 nlbwmon 和 wol（确保彻底禁用）
-    log "🔧 特别处理 nlbwmon 和 wol..."
-    local special_plugins=(
-        "nlbwmon"
-        "luci-app-nlbwmon"
-        "luci-i18n-nlbwmon-zh-cn"
-        "nlbwmon-database"
-        "wol"
-        "luci-app-wol"
-        "luci-i18n-wol-zh-cn"
-        "etherwake"
-    )
-    
-    for plugin in "${special_plugins[@]}"; do
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-    done
-    
-    # 删除所有 INCLUDE 子选项
-    sed -i '/CONFIG_PACKAGE_luci-app-.*_INCLUDE_/d' .config
-    
-    sort -u .config > .config.tmp && mv .config.tmp .config
-    
-    local max_attempts=2
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
-        make defconfig > /tmp/build-logs/defconfig_disable_attempt${attempt}.log 2>&1 || {
-            log "⚠️ make defconfig 警告，但继续"
-        }
-        
-        local still_enabled=0
-        # 检查基础包
-        for plugin in "${BASE_PKGS[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
-                still_enabled=$((still_enabled + 1))
-                log "  ⚠️ 发现残留: $plugin"
-            fi
-        done
-        
-        if [ $still_enabled -eq 0 ]; then
-            log "✅ 第 $attempt 次尝试后所有主插件已成功禁用"
-            break
-        else
-            if [ $attempt -lt $max_attempts ]; then
-                log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
-                for plugin in "${BASE_PKGS[@]}"; do
-                    sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-                    sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=y/d" .config
-                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=m/d" .config
-                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-                    echo "# CONFIG_PACKAGE_luci-app-${plugin} is not set" >> .config
-                done
-                sort -u .config > .config.tmp && mv .config.tmp .config
-            fi
-        fi
-        attempt=$((attempt + 1))
-    done
-    
-    log ""
-    log "📊 最终插件状态验证:"
-    local still_enabled_final=0
-    
-    # 检查所有需要禁用的插件
-    for plugin in "${BASE_PKGS[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-            log "  ❌ $plugin 仍然被启用"
-            still_enabled_final=$((still_enabled_final + 1))
-        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            log "  ❌ $plugin 仍然被模块化"
-            still_enabled_final=$((still_enabled_final + 1))
-        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
-            log "  ❌ luci-app-$plugin 仍然被启用"
-            still_enabled_final=$((still_enabled_final + 1))
-        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
-            log "  ❌ luci-app-$plugin 仍然被模块化"
-            still_enabled_final=$((still_enabled_final + 1))
-        else
-            log "  ✅ $plugin 已正确禁用"
-        fi
-    done
-    
-    if [ $still_enabled_final -eq 0 ]; then
-        log "🎉 所有指定插件已成功禁用"
-    else
-        log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
-        
-        # 最终强力禁用
-        log "🔧 执行最终强力禁用..."
-        for plugin in "${BASE_PKGS[@]}"; do
-            sed -i "/${plugin}/d" .config
-            sed -i "/$(echo $plugin | tr '[:lower:]' '[:upper:]')/d" .config
-        done
-        make defconfig > /dev/null 2>&1
-    fi
-    
-    log ""
-    log "📊 配置统计（禁用后）:"
-    log "  总配置行数: $(wc -l < .config)"
-    log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
-    log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
-    
-    log "✅ 步骤15 完成"
+    log "✅ 步骤10 完成"
 }
 #【build_firmware_main.sh-31-end】
 
