@@ -270,103 +270,18 @@ jobs:
         run: |
           echo "=== 步骤09: 编译源码自带工具链 ==="
           
-          set -e
-          trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
-          
-          cd /mnt/openwrt-build
-          
-          echo "📌 开始编译工具链..."
-          echo "   源码类型: ${{ github.event.inputs.source_repo }}"
-          echo "   版本: ${{ github.event.inputs.version_selection }}"
-          
-          # 编译基础工具链（只编译工具链，不编译固件）
-          # 步骤1: 更新feeds（需要feeds来获取工具链依赖）
-          echo ""
-          echo "🔄 步骤1: 更新feeds..."
-          ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
-            echo "⚠️ feeds更新有警告，继续..."
-          }
-          
-          # 步骤2: 安装toolchain相关的feed
-          echo ""
-          echo "🔄 步骤2: 安装toolchain..."
-          ./scripts/feeds install toolchain > /tmp/build-logs/toolchain_install.log 2>&1 || true
-          
-          # 步骤3: 准备编译工具链
-          echo ""
-          echo "🔄 步骤3: 配置工具链..."
-          
-          # 创建最小配置（只编译工具链）
-          cat > .config << EOF
-CONFIG_TARGET_${TARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-# 只编译工具链，不编译固件
-CONFIG_DEVEL=y
-CONFIG_TOOLCHAINOPTS=y
-# 禁用固件编译
-CONFIG_TARGET_ROOTFS_INITRAMFS=n
-EOF
-          
-          # 运行defconfig
-          make defconfig > /tmp/build-logs/toolchain_defconfig.log 2>&1
-          
-          # 步骤4: 编译工具链
-          echo ""
-          echo "🔄 步骤4: 编译工具链 (make tools/compile && make toolchain/compile)"
-          echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-          echo ""
-          
-          START_TIME=$(date +%s)
-          
-          # 先编译tools
-          make tools/compile -j$(nproc) V=s > /tmp/build-logs/tools_compile.log 2>&1
-          echo "  ✅ tools编译完成"
-          
-          # 再编译toolchain
-          make toolchain/compile -j$(nproc) V=s > /tmp/build-logs/toolchain_compile.log 2>&1
-          echo "  ✅ toolchain编译完成"
-          
-          END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-          
-          echo ""
-          echo "✅ 工具链编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-          
-          # 验证工具链
-          echo ""
-          echo "🔍 验证工具链..."
-          
-          if [ -d "staging_dir" ]; then
-            echo "  ✅ staging_dir目录存在"
-            
-            # 查找GCC编译器
-            GCC_FILE=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
-            
-            if [ -n "$GCC_FILE" ]; then
-              echo "  ✅ GCC编译器已生成: $(basename "$GCC_FILE")"
-              GCC_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-              echo "     版本: $GCC_VERSION"
-              
-              # 提取GCC版本号
-              MAJOR_VERSION=$(echo "$GCC_VERSION" | grep -o "[0-9]\+" | head -1)
-              echo "     GCC主版本: $MAJOR_VERSION"
-            else
-              echo "  ⚠️ GCC编译器未找到，但可能正在生成中"
-            fi
-            
-            # 统计工具链大小
-            TOOLCHAIN_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-            echo "  📊 工具链大小: $TOOLCHAIN_SIZE"
+          # 确定最终使用的设备名称
+          if [ -n "${{ github.event.inputs.manual_device_name }}" ]; then
+            FINAL_DEVICE_NAME="${{ github.event.inputs.manual_device_name }}"
           else
-            echo "  ❌ staging_dir目录不存在，工具链编译可能失败"
-            exit 1
+            FINAL_DEVICE_NAME="${{ github.event.inputs.device_name }}"
           fi
           
-          # 保存工具链信息到环境变量
-          echo "COMPILER_DIR=/mnt/openwrt-build" >> $GITHUB_ENV
-          echo "TOOLCHAIN_READY=true" >> $GITHUB_ENV
+          echo "📌 最终设备名称: $FINAL_DEVICE_NAME"
           
-          echo "✅ 步骤09 完成"
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step09_download_sdk \
+            "$FINAL_DEVICE_NAME"
 #【firmware-build.yml-09-end】
 
 #【firmware-build.yml-10】
@@ -374,128 +289,8 @@ EOF
         run: |
           echo "=== 步骤10: 验证工具链编译结果 ==="
           
-          set -e
-          trap 'echo "❌ 步骤10 失败，退出代码: $?"; exit 1' ERR
-          
-          cd /mnt/openwrt-build
-          
-          echo "🔍 检查工具链编译结果..."
-          
-          # 检查关键目录
-          echo ""
-          echo "📁 检查关键目录:"
-          
-          local missing_dirs=0
-          
-          if [ -d "staging_dir" ]; then
-            echo "  ✅ staging_dir: 存在"
-            
-            # 检查host目录
-            if [ -d "staging_dir/host" ]; then
-              echo "    ✅ host工具: 存在"
-              HOST_BIN_COUNT=$(find staging_dir/host/bin -type f 2>/dev/null | wc -l)
-              echo "       host工具数量: $HOST_BIN_COUNT"
-            else
-              echo "    ❌ host工具: 不存在"
-              missing_dirs=$((missing_dirs + 1))
-            fi
-            
-            # 检查target目录
-            TARGET_DIRS=$(find staging_dir -maxdepth 1 -type d -name "target-*" 2>/dev/null)
-            if [ -n "$TARGET_DIRS" ]; then
-              echo "    ✅ target工具链: 存在"
-              for target_dir in $TARGET_DIRS; do
-                echo "       📁 $(basename "$target_dir")"
-                
-                # 检查bin目录
-                if [ -d "$target_dir/bin" ]; then
-                  BIN_COUNT=$(find "$target_dir/bin" -type f 2>/dev/null | wc -l)
-                  echo "         工具数量: $BIN_COUNT"
-                fi
-              done
-            else
-              echo "    ❌ target工具链: 不存在"
-              missing_dirs=$((missing_dirs + 1))
-            fi
-          else
-            echo "  ❌ staging_dir: 不存在"
-            missing_dirs=$((missing_dirs + 1))
-          fi
-          
-          # 检查工具链GCC
-          echo ""
-          echo "🔧 检查GCC编译器:"
-          
-          GCC_FILES=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null)
-          GCC_COUNT=$(echo "$GCC_FILES" | wc -l)
-          
-          if [ $GCC_COUNT -gt 0 ]; then
-            echo "  ✅ 找到 $GCC_COUNT 个GCC编译器"
-            
-            # 显示第一个GCC的信息
-            FIRST_GCC=$(echo "$GCC_FILES" | head -1)
-            echo "  📌 示例: $(basename "$FIRST_GCC")"
-            echo "     路径: $FIRST_GCC"
-            
-            # 检查GCC版本
-            if [ -x "$FIRST_GCC" ]; then
-              GCC_VERSION=$("$FIRST_GCC" --version 2>&1 | head -1)
-              echo "     版本: $GCC_VERSION"
-            fi
-          else
-            echo "  ❌ 未找到GCC编译器"
-            missing_dirs=$((missing_dirs + 1))
-          fi
-          
-          # 检查关键头文件
-          echo ""
-          echo "📋 检查关键头文件:"
-          
-          KERNEL_HEADERS=$(find staging_dir -name "linux" -type d 2>/dev/null | grep -E "include/linux$" | head -1)
-          if [ -n "$KERNEL_HEADERS" ]; then
-            echo "  ✅ 内核头文件: 存在"
-            echo "     📁 $KERNEL_HEADERS"
-          else
-            echo "  ⚠️ 内核头文件: 未找到（可能正在生成）"
-          fi
-          
-          # 检查库文件
-          LIBS=$(find staging_dir -name "libc.so" -o -name "libgcc_s.so" 2>/dev/null | head -3)
-          if [ -n "$LIBS" ]; then
-            echo "  ✅ 基础库文件: 存在"
-            echo "$LIBS" | while read lib; do
-              echo "     📄 $(basename "$lib")"
-            done
-          else
-            echo "  ⚠️ 基础库文件: 未找到"
-          fi
-          
-          # 统计工具链大小
-          echo ""
-          echo "📊 工具链统计:"
-          if [ -d "staging_dir" ]; then
-            TOTAL_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-            echo "  总大小: $TOTAL_SIZE"
-            
-            HOST_SIZE=$(du -sh staging_dir/host 2>/dev/null | awk '{print $1}' || echo "0B")
-            echo "  host工具: $HOST_SIZE"
-            
-            TARGET_SIZE=$(du -sh staging_dir/target-* 2>/dev/null | awk '{print $1}' || echo "0B")
-            echo "  target工具链: $TARGET_SIZE"
-          fi
-          
-          # 根据检查结果决定是否继续
-          echo ""
-          if [ $missing_dirs -eq 0 ]; then
-            echo "✅ 工具链验证通过，所有关键组件都存在"
-            echo "TOOLCHAIN_VERIFIED=true" >> $GITHUB_ENV
-          else
-            echo "⚠️ 工具链验证发现 $missing_dirs 个问题，但可能仍可用"
-            echo "   将尝试继续编译，如果失败请检查工具链编译"
-            echo "TOOLCHAIN_VERIFIED=partial" >> $GITHUB_ENV
-          fi
-          
-          echo "✅ 步骤10 完成"
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step10_verify_sdk
 #【firmware-build.yml-10-end】
 
       #【firmware-build.yml-11】
