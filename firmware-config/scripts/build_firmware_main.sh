@@ -686,22 +686,7 @@ EOF
 #【build_firmware_main.sh-06-end】
 
 #【build_firmware_main.sh-07】
-# 此函数已废弃，所有源码类型均使用自带工具链
-download_openwrt_sdk() {
-    log "=== SDK下载功能已废弃 ==="
-    log "✅ 所有源码类型均使用源码自带工具链，无需下载SDK"
-    return 0
-}
-
-verify_sdk_files_v2() {
-    log "=== SDK验证功能已废弃 ==="
-    log "✅ 所有源码类型均使用源码自带工具链"
-    return 0
-}
-
-verify_sdk_files() {
-    verify_sdk_files_v2 "$1"
-}
+# 空
 #【build_firmware_main.sh-07-end】
 
 #【build_firmware_main.sh-08】
@@ -3400,126 +3385,11 @@ check_compiler_invocation() {
 #【build_firmware_main.sh-21-end】
 
 #【build_firmware_main.sh-22】
-verify_sdk_directory() {
-    log "=== 详细验证SDK目录 ==="
-    
-    if [ -n "$COMPILER_DIR" ]; then
-        log "检查环境变量: COMPILER_DIR=$COMPILER_DIR"
-        
-        if [ -d "$COMPILER_DIR" ]; then
-            log "✅ SDK目录存在: $COMPILER_DIR"
-            log "📊 目录信息:"
-            ls -ld "$COMPILER_DIR" 2>/dev/null || log "无法获取目录信息"
-            log "📁 目录内容示例:"
-            ls -la "$COMPILER_DIR/" 2>/dev/null | head -10 || log "无法列出目录内容"
-            return 0
-        else
-            log "❌ SDK目录不存在: $COMPILER_DIR"
-            log "🔍 检查可能的路径问题..."
-            
-            local found_dirs=$(find /mnt/openwrt-build -maxdepth 1 -type d -name "*sdk*" 2>/dev/null)
-            if [ -n "$found_dirs" ]; then
-                log "找到可能的SDK目录:"
-                echo "$found_dirs"
-                
-                local first_dir=$(echo "$found_dirs" | head -1)
-                log "使用目录: $first_dir"
-                COMPILER_DIR="$first_dir"
-                save_env
-                return 0
-            fi
-            
-            return 1
-        fi
-    else
-        log "❌ COMPILER_DIR环境变量未设置"
-        return 1
-    fi
-}
+# 空
 #【build_firmware_main.sh-22-end】
 
 #【build_firmware_main.sh-23】
-# 此函数已废弃，现在用作公共函数库
-# ============================================================================
-# 公共函数库 - 先只实现列出所有mk文件
-# ============================================================================
-
-# 列出所有mk文件（简化版）
-find_device_definition_file() {
-    local device_name="$1"
-    local platform="$2"
-    local base_path="target/linux/$platform"
-    local all_files=()
-    
-    echo "========================================="
-    echo "🔍 调试: 开始搜索设备 '$device_name' 的定义文件"
-    echo "📁 搜索路径: $base_path"
-    echo "========================================="
-    
-    if [ ! -d "$base_path" ]; then
-        echo "❌ 错误: 路径不存在 - $base_path"
-        echo ""
-        return
-    fi
-    
-    # 收集所有.mk文件
-    while IFS= read -r mk_file; do
-        all_files+=("$mk_file")
-    done < <(find "$base_path" -type f -name "*.mk" 2>/dev/null | sort)
-    
-    local total_files=${#all_files[@]}
-    echo "📊 找到 $total_files 个.mk文件"
-    echo ""
-    
-    if [ $total_files -eq 0 ]; then
-        echo "❌ 未找到任何.mk文件"
-        echo ""
-        return
-    fi
-    
-    echo "📋 文件列表:"
-    echo "----------------------------------------"
-    for i in "${!all_files[@]}"; do
-        echo "[$((i+1))] ${all_files[$i]}"
-    done
-    echo "----------------------------------------"
-    echo ""
-    
-    # 返回空字符串，因为这只是测试
-    echo ""
-}
-
-# 其他函数暂时留空或简单返回
-extract_device_config() {
-    echo ""
-}
-
-extract_config_value() {
-    echo ""
-}
-
-get_device_support_summary() {
-    echo "   📁 平台: $2"
-    echo "   📁 子平台: $3"
-    echo "   ⚠️ 调试模式: 只列出文件"
-    find_device_definition_file "$1" "$2"
-}
-
-extract_kernel_version_from_device_file() {
-    echo ""
-}
-
-get_supported_branches() {
-    echo "openwrt-23.05 openwrt-21.02"
-}
-
-get_subtargets_by_platform() {
-    echo "generic"
-}
-
-find_kernel_config_by_version() {
-    echo ""
-}
+# 空
 #【build_firmware_main.sh-23-end】
 
 #【build_firmware_main.sh-24】
@@ -3622,6 +3492,15 @@ workflow_step09_download_sdk() {
     log "   目标平台: $TARGET/$SUBTARGET"
     log "   设备: $device_name"
     
+    # 检查是否已经编译过工具链
+    if [ -d "staging_dir" ] && [ -f "staging_dir/host/bin/gcc" ]; then
+        log "  ✅ 工具链已存在，跳过编译"
+        COMPILER_DIR="$BUILD_DIR"
+        save_env
+        log "✅ 步骤09 完成"
+        return 0
+    fi
+    
     # 步骤1: 更新feeds
     log ""
     log "🔄 步骤1: 更新feeds..."
@@ -3638,10 +3517,14 @@ workflow_step09_download_sdk() {
     log ""
     log "🔄 步骤3: 配置工具链..."
     
+    # 获取目标平台和子平台
+    local target="${TARGET:-ipq40xx}"
+    local subtarget="${SUBTARGET:-generic}"
+    
     # 创建最小配置（只编译工具链）
     cat > .config.toolchain << EOF
-CONFIG_TARGET_${TARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${target}=y
+CONFIG_TARGET_${target}_${subtarget}=y
 # 只编译工具链，不编译固件
 CONFIG_DEVEL=y
 CONFIG_TOOLCHAINOPTS=y
@@ -3707,10 +3590,6 @@ EOF
             log "  ✅ GCC编译器已生成: $(basename "$GCC_FILE")"
             GCC_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
             log "     版本: $GCC_VERSION"
-            
-            # 提取GCC版本号
-            MAJOR_VERSION=$(echo "$GCC_VERSION" | grep -o "[0-9]\+" | head -1)
-            log "     GCC主版本: $MAJOR_VERSION"
         else
             log "  ⚠️ GCC编译器未找到，但可能正在生成中"
         fi
@@ -3897,20 +3776,6 @@ workflow_step10_verify_sdk() {
         
         TARGET_SIZE=$(du -sh staging_dir/target-* 2>/dev/null | awk '{print $1}' || echo "0B")
         log "  target工具链: $TARGET_SIZE"
-    fi
-    
-    # 检查编译时间
-    log ""
-    log "⏱️ 编译时间检查:"
-    if [ -f "staging_dir/timestamp" ]; then
-        COMPILE_TIME=$(cat staging_dir/timestamp 2>/dev/null || echo "未知")
-        log "  工具链生成时间: $COMPILE_TIME"
-    else
-        # 使用目录修改时间
-        if [ -d "staging_dir" ]; then
-            MOD_TIME=$(stat -c %y staging_dir 2>/dev/null | cut -d'.' -f1)
-            log "  工具链最后修改: $MOD_TIME"
-        fi
     fi
     
     # 根据检查结果决定是否继续
@@ -6275,121 +6140,20 @@ workflow_step30_build_summary() {
 }
 #【build_firmware_main.sh-41-end】
 
-# ============================================
-# 已废弃的搜索函数（保留兼容性）
-# ============================================
 #【build_firmware_main.sh-42】
-# ============================================
-# 工作流步骤函数 - 步骤05-09
-# 对应 firmware-build.yml 步骤05-09
-# ============================================
-
-workflow_step05_install_basic_tools() {
-    log "=== 步骤05: 安装基础工具（优化版） ==="
-    
-    set -e
-    trap 'echo "❌ 步骤05 失败，退出代码: $?"; exit 1' ERR
-    
-    setup_environment
-    
-    log "✅ 步骤05 完成"
-}
-
-workflow_step06_initial_space_check() {
-    log "=== 步骤06: 初始空间检查 ==="
-    
-    set -e
-    trap 'echo "❌ 步骤06 失败，退出代码: $?"; exit 1' ERR
-    
-    echo "=== 🚨 初始磁盘空间检查 ==="
-    
-    echo "📊 磁盘使用情况:"
-    df -h
-    
-    AVAILABLE_SPACE=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
-    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
-    echo "可用空间: ${AVAILABLE_GB}G"
-    
-    if [ $AVAILABLE_GB -lt 20 ]; then
-        echo "⚠️ 警告: 初始磁盘空间可能不足 (当前${AVAILABLE_GB}G，建议至少20G)"
-    else
-        echo "✅ 初始磁盘空间充足"
-    fi
-    
-    echo "💻 CPU信息:"
-    echo "  CPU核心数: $(nproc)"
-    echo "  CPU型号: $(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs || echo '未知')"
-    
-    echo "🧠 内存信息:"
-    free -h
-    
-    log "✅ 步骤06 完成"
-}
-
-workflow_step07_create_build_dir() {
-    log "=== 步骤07: 创建构建目录 ==="
-    
-    set -e
-    trap 'echo "❌ 步骤07 失败，退出代码: $?"; exit 1' ERR
-    
-    create_build_dir
-    
-    log "✅ 步骤07 完成"
-}
-
-workflow_step08_initialize_build_env() {
-    local device_name="$1"
-    local version_selection="$2"
-    local config_mode="$3"
-    
-    log "=== 步骤08: 初始化构建环境 ==="
-    
-    set -e
-    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
-    
-    initialize_build_env "$device_name" "$version_selection" "$config_mode"
-    
-    log "✅ 步骤08 完成"
-}
-
-workflow_step09_download_sdk() {
-    local device_name="$1"
-    
-    log "=== 步骤09: 下载OpenWrt官方SDK ==="
-    
-    set -e
-    trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
-    
-    initialize_compiler_env "$device_name"
-    
-    log "✅ 步骤09 完成"
-}
-
-# 以下编译器搜索函数已废弃，由 initialize_compiler_env 替代
+# 空
 #【build_firmware_main.sh-42-end】
 
 #【build_firmware_main.sh-43】
-universal_compiler_search() {
-    log "=== 通用编译器搜索 ==="
-    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
-    return 1
-}
+# 空
 #【build_firmware_main.sh-43-end】
 
 #【build_firmware_main.sh-44】
-search_compiler_files_simple() {
-    log "=== 简单编译器文件搜索 ==="
-    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
-    return 1
-}
+# 空
 #【build_firmware_main.sh-44-end】
 
 #【build_firmware_main.sh-45】
-intelligent_platform_aware_compiler_search() {
-    log "=== 智能平台感知的编译器搜索 ==="
-    log "🔍 不再搜索本地编译器，将下载OpenWrt官方SDK"
-    return 1
-}
+# 空
 #【build_firmware_main.sh-45-end】
 
 #【build_firmware_main.sh-46】
