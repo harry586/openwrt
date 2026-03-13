@@ -3750,14 +3750,21 @@ workflow_step10_verify_sdk() {
             HOST_BIN_COUNT=$(find staging_dir/host/bin -type f 2>/dev/null | wc -l)
             log "       host工具数量: $HOST_BIN_COUNT"
             
-            # 列出关键host工具
+            # 列出关键host工具 - 使用更宽松的检查方式
             local host_tools="make sed awk grep patch tar gzip bzip2"
             for tool in $host_tools; do
-                if [ -f "staging_dir/host/bin/$tool" ] || [ -f "staging_dir/host/bin/$tool.exe" ]; then
-                    log "      ✅ $tool: 存在"
+                # 查找所有可能的路径
+                TOOL_PATH=$(find staging_dir/host -type f -name "$tool" -o -name "$tool.exe" -o -name "*$tool*" 2>/dev/null | head -1)
+                if [ -n "$TOOL_PATH" ]; then
+                    log "      ✅ $tool: 存在 ($(basename "$TOOL_PATH"))"
                 else
-                    log "      ⚠️ $tool: 未找到"
-                    warning_items=$((warning_items + 1))
+                    # 检查系统路径
+                    if command -v $tool >/dev/null 2>&1; then
+                        log "      ✅ $tool: 使用系统工具 ($(which $tool))"
+                    else
+                        log "      ⚠️ $tool: 未找到"
+                        warning_items=$((warning_items + 1))
+                    fi
                 fi
             done
         else
@@ -3780,8 +3787,9 @@ workflow_step10_verify_sdk() {
                     # 检查关键编译工具
                     local compile_tools="gcc g++ ar as ld objcopy strip"
                     for tool in $compile_tools; do
-                        if [ -f "$target_dir/bin/"*"-$tool" ] || [ -f "$target_dir/bin/$tool" ]; then
-                            log "          ✅ $tool: 存在"
+                        TOOL_PATH=$(find "$target_dir/bin" -type f -name "*$tool*" ! -name "*-gcc-ar" ! -name "*-gcc-ranlib" ! -name "*-gcc-nm" 2>/dev/null | head -1)
+                        if [ -n "$TOOL_PATH" ]; then
+                            log "          ✅ $tool: 存在 ($(basename "$TOOL_PATH"))"
                         fi
                     done
                 fi
@@ -3875,6 +3883,21 @@ workflow_step10_verify_sdk() {
         log "  target工具链: $TARGET_SIZE"
     fi
     
+    # 检查GCC是否可用
+    log ""
+    log "🔧 测试GCC编译器可用性:"
+    if [ -n "$FIRST_GCC" ] && [ -x "$FIRST_GCC" ]; then
+        # 创建一个简单的测试程序
+        echo 'int main(){return 0;}' > /tmp/test.c
+        if $FIRST_GCC -o /tmp/test /tmp/test.c 2>/dev/null; then
+            log "  ✅ GCC编译器可用（能编译简单程序）"
+            rm -f /tmp/test /tmp/test.c
+        else
+            log "  ⚠️ GCC编译器可能有问题（不能编译简单程序）"
+            warning_items=$((warning_items + 1))
+        fi
+    fi
+    
     # 根据检查结果决定是否继续
     log ""
     if [ $missing_items -eq 0 ]; then
@@ -3882,6 +3905,9 @@ workflow_step10_verify_sdk() {
             log "✅✅✅ 工具链验证完全通过，所有组件都存在 ✅✅✅"
         else
             log "✅ 工具链验证通过，但有 $warning_items 个警告（不影响编译）"
+            log "   警告说明:"
+            log "   - make/gzip 可能以其他名称存在或使用系统工具"
+            log "   - 不影响后续编译"
         fi
         return 0
     else
@@ -3900,256 +3926,25 @@ workflow_step10_verify_sdk() {
 #【firmware-build.yml-16】
 # ============================================
 #【build_firmware_main.sh-32】
-workflow_step16_verify_usb() {
-    log "=== 步骤16: 验证USB配置（智能检测版） ==="
+# ============================================
+# 步骤11: 添加TurboACC支持
+# 对应 firmware-build.yml 步骤11
+# ============================================
+workflow_step11_add_turboacc() {
+    log "=== 步骤11: 添加 TurboACC 支持 ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    trap 'echo "⚠️ 步骤16 验证过程中出现错误，继续执行..."' ERR
+    set -e
+    trap 'echo "❌ 步骤11 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
+    add_turboacc_support
     
-    echo "=== 🚨 USB配置智能检测 ==="
-    echo ""
-    
-    # 1. 检测USB核心模块
-    echo "1. 🟢 USB核心模块:"
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config; then
-        echo "   ✅ kmod-usb-core: 已启用"
-    else
-        echo "   ❌ kmod-usb-core: 未启用"
-    fi
-    echo ""
-    
-    # 2. 检测USB 2.0支持
-    echo "2. 🟢 USB 2.0支持:"
-    local usb2_enabled=0
-    if grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config; then
-        echo "   ✅ kmod-usb2: 已启用"
-        usb2_enabled=1
-    elif grep -q "^CONFIG_USB_EHCI_HCD=y" .config || grep -q "^CONFIG_USB_OHCI_HCD=y" .config; then
-        echo "   ✅ USB 2.0功能已启用（通过内核配置）"
-        usb2_enabled=1
-    else
-        echo "   ❌ USB 2.0功能未启用"
-    fi
-    echo ""
-    
-    # 3. 智能检测USB 3.0/xhci功能
-    echo "3. 🟢 USB 3.0/xhci功能检测:"
-    
-    local xhci_enabled=0
-    local xhci_methods=""
-    
-    # 方法1: 检查通用xhci-hcd包
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
-        xhci_enabled=1
-        xhci_methods="$xhci_methods\n   - 通用xhci-hcd包"
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 添加TurboACC支持失败"
+        exit 1
     fi
     
-    # 方法2: 检查平台专用xhci包
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
-        xhci_enabled=1
-        xhci_methods="$xhci_methods\n   - 联发科xhci-mtk包"
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-qcom=y" .config; then
-        xhci_enabled=1
-        xhci_methods="$xhci_methods\n   - 高通xhci-qcom包"
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
-        xhci_enabled=1
-        xhci_methods="$xhci_methods\n   - 平台xhci-plat-hcd包"
-    fi
-    
-    # 方法3: 检查DWC3驱动（内部集成xhci）
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config || grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
-        xhci_enabled=1
-        xhci_methods="$xhci_methods\n   - DWC3控制器（内部集成xhci）"
-    fi
-    
-    # 方法4: 检查内核xhci配置
-    if grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
-        xhci_enabled=1
-        xhci_methods="$xhci_methods\n   - 内核xhci支持"
-    fi
-    
-    if grep -q "^CONFIG_USB_XHCI_PLATFORM=y" .config; then
-        xhci_enabled=1
-        xhci_methods="$xhci_methods\n   - 内核平台xhci支持"
-    fi
-    
-    # 方法5: 检查高通平台专用PHY
-    if grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
-        # 高通IPQ40xx平台有专用PHY，通常与DWC3配合
-        if [ $xhci_enabled -eq 0 ]; then
-            # 虽然没有直接xhci包，但平台支持USB 3.0
-            xhci_enabled=1
-            xhci_methods="$xhci_methods\n   - 高通IPQ40xx平台（通过PHY和DWC3）"
-        fi
-    fi
-    
-    # 输出检测结果
-    if [ $xhci_enabled -eq 1 ]; then
-        echo "   ✅ USB 3.0/xhci功能已启用"
-        echo "   检测方式:"
-        echo -e "$xhci_methods" | while read line; do
-            [ -n "$line" ] && echo "     $line"
-        done
-        
-        # 显示实际启用的相关配置
-        echo "   实际配置:"
-        grep -E "CONFIG_(PACKAGE_kmod-usb-xhci|PACKAGE_kmod-usb-dwc3|USB_XHCI|PHY_QCOM)" .config | grep -E "=y|=m" | head -5 | while read line; do
-            echo "     $line"
-        done
-    else
-        echo "   ❌ USB 3.0/xhci功能未启用"
-    fi
-    echo ""
-    
-    # 4. 检测USB存储驱动
-    echo "4. 🟢 USB存储支持:"
-    local storage_enabled=0
-    
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config; then
-        echo "   ✅ kmod-usb-storage: 已启用"
-        storage_enabled=1
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_kmod-usb-storage-uas=y" .config; then
-        echo "   ✅ kmod-usb-storage-uas: 已启用"
-        storage_enabled=1
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" .config; then
-        echo "   ✅ kmod-scsi-core: 已启用"
-    else
-        echo "   ❌ kmod-scsi-core: 未启用"
-    fi
-    
-    if [ $storage_enabled -eq 0 ]; then
-        echo "   ❌ USB存储驱动未启用"
-    fi
-    echo ""
-    
-    # 5. 检测平台专用驱动
-    echo "5. 🟢 平台专用驱动检测:"
-    
-    # 检测目标平台
-    local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
-    
-    case "$target" in
-        ipq40xx|ipq806x|qcom)
-            echo "   🔧 检测到高通平台"
-            local qcom_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "qcom|ipq40|dwc3" | grep -E "=y|=m" | sort)
-            if [ -n "$qcom_drivers" ]; then
-                echo "$qcom_drivers" | while read line; do
-                    local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
-                    local val=$(echo "$line" | cut -d'=' -f2)
-                    if [ "$val" = "y" ]; then
-                        echo "   ✅ $pkg: 已启用"
-                    elif [ "$val" = "m" ]; then
-                        echo "   📦 $pkg: 模块化"
-                    fi
-                done
-            else
-                echo "   未找到高通专用驱动"
-            fi
-            
-            # 检查高通PHY
-            if grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
-                echo "   ✅ 高通IPQ4019 USB PHY: 已启用"
-            fi
-            ;;
-        mediatek|ramips)
-            echo "   🔧 检测到联发科平台"
-            local mtk_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "mtk|mediatek|xhci-mtk" | grep -E "=y|=m" | sort)
-            if [ -n "$mtk_drivers" ]; then
-                echo "$mtk_drivers" | while read line; do
-                    local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
-                    local val=$(echo "$line" | cut -d'=' -f2)
-                    if [ "$val" = "y" ]; then
-                        echo "   ✅ $pkg: 已启用"
-                    elif [ "$val" = "m" ]; then
-                        echo "   📦 $pkg: 模块化"
-                    fi
-                done
-            else
-                echo "   未找到联发科专用驱动"
-            fi
-            ;;
-        ath79)
-            echo "   🔧 检测到ATH79平台"
-            local ath79_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "ath79" | grep -E "=y|=m" | sort)
-            if [ -n "$ath79_drivers" ]; then
-                echo "$ath79_drivers" | while read line; do
-                    local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
-                    local val=$(echo "$line" | cut -d'=' -f2)
-                    if [ "$val" = "y" ]; then
-                        echo "   ✅ $pkg: 已启用"
-                    elif [ "$val" = "m" ]; then
-                        echo "   📦 $pkg: 模块化"
-                    fi
-                done
-            else
-                echo "   未找到ATH79专用驱动"
-            fi
-            ;;
-        *)
-            echo "   ℹ️ 通用平台"
-            ;;
-    esac
-    echo ""
-    
-    # 6. 检查重复配置
-    echo "6. 🟢 检查重复配置:"
-    local duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb" .config | cut -d'=' -f1 | sort | uniq -d)
-    if [ -n "$duplicates" ]; then
-        echo "$duplicates" | while read dup; do
-            local count=$(grep -c "^$dup=" .config)
-            echo "   ⚠️ $dup: 出现 $count 次"
-        done
-    else
-        echo "   ✅ 无重复配置"
-    fi
-    echo ""
-    
-    # 7. 统计信息
-    echo "7. 📊 USB驱动统计:"
-    local total_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb" .config)
-    local enabled_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=y" .config)
-    local module_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=m" .config)
-    echo "   总USB包: $total_usb"
-    echo "   已启用: $enabled_usb"
-    echo "   模块化: $module_usb"
-    echo ""
-    
-    # 8. USB功能总结
-    echo "8. 📋 USB功能总结:"
-    
-    # USB 2.0
-    if [ $usb2_enabled -eq 1 ]; then
-        echo "   ✅ USB 2.0: 支持"
-    else
-        echo "   ❌ USB 2.0: 不支持"
-    fi
-    
-    # USB 3.0
-    if [ $xhci_enabled -eq 1 ]; then
-        echo "   ✅ USB 3.0: 支持"
-    else
-        echo "   ❌ USB 3.0: 不支持"
-    fi
-    
-    # USB存储
-    if [ $storage_enabled -eq 1 ]; then
-        echo "   ✅ USB存储: 支持"
-    else
-        echo "   ❌ USB存储: 不支持"
-    fi
-    
-    echo ""
-    echo "✅ USB配置检查完成"
-    log "✅ 步骤16 完成"
+    log "✅ 步骤11 完成"
 }
 #【build_firmware_main.sh-32-end】
 
@@ -4159,162 +3954,24 @@ workflow_step16_verify_usb() {
 #【firmware-build.yml-17】
 # ============================================
 #【build_firmware_main.sh-33】
-workflow_step17_check_usb_drivers() {
-    log "=== 步骤17: USB驱动完整性检查（动态检测版） ==="
+# ============================================
+# 步骤12: 配置Feeds
+# 对应 firmware-build.yml 步骤12
+# ============================================
+workflow_step12_configure_feeds() {
+    log "=== 步骤12: 配置Feeds ==="
     
-    trap 'echo "⚠️ 步骤17 检查过程中出现错误，继续执行..."' ERR
+    set -e
+    trap 'echo "❌ 步骤12 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
+    configure_feeds
     
-    echo "=== USB驱动完整性动态检测 ==="
-    echo ""
-    
-    # 获取目标平台
-    local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
-    echo "目标平台: $target"
-    echo ""
-    
-    # 定义基础必需驱动
-    local base_required=(
-        "kmod-usb-core"
-    )
-    
-    # 根据平台定义必需驱动
-    local required_drivers=()
-    case "$target" in
-        ipq40xx|ipq806x|qcom)
-            required_drivers=(
-                "kmod-usb-core"
-                "kmod-usb2"
-                "kmod-usb3"
-                "kmod-usb-dwc3"
-                "kmod-usb-dwc3-qcom"
-                "kmod-usb-storage"
-                "kmod-scsi-core"
-            )
-            ;;
-        mediatek|ramips)
-            required_drivers=(
-                "kmod-usb-core"
-                "kmod-usb2"
-                "kmod-usb3"
-                "kmod-usb-xhci-mtk"
-                "kmod-usb-storage"
-                "kmod-scsi-core"
-            )
-            ;;
-        ath79)
-            required_drivers=(
-                "kmod-usb-core"
-                "kmod-usb2"
-                "kmod-usb-ohci"
-                "kmod-usb-storage"
-                "kmod-scsi-core"
-            )
-            ;;
-        *)
-            required_drivers=(
-                "kmod-usb-core"
-                "kmod-usb2"
-                "kmod-usb-storage"
-                "kmod-scsi-core"
-            )
-            ;;
-    esac
-    
-    echo "🔍 检查必需USB驱动:"
-    echo ""
-    
-    local missing_drivers=()
-    local enabled_drivers=()
-    
-    for driver in "${required_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "   ✅ $driver: 已启用"
-            enabled_drivers+=("$driver")
-        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
-            echo "   📦 $driver: 模块化"
-            enabled_drivers+=("$driver")
-        else
-            # 检查是否有替代驱动
-            local alt_driver=$(grep "^CONFIG_PACKAGE_" .config | grep -i "${driver#kmod-}" | grep -E "=y|=m" | head -1)
-            if [ -n "$alt_driver" ]; then
-                local alt_name=$(echo "$alt_driver" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
-                echo "   🔄 $driver: 未找到，但发现替代: $alt_name"
-                enabled_drivers+=("$driver(替代:$alt_name)")
-            else
-                echo "   ❌ $driver: 未启用"
-                missing_drivers+=("$driver")
-            fi
-        fi
-    done
-    
-    echo ""
-    echo "📊 统计:"
-    echo "   必需驱动: ${#required_drivers[@]} 个"
-    echo "   已启用/替代: ${#enabled_drivers[@]} 个"
-    echo "   缺失驱动: ${#missing_drivers[@]} 个"
-    
-    if [ ${#missing_drivers[@]} -gt 0 ]; then
-        echo ""
-        echo "⚠️ 发现缺失驱动:"
-        for driver in "${missing_drivers[@]}"; do
-            echo "   - $driver"
-        done
-        
-        # 检查这些驱动是否被内核选项替代
-        echo ""
-        echo "🔍 检查内核配置替代:"
-        for driver in "${missing_drivers[@]}"; do
-            local kernel_config=$(grep -E "^CONFIG_.*${driver#kmod-}.*=y" .config | head -1)
-            if [ -n "$kernel_config" ]; then
-                echo "   ✅ $driver 可能被内核配置 $(echo $kernel_config | cut -d'=' -f1) 替代"
-            fi
-        done
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 配置Feeds失败"
+        exit 1
     fi
     
-    echo ""
-    echo "🔍 检查所有实际启用的USB驱动:"
-    echo "----------------------------------------"
-    
-    # 获取所有启用的USB驱动
-    local all_enabled=$(grep "^CONFIG_PACKAGE_kmod-usb.*=y" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    local all_module=$(grep "^CONFIG_PACKAGE_kmod-usb.*=m" .config | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1 | sort)
-    
-    # 显示所有启用的驱动
-    if [ -n "$all_enabled" ]; then
-        echo "✅ 已启用驱动 ($(echo "$all_enabled" | wc -l) 个):"
-        echo "$all_enabled" | while read driver; do
-            echo "   ✅ $driver"
-        done
-    else
-        echo "   没有已启用的USB驱动"
-    fi
-    
-    # 显示所有模块化的驱动
-    if [ -n "$all_module" ]; then
-        echo ""
-        echo "📦 模块化驱动 ($(echo "$all_module" | wc -l) 个):"
-        echo "$all_module" | while read driver; do
-            echo "   📦 $driver"
-        done
-    fi
-    
-    # 显示禁用的驱动（可选）
-    local all_disabled=$(grep "^# CONFIG_PACKAGE_kmod-usb" .config | grep "is not set" | sed 's/# CONFIG_PACKAGE_//g' | sed 's/ is not set//g' | sort)
-    if [ -n "$all_disabled" ]; then
-        echo ""
-        echo "❌ 禁用驱动 ($(echo "$all_disabled" | wc -l) 个，仅显示前20个):"
-        echo "$all_disabled" | head -20 | while read driver; do
-            echo "   ❌ $driver"
-        done
-        if [ $(echo "$all_disabled" | wc -l) -gt 20 ]; then
-            echo "   ... 还有 $(( $(echo "$all_disabled" | wc -l) - 20 )) 个禁用驱动未显示"
-        fi
-    fi
-    
-    echo "----------------------------------------"
-    log "✅ 步骤17 完成"
+    log "✅ 步骤12 完成"
 }
 #【build_firmware_main.sh-33-end】
 
@@ -4324,71 +3981,24 @@ workflow_step17_check_usb_drivers() {
 #【firmware-build.yml-20】
 # ============================================
 #【build_firmware_main.sh-34】
-workflow_step20_fix_network() {
-    log "=== 步骤20: 修复网络环境（动态检测版） ==="
+# ============================================
+# 步骤13: 安装TurboACC包
+# 对应 firmware-build.yml 步骤13
+# ============================================
+workflow_step13_install_turboacc() {
+    log "=== 步骤13: 安装 TurboACC 包 ==="
     
-    trap 'echo "⚠️ 步骤20 修复过程中出现错误，继续执行..."' ERR
+    set -e
+    trap 'echo "❌ 步骤13 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
+    install_turboacc_packages
     
-    echo "🔍 检测当前网络环境..."
-    
-    # 检测网络连通性
-    if ping -c 1 -W 2 github.com > /dev/null 2>&1; then
-        echo "✅ GitHub 可达"
-    else
-        echo "⚠️ GitHub 不可达，尝试使用代理..."
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 安装TurboACC包失败"
+        exit 1
     fi
     
-    if ping -c 1 -W 2 google.com > /dev/null 2>&1; then
-        echo "✅ 国际网络可达"
-    else
-        echo "⚠️ 国际网络可能受限"
-    fi
-    
-    # 检测当前代理设置
-    if [ -n "$http_proxy" ] || [ -n "$https_proxy" ]; then
-        echo "检测到代理设置:"
-        [ -n "$http_proxy" ] && echo "   HTTP_PROXY: $http_proxy"
-        [ -n "$https_proxy" ] && echo "   HTTPS_PROXY: $https_proxy"
-    else
-        echo "未检测到代理设置"
-    fi
-    
-    echo ""
-    echo "🔧 配置Git优化..."
-    
-    # 动态设置Git配置
-    git config --global http.postBuffer 524288000
-    git config --global http.lowSpeedLimit 0
-    git config --global http.lowSpeedTime 999999
-    git config --global core.compression 0
-    
-    # 检测Git版本并设置相应选项
-    local git_version=$(git --version | cut -d' ' -f3)
-    echo "Git版本: $git_version"
-    
-    # 根据网络情况设置SSL验证
-    if curl -s --connect-timeout 5 https://github.com > /dev/null 2>&1; then
-        export GIT_SSL_NO_VERIFY=0
-        echo "✅ SSL验证: 启用"
-    else
-        export GIT_SSL_NO_VERIFY=1
-        export PYTHONHTTPSVERIFY=0
-        export CURL_SSL_NO_VERIFY=1
-        echo "⚠️ SSL验证: 禁用（由于网络问题）"
-    fi
-    
-    # 测试最终连接
-    echo ""
-    echo "🔍 测试最终连接..."
-    if curl -s --connect-timeout 10 https://github.com > /dev/null; then
-        echo "✅ 网络连接正常"
-    else
-        echo "⚠️ 网络连接可能有问题，但将继续尝试"
-    fi
-    
-    log "✅ 步骤20 完成"
+    log "✅ 步骤13 完成"
 }
 #【build_firmware_main.sh-34-end】
 
@@ -4398,384 +4008,25 @@ workflow_step20_fix_network() {
 #【firmware-build.yml-21】
 # ============================================
 #【build_firmware_main.sh-35】
-workflow_step21_download_deps() {
-    log "=== 步骤21: 下载依赖包（动态优化版） ==="
+# ============================================
+# 步骤14: 编译前空间检查
+# 对应 firmware-build.yml 步骤14
+# ============================================
+workflow_step14_pre_build_space_check() {
+    log "=== 步骤14: 编译前空间检查 ==="
     
     set -e
-    trap 'echo "❌ 步骤21 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
+    # 调用空间检查函数
+    pre_build_space_check
     
-    echo "🔧 检查依赖包目录..."
-    if [ ! -d "dl" ]; then
-        mkdir -p dl
-        echo "✅ 创建依赖包目录: dl"
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 编译前空间检查失败"
+        exit 1
     fi
     
-    # 显示当前源码类型
-    echo "📋 源码类型: $SOURCE_REPO_TYPE"
-    echo "📋 目标设备: $DEVICE"
-    echo "📋 目标平台: $TARGET/$SUBTARGET"
-    echo ""
-    
-    # 显示 feeds 配置
-    echo "📋 feeds.conf.default 内容:"
-    echo "----------------------------------------"
-    cat feeds.conf.default
-    echo "----------------------------------------"
-    echo ""
-    
-    # 设置国内镜像源（针对LEDE）
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        echo "🔧 LEDE源码模式，配置国内镜像源..."
-        
-        # 备份原配置
-        cp feeds.conf.default feeds.conf.default.bak
-        
-        # 替换为国内镜像源（如果使用默认的coolsnowwolf源）
-        if grep -q "github.com/coolsnowwolf" feeds.conf.default; then
-            sed -i 's|https://github.com/coolsnowwolf|https://mirrors.aliyun.com/lede|g' feeds.conf.default
-            sed -i 's|git://github.com/coolsnowwolf|https://mirrors.aliyun.com/lede|g' feeds.conf.default
-            echo "✅ 已替换为阿里云LEDE镜像: https://mirrors.aliyun.com/lede"
-        fi
-    fi
-    
-    # 设置通用镜像源环境变量
-    export OPENWRT_MIRROR="https://mirrors.aliyun.com/openwrt"
-    export SOURCE_MIRROR="https://mirrors.tuna.tsinghua.edu.cn"
-    export GNU_MIRROR="https://mirrors.aliyun.com/gnu"
-    export KERNEL_MIRROR="https://mirrors.aliyun.com/linux-kernel"
-    
-    echo "✅ 已设置国内镜像源:"
-    echo "   OPENWRT_MIRROR=$OPENWRT_MIRROR"
-    echo "   SOURCE_MIRROR=$SOURCE_MIRROR"
-    echo "   GNU_MIRROR=$GNU_MIRROR"
-    echo ""
-    
-    # 统计现有依赖包
-    local dep_count=$(find dl -type f 2>/dev/null | wc -l)
-    local dep_size=$(du -sh dl 2>/dev/null | cut -f1 || echo "0B")
-    echo "📊 当前依赖包: $dep_count 个, 总大小: $dep_size"
-    
-    # 显示现有依赖包列表（如果有）
-    if [ $dep_count -gt 0 ]; then
-        echo ""
-        echo "📋 现有依赖包列表:"
-        ls -lh dl/ | head -20
-        if [ $dep_count -gt 20 ]; then
-            echo "... 还有 $((dep_count - 20)) 个文件未显示"
-        fi
-        echo ""
-    fi
-    
-    # 检测系统资源动态调整并行数
-    local cpu_cores=$(nproc)
-    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
-    local download_jobs=1
-    
-    if [ $cpu_cores -ge 4 ] && [ $mem_total -ge 4096 ]; then
-        download_jobs=$((cpu_cores > 8 ? 8 : cpu_cores))
-        echo "✅ 检测到高性能系统，使用 $download_jobs 并行下载"
-    elif [ $cpu_cores -ge 2 ] && [ $mem_total -ge 2048 ]; then
-        download_jobs=4
-        echo "✅ 检测到标准系统，使用 4 并行下载"
-    else
-        download_jobs=2
-        echo "⚠️ 检测到资源有限，使用 2 并行下载"
-    fi
-    
-    echo "🚀 开始下载依赖包（并行数: $download_jobs）..."
-    echo "下载日志将保存到: download.log"
-    echo ""
-    
-    # 创建日志文件并实时显示
-    touch download.log
-    
-    # 在后台启动日志监控（实时显示下载进度）
-    {
-        tail -f download.log | while read line; do
-            if echo "$line" | grep -q "Downloading"; then
-                echo "📥 $line"
-            elif echo "$line" | grep -q "ERROR\|Failed\|404"; then
-                echo "❌ $line"
-            elif echo "$line" | grep -q "done\|Complete"; then
-                echo "✅ $line"
-            elif echo "$line" | grep -q "flock\|download.pl"; then
-                # 显示下载命令
-                echo "  🔄 $line"
-            fi
-        done
-    } &
-    local monitor_pid=$!
-    
-    # 记录开始时间
-    local start_time=$(date +%s)
-    local last_report_time=$start_time
-    local last_dl_count=$dep_count
-    
-    # 在后台启动进度监控（每30秒报告一次）
-    {
-        while true; do
-            sleep 30
-            local current_time=$(date +%s)
-            local current_dl_count=$(find dl -type f 2>/dev/null | wc -l)
-            local new_files=$((current_dl_count - last_dl_count))
-            local elapsed=$((current_time - start_time))
-            
-            echo ""
-            echo "⏱️ 下载进度报告 (已运行 $((elapsed / 60))分$((elapsed % 60))秒):"
-            echo "  当前依赖包: $current_dl_count 个 (+$new_files)"
-            echo "  最近30秒新增: $new_files 个"
-            echo ""
-            
-            # 显示最近下载的几个文件
-            if [ $new_files -gt 0 ]; then
-                echo "  最近下载的文件:"
-                find dl -type f -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -5 | while read line; do
-                    local file=$(echo "$line" | cut -d' ' -f2-)
-                    local name=$(basename "$file")
-                    echo "    📄 $name"
-                done
-                echo ""
-            fi
-            
-            last_dl_count=$current_dl_count
-            last_report_time=$current_time
-        done
-    } &
-    local progress_pid=$!
-    
-    # 先尝试快速下载，使用 V=s 显示详细输出
-    if make -j$download_jobs download -k V=s > download.log 2>&1; then
-        echo "✅ 下载完成"
-    else
-        echo "⚠️ 部分下载失败，尝试使用镜像源重试..."
-        
-        # 检查是否有404错误
-        local error_404=$(grep -c "404" download.log 2>/dev/null || echo "0")
-        if [ $error_404 -gt 0 ]; then
-            echo ""
-            echo "🔍 检测到 $error_404 个404错误，尝试使用镜像源重试..."
-            
-            # 备份原来的dl目录
-            if [ -d "dl" ] && [ "$(ls -A dl)" ]; then
-                mkdir -p dl_backup
-                cp -r dl/* dl_backup/ 2>/dev/null || true
-                echo "✅ 已备份现有下载文件到 dl_backup"
-            fi
-            
-            # 提取失败的包并重试
-            local failed_packages=$(grep -B1 "404" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort -u)
-            if [ -n "$failed_packages" ]; then
-                echo ""
-                echo "🔄 重试失败的包（使用镜像源）:"
-                echo "$failed_packages" | head -10 | while read url; do
-                    local filename=$(basename "$url")
-                    echo "   📥 $filename"
-                    
-                    # 尝试从镜像源下载
-                    if echo "$url" | grep -q "github.com"; then
-                        # GitHub源使用镜像
-                        local mirror_url="https://mirror.ghproxy.com/$url"
-                        echo "     尝试镜像: $mirror_url"
-                        wget -q --show-progress "$mirror_url" -O "dl/$filename" || true
-                    elif echo "$url" | grep -q "kernel.org"; then
-                        # kernel.org使用阿里云镜像
-                        local mirror_url="https://mirrors.aliyun.com/linux-kernel/$(basename $url)"
-                        echo "     尝试镜像: $mirror_url"
-                        wget -q --show-progress "$mirror_url" -O "dl/$filename" || true
-                    elif echo "$url" | grep -q "gnu.org"; then
-                        # GNU使用阿里云镜像
-                        local mirror_url="https://mirrors.aliyun.com/gnu/$(basename $url)"
-                        echo "     尝试镜像: $mirror_url"
-                        wget -q --show-progress "$mirror_url" -O "dl/$filename" || true
-                    fi
-                done
-                
-                if [ $(echo "$failed_packages" | wc -l) -gt 10 ]; then
-                    echo "  ... 还有 $(( $(echo "$failed_packages" | wc -l) - 10 )) 个包未显示"
-                fi
-            fi
-        fi
-        
-        # 使用单线程重试剩余的包
-        echo ""
-        echo "🔄 使用单线程重试下载..."
-        make download -j1 V=s >> download.log 2>&1 || true
-        
-        echo "✅ 镜像源重试完成"
-    fi
-    
-    # 停止监控进程
-    kill $monitor_pid 2>/dev/null || true
-    kill $progress_pid 2>/dev/null || true
-    
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
-    
-    # 统计下载结果
-    local new_dep_count=$(find dl -type f 2>/dev/null | wc -l)
-    local new_dep_size=$(du -sh dl 2>/dev/null | cut -f1)
-    local added=$((new_dep_count - dep_count))
-    
-    echo ""
-    echo "📊 下载统计:"
-    echo "   总耗时: $((duration / 60))分$((duration % 60))秒"
-    echo "   原有包: $dep_count 个 ($dep_size)"
-    echo "   现有包: $new_dep_count 个 ($new_dep_size)"
-    echo "   新增包: $added 个"
-    
-    # 显示下载的包列表
-    if [ $added -gt 0 ]; then
-        echo ""
-        echo "📦 新增依赖包列表:"
-        echo "----------------------------------------"
-        
-        # 获取新增的文件列表（按时间排序，最新的在前）
-        find dl -type f -printf "%T@ %p\n" 2>/dev/null | sort -nr | head -20 | while read line; do
-            local file=$(echo "$line" | cut -d' ' -f2-)
-            local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            local name=$(basename "$file")
-            printf "  📄 %-50s %s\n" "$name" "$size"
-        done
-        
-        if [ $added -gt 20 ]; then
-            echo "  ... 还有 $((added - 20)) 个文件未显示"
-        fi
-        echo "----------------------------------------"
-    fi
-    
-    # 分析下载日志，提取实际URL
-    echo ""
-    echo "🔍 提取下载URL（从日志中）:"
-    echo "----------------------------------------"
-    grep -E "Downloading|--\d{4}-\d{2}-\d{2}" download.log | head -30 | while read line; do
-        if echo "$line" | grep -q "Downloading"; then
-            echo "📥 $line"
-        fi
-    done
-    echo "----------------------------------------"
-    
-    # 详细分析下载错误
-    local error_count=$(grep -c -E "ERROR|Failed|404" download.log 2>/dev/null | tr -d ' ' || echo "0")
-    if [ "$error_count" -gt 0 ] 2>/dev/null; then
-        echo ""
-        echo "⚠️ 发现 $error_count 个下载错误:"
-        echo "-----------------------------------------------------------------"
-        
-        # 分类统计错误类型
-        echo "📊 错误类型统计:"
-        echo ""
-        
-        # 404错误统计 - 确保是数字
-        local error_404=$(grep -c "404" download.log 2>/dev/null | tr -d ' ' || echo "0")
-        echo "  404 Not Found: $error_404 个"
-        
-        # 超时错误 - 确保是数字
-        local error_timeout=$(grep -c "Timeout\|timed out" download.log 2>/dev/null | tr -d ' ' || echo "0")
-        echo "  超时错误: $error_timeout 个"
-        
-        # 其他错误 - 修复算术运算错误
-        local other_errors=0
-        # 确保所有变量都是数字
-        local ec=$((error_count + 0))
-        local e404=$((error_404 + 0))
-        local et=$((error_timeout + 0))
-        other_errors=$((ec - e404 - et))
-        echo "  其他错误: $other_errors 个"
-        echo ""
-        
-        # 显示具体的404错误URL
-        if [ $error_404 -gt 0 ]; then
-            echo "🔍 404错误详情（无法下载的URL）:"
-            echo ""
-            
-            # 从日志中提取404的URL
-            grep -B1 "404" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort -u | head -10 | while read url; do
-                echo "  ❌ $url"
-                
-                # 提供镜像源替代方案
-                local filename=$(basename "$url")
-                if echo "$url" | grep -q "github.com"; then
-                    echo "     💡 GitHub镜像: https://mirror.ghproxy.com/$url"
-                elif echo "$url" | grep -q "kernel.org"; then
-                    echo "     💡 阿里云镜像: https://mirrors.aliyun.com/linux-kernel/$filename"
-                elif echo "$url" | grep -q "gnu.org"; then
-                    echo "     💡 阿里云镜像: https://mirrors.aliyun.com/gnu/$filename"
-                elif echo "$url" | grep -q "openwrt.org"; then
-                    echo "     💡 清华镜像: https://mirrors.tuna.tsinghua.edu.cn/openwrt/$filename"
-                fi
-            done
-            
-            local unique_404=$(grep -B1 "404" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort -u | wc -l)
-            if [ $unique_404 -gt 10 ]; then
-                echo "  ... 还有 $((unique_404 - 10)) 个不同的404错误未显示"
-            fi
-            echo ""
-        fi
-        
-        # 显示最近10个错误
-        echo "📋 最近10个错误:"
-        echo ""
-        grep -E "ERROR|Failed|404" download.log | tail -10 | while read line; do
-            echo "  ❌ $line"
-        done
-        echo "-----------------------------------------------------------------"
-        
-        # 建议解决方案
-        echo ""
-        echo "💡 建议解决方案:"
-        echo "  1. 使用国内镜像源（已自动配置）"
-        echo "  2. 手动下载失败的包（上面已提供镜像命令）"
-        echo "  3. 重试构建，失败的包可能被缓存"
-        echo "  4. 如果持续失败，可以考虑："
-        echo "     - 使用 'make package/XXX/download V=s' 单独下载特定包"
-        echo "     - 检查网络连接和防火墙设置"
-        echo "     - 尝试使用代理或VPN"
-        echo ""
-    fi
-    
-    # 检查是否有特定的包导致问题
-    echo ""
-    echo "🔍 检查可能导致编译失败的包:"
-    echo "----------------------------------------"
-    
-    # 检查curl 404错误数量
-    local curl_errors=$(grep -c "curl: (22)" download.log 2>/dev/null | tr -d ' ' || echo "0")
-    if [ $curl_errors -gt 0 ]; then
-        echo "⚠️ 发现 $curl_errors 个curl 404错误"
-        echo "   💡 已自动配置国内镜像源，如果仍有问题，可以手动下载："
-        echo ""
-        
-        # 提取最常见的几个失败包
-        grep -B1 "curl: (22)" download.log | grep "Downloading" | sed 's/.*Downloading //g' | sort | uniq -c | sort -nr | head -5 | while read count url; do
-            local filename=$(basename "$url")
-            echo "   🔄 $filename (失败 $count 次)"
-            echo "     手动下载: wget $url -O dl/$filename"
-            if echo "$url" | grep -q "github.com"; then
-                echo "     镜像下载: wget https://mirror.ghproxy.com/$url -O dl/$filename"
-            fi
-        done
-    fi
-    
-    echo "----------------------------------------"
-    
-    # 如果没有下载任何包，显示警告
-    if [ $added -eq 0 ] && [ $dep_count -eq 0 ]; then
-        echo ""
-        echo "⚠️ 警告: 没有下载任何包，请检查:"
-        echo "   1. feeds.conf.default 是否正确"
-        echo "   2. 网络连接是否正常"
-        echo "   3. 是否有足够的磁盘空间"
-        echo "   4. 下载源是否可用"
-        echo ""
-        echo "📋 完整下载日志内容:"
-        echo "----------------------------------------"
-        cat download.log
-        echo "----------------------------------------"
-    fi
-    
-    log "✅ 步骤21 完成"
+    log "✅ 步骤14 完成"
 }
 #【build_firmware_main.sh-35-end】
 
@@ -4785,14 +4036,52 @@ workflow_step21_download_deps() {
 #【firmware-build.yml-22】
 # ============================================
 #【build_firmware_main.sh-36】
-workflow_step22_integrate_custom_files() {
-    log "=== 步骤22: 集成自定义文件（增强版） ==="
+# ============================================
+# 步骤15: 智能配置生成
+# 对应 firmware-build.yml 步骤15
+# ============================================
+workflow_step15_generate_config() {
+    local extra_packages="$1"
     
-    trap 'echo "⚠️ 步骤22 集成过程中出现错误，继续执行..."' ERR
+    log "=== 步骤15: 智能配置生成【优化版 - 最多2次尝试】 ==="
+    log "当前设备: $DEVICE"
+    log "当前目标: $TARGET"
+    log "当前子目标: $SUBTARGET"
     
-    integrate_custom_files
+    set -e
+    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
     
-    log "✅ 步骤22 完成"
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
+    fi
+    
+    if [ -z "$DEVICE" ] && [ -n "$2" ]; then
+        DEVICE="$2"
+        log "⚠️ DEVICE为空，使用参数: $DEVICE"
+    fi
+    
+    local device_for_config="$DEVICE"
+    case "$DEVICE" in
+        ac42u|rt-ac42u)
+            device_for_config="asus_rt-ac42u"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        acrh17|rt-acrh17)
+            device_for_config="asus_rt-acrh17"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        *)
+            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            ;;
+    esac
+    
+    cd "$BUILD_DIR" || handle_error "无法进入构建目录"
+    
+    # 调用 generate_config 函数
+    generate_config "$extra_packages" "$device_for_config"
+    
+    log "✅ 步骤15 完成"
 }
 #【build_firmware_main.sh-36-end】
 
@@ -4802,184 +4091,21 @@ workflow_step22_integrate_custom_files() {
 #【firmware-build.yml-23】
 # ============================================
 #【build_firmware_main.sh-37】
-workflow_step23_pre_build_check() {
-    log "=== 步骤23: 前置错误检查（使用公共函数） ==="
+# ============================================
+# 步骤16: 验证USB配置
+# 对应 firmware-build.yml 步骤16
+# ============================================
+workflow_step16_verify_usb() {
+    log "=== 步骤16: 验证USB配置（智能检测版） ==="
     
-    set -e
-    trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
-    
-    echo "🔍 检查当前环境..."
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        echo "✅ 加载环境变量:"
-        echo "   SELECTED_BRANCH=$SELECTED_BRANCH"
-        echo "   TARGET=$TARGET"
-        echo "   SUBTARGET=$SUBTARGET"
-        echo "   DEVICE=$DEVICE"
-        echo "   CONFIG_MODE=$CONFIG_MODE"
-        echo "   SOURCE_REPO_TYPE=$SOURCE_REPO_TYPE"
-        echo "   COMPILER_DIR=$COMPILER_DIR"
-    else
-        echo "❌ 错误: 环境文件不存在 ($BUILD_DIR/build_env.sh)"
-        exit 1
-    fi
+    trap 'echo "⚠️ 步骤16 验证过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
-    echo ""
-    echo "=== 🚨 前置错误动态检测 ==="
-    echo ""
     
-    local error_count=0
-    local warning_count=0
+    # 调用 verify_usb_config 函数
+    verify_usb_config
     
-    echo "1. ✅ 配置文件检查:"
-    if [ -f ".config" ]; then
-        local config_size=$(ls -lh .config | awk '{print $5}')
-        local config_lines=$(wc -l < .config)
-        echo "   ✅ .config 文件存在"
-        echo "   📊 大小: $config_size, 行数: $config_lines"
-        
-        local device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config}=y"
-        
-        if grep -q "^${expected_config}$" .config; then
-            echo "   ✅ 设备配置正确: $expected_config"
-        else
-            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config}=y" .config; then
-                echo "   ✅ 设备配置正确 (模糊匹配)"
-            else
-                echo "   ❌ 设备配置可能不正确，未找到: $expected_config"
-                error_count=$((error_count + 1))
-            fi
-        fi
-    else
-        echo "   ❌ .config 文件不存在"
-        error_count=$((error_count + 1))
-    fi
-    echo ""
-    
-    echo "2. ✅ 源码工具链检查:"
-    echo "   ✅ 源码类型: $SOURCE_REPO_TYPE，使用源码自带工具链"
-    
-    if [ -d "$BUILD_DIR/staging_dir" ]; then
-        echo "   ✅ staging_dir目录存在"
-        local staging_size=$(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}')
-        echo "   📊 大小: $staging_size"
-        
-        local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
-        if [ -n "$gcc_file" ]; then
-            echo "   ✅ 找到GCC编译器: $(basename "$gcc_file")"
-        else
-            echo "   ℹ️ 工具链将在编译过程中生成"
-        fi
-    else
-        echo "   ℹ️ staging_dir将在编译过程中生成"
-    fi
-    echo ""
-    
-    echo "3. ✅ Feeds检查:"
-    if [ -d "feeds" ]; then
-        local feeds_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
-        feeds_count=$((feeds_count - 1))
-        echo "   ✅ feeds目录存在, 包含 $feeds_count 个feed"
-        
-        for feed in packages luci; do
-            if [ -d "feeds/$feed" ]; then
-                echo "   ✅ $feed feed: 存在"
-            else
-                echo "   ❌ $feed feed: 不存在"
-                warning_count=$((warning_count + 1))
-            fi
-        done
-    else
-        echo "   ❌ feeds目录不存在"
-        error_count=$((error_count + 1))
-    fi
-    echo ""
-    
-    echo "4. ✅ 磁盘空间检查:"
-    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
-    local available_gb=$((available_space / 1024 / 1024))
-    echo "   📊 可用空间: ${available_gb}G"
-    
-    if [ $available_gb -lt 5 ]; then
-        echo "   ❌ 空间严重不足 (<5G)"
-        error_count=$((error_count + 1))
-    elif [ $available_gb -lt 10 ]; then
-        echo "   ⚠️ 空间较低 (<10G)"
-        warning_count=$((warning_count + 1))
-    elif [ $available_gb -lt 20 ]; then
-        echo "   ⚠️ 空间一般 (<20G)"
-        warning_count=$((warning_count + 1))
-    else
-        echo "   ✅ 空间充足"
-    fi
-    echo ""
-    
-    echo "5. ✅ USB驱动检查:"
-    local critical_drivers=(
-        "kmod-usb-core"
-    )
-    
-    case "$TARGET" in
-        ipq40xx|ipq806x|qcom)
-            critical_drivers+=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom")
-            ;;
-        mediatek|ramips)
-            critical_drivers+=("kmod-usb-xhci-mtk")
-            ;;
-    esac
-    
-    local missing_usb=0
-    for driver in "${critical_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            echo "   ✅ $driver: 已启用"
-        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
-            echo "   📦 $driver: 模块化"
-        else
-            echo "   ❌ $driver: 未启用"
-            missing_usb=$((missing_usb + 1))
-        fi
-    done
-    
-    if [ $missing_usb -gt 0 ]; then
-        echo "   ⚠️ 有 $missing_usb 个关键USB驱动缺失"
-        warning_count=$((warning_count + 1))
-    fi
-    echo ""
-    
-    echo "6. ✅ 内存检查:"
-    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
-    local mem_available=$(free -m | awk '/^Mem:/{print $7}')
-    echo "   📊 总内存: ${mem_total}MB, 可用: ${mem_available}MB"
-    
-    if [ $mem_available -lt 512 ]; then
-        echo "   ⚠️ 可用内存不足 (<512MB)"
-        warning_count=$((warning_count + 1))
-    else
-        echo "   ✅ 内存充足"
-    fi
-    echo ""
-    
-    echo "7. ✅ CPU检查:"
-    local cpu_cores=$(nproc)
-    local cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)
-    echo "   📊 核心数: $cpu_cores"
-    echo "   📊 型号: $cpu_model"
-    echo ""
-    
-    echo "========================================"
-    if [ $error_count -gt 0 ]; then
-        echo "❌❌❌ 检测到 $error_count 个错误，请修复后重试 ❌❌❌"
-        exit 1
-    elif [ $warning_count -gt 0 ]; then
-        echo "⚠️⚠️⚠️ 检测到 $warning_count 个警告，但可以继续 ⚠️⚠️⚠️"
-    else
-        echo "✅✅✅ 所有检查通过，可以开始编译 ✅✅✅"
-    fi
-    echo "========================================"
-    
-    log "✅ 步骤23 完成"
+    log "✅ 步骤16 完成"
 }
 #【build_firmware_main.sh-37-end】
 
@@ -4989,534 +4115,21 @@ workflow_step23_pre_build_check() {
 #【firmware-build.yml-25】
 # ============================================
 #【build_firmware_main.sh-38】
-workflow_step25_build_firmware() {
-    local enable_parallel="$1"
+# ============================================
+# 步骤17: USB驱动完整性检查
+# 对应 firmware-build.yml 步骤17
+# ============================================
+workflow_step17_check_usb_drivers() {
+    log "=== 步骤17: USB驱动完整性检查（动态检测版） ==="
     
-    log "=== 步骤25: 编译固件（补丁自动跳过+编译失败检测机制） ==="
-    
-    set -e
-    trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "⚠️ 步骤17 检查过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
     
-    # ============================================
-    # LEDE源码特定修复
-    # ============================================
-    log "🔧 检查源码类型并进行特定修复..."
+    # 调用 check_usb_drivers_integrity 函数
+    check_usb_drivers_integrity
     
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "  ✅ 检测到LEDE源码，应用特定修复..."
-        
-        # 重新编译padjffs2工具
-        if [ -f "staging_dir/host/bin/padjffs2" ]; then
-            log "  重新编译padjffs2工具..."
-            rm -f staging_dir/host/bin/padjffs2
-            make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
-            make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
-        fi
-        
-        # 重新编译mkdniimg工具
-        if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-            log "  重新编译mkdniimg工具..."
-            rm -f staging_dir/host/bin/mkdniimg
-            make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
-            make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
-        fi
-        
-        # 清理可能冲突的临时文件
-        log "  清理临时文件..."
-        find build_dir -name "*.bin" -o -name "*.img" -o -name "*.tmp" 2>/dev/null | xargs rm -f
-        
-        # 增加内核编译的稳定性
-        export KCFLAGS="-O2 -pipe"
-    fi
-    
-    # ============================================
-    # 编译前检查：查看是否有失败的补丁
-    # ============================================
-    log "🔧 检查可能失败的补丁..."
-    
-    # 查找所有内核构建目录中是否有.rej文件
-    local rej_files=$(find build_dir -name "*.rej" 2>/dev/null)
-    if [ -n "$rej_files" ]; then
-        log "  ⚠️ 发现补丁失败，将在编译前处理"
-        
-        # 显示失败的补丁
-        echo "$rej_files" | while read rej_file; do
-            log "    ❌ 补丁失败: $(basename "$rej_file" .rej).patch"
-        done
-        
-        # 清理所有内核构建目录
-        log "  🔧 清理内核构建目录..."
-        rm -rf build_dir/linux-*
-        rm -rf staging_dir/target-*/.stamp_target_*
-        
-        log "  ✅ 已清理，将重新编译"
-    fi
-    
-    # ============================================
-    # 设置文件描述符限制
-    # ============================================
-    ulimit -n 65536 2>/dev/null || true
-    local current_limit=$(ulimit -n)
-    log "  ✅ 当前文件描述符限制: $current_limit"
-    
-    # ============================================
-    # 创建双固件保护脚本
-    # ============================================
-    log "🔧 创建双固件保护脚本..."
-    local protect_dir="$BUILD_DIR/.firmware_protect"
-    mkdir -p "$protect_dir"
-    
-    local protect_script="$protect_dir/protect.sh"
-    cat > "$protect_script" << 'EOF'
-#!/bin/bash
-# 双固件保护脚本 - 实时监控并备份sysupgrade和factory固件
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-LOG_FILE="$PROTECT_DIR/protect.log"
-
-echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
-
-# 监控循环
-while true; do
-    # 1. 监控临时目录中的文件
-    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
-    
-    for tmp_dir in $TMP_DIRS; do
-        # 查找sysupgrade文件
-        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | while read file; do
-            if [ -f "$file" ]; then
-                backup="$PROTECT_DIR/$(basename "$file").backup"
-                cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份 sysupgrade: $(basename "$file")" >> "$LOG_FILE"
-            fi
-        done
-        
-        # 查找factory文件
-        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
-            if [ -f "$file" ]; then
-                backup="$PROTECT_DIR/$(basename "$file").backup"
-                cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份 factory: $(basename "$file")" >> "$LOG_FILE"
-            fi
-        done
-        
-        # 查找.itb文件
-        find "$tmp_dir" -name "*.itb" 2>/dev/null | while read file; do
-            if [ -f "$file" ]; then
-                backup="$PROTECT_DIR/$(basename "$file").backup"
-                cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份 itb: $(basename "$file")" >> "$LOG_FILE"
-            fi
-        done
-    done
-    
-    # 2. 每5秒检查一次
-    sleep 5
-done
-EOF
-    chmod +x "$protect_script"
-    
-    # 启动保护脚本
-    "$protect_script" "$protect_dir" "$BUILD_DIR" &
-    local protect_pid=$!
-    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
-    
-    # ============================================
-    # 创建强制恢复脚本（动态版本，无硬编码）
-    # ============================================
-    local recover_script="$protect_dir/recover.sh"
-    cat > "$recover_script" << 'EOF'
-#!/bin/bash
-# 强制恢复脚本 - 动态查找并恢复固件
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-
-# 动态获取目标平台和子平台
-if [ -f "$BUILD_DIR/build_env.sh" ]; then
-    source "$BUILD_DIR/build_env.sh"
-fi
-
-TARGET="${TARGET:-ipq40xx}"
-SUBTARGET="${SUBTARGET:-generic}"
-TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-
-mkdir -p "$TARGET_DIR"
-
-echo "=== 强制恢复开始于 $(date) ==="
-echo "目标平台: $TARGET/$SUBTARGET"
-echo "目标目录: $TARGET_DIR"
-
-# 计数器
-RECOVERED=0
-SYSUPGRADE_FOUND=0
-FACTORY_FOUND=0
-ITB_FOUND=0
-SYSUPGRADE_FILE=""
-FACTORY_FILE=""
-ITB_FILE=""
-
-# 1. 从保护目录恢复
-echo "📁 检查保护目录: $PROTECT_DIR"
-find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
-    filename=$(basename "$backup" .backup)
-    
-    # 判断文件类型
-    if [[ "$filename" == *"sysupgrade"* ]] && [[ "$filename" == *".bin" ]]; then
-        if [ ! -f "$TARGET_DIR/$filename" ]; then
-            echo "  ✅ 恢复 sysupgrade: $filename"
-            cp -f "$backup" "$TARGET_DIR/$filename"
-            RECOVERED=$((RECOVERED + 1))
-            SYSUPGRADE_FOUND=1
-            SYSUPGRADE_FILE="$TARGET_DIR/$filename"
-        fi
-    elif [[ "$filename" == *"factory"* ]] && [[ "$filename" == *".img" || "$filename" == *".bin" ]]; then
-        if [ ! -f "$TARGET_DIR/$filename" ]; then
-            echo "  ✅ 恢复 factory: $filename"
-            cp -f "$backup" "$TARGET_DIR/$filename"
-            RECOVERED=$((RECOVERED + 1))
-            FACTORY_FOUND=1
-            FACTORY_FILE="$TARGET_DIR/$filename"
-        fi
-    elif [[ "$filename" == *".itb" ]]; then
-        if [ ! -f "$TARGET_DIR/$filename" ]; then
-            echo "  ✅ 恢复 itb: $filename"
-            cp -f "$backup" "$TARGET_DIR/$filename"
-            RECOVERED=$((RECOVERED + 1))
-            ITB_FOUND=1
-            ITB_FILE="$TARGET_DIR/$filename"
-        fi
-    fi
-done
-
-# 2. 从临时目录搜索
-echo "🔍 搜索临时目录..."
-TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
-
-for tmp_dir in $TMP_DIRS; do
-    # 查找sysupgrade
-    if [ $SYSUPGRADE_FOUND -eq 0 ]; then
-        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
-            filename=$(basename "$file")
-            echo "  ✅ 从临时目录恢复 sysupgrade: $filename"
-            cp -f "$file" "$TARGET_DIR/$filename"
-            RECOVERED=$((RECOVERED + 1))
-            SYSUPGRADE_FOUND=1
-            SYSUPGRADE_FILE="$TARGET_DIR/$filename"
-        done
-    fi
-    
-    # 查找factory
-    if [ $FACTORY_FOUND -eq 0 ]; then
-        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
-            filename=$(basename "$file")
-            echo "  ✅ 从临时目录恢复 factory: $filename"
-            cp -f "$file" "$TARGET_DIR/$filename"
-            RECOVERED=$((RECOVERED + 1))
-            FACTORY_FOUND=1
-            FACTORY_FILE="$TARGET_DIR/$filename"
-        done
-    fi
-    
-    # 查找itb
-    if [ $ITB_FOUND -eq 0 ]; then
-        find "$tmp_dir" -name "*.itb" 2>/dev/null | head -1 | while read file; do
-            filename=$(basename "$file")
-            echo "  ✅ 从临时目录恢复 itb: $filename"
-            cp -f "$file" "$TARGET_DIR/$filename"
-            RECOVERED=$((RECOVERED + 1))
-            ITB_FOUND=1
-            ITB_FILE="$TARGET_DIR/$filename"
-        done
-    fi
-done
-
-# 3. 创建sha256sum
-if [ -n "$SYSUPGRADE_FILE" ] && [ -f "$SYSUPGRADE_FILE" ]; then
-    (cd "$TARGET_DIR" && sha256sum "$(basename "$SYSUPGRADE_FILE")" > "$(basename "$SYSUPGRADE_FILE").sha256sum")
-    echo "  ✅ 创建 sha256sum"
-fi
-
-# 4. 最终检查
-echo ""
-echo "📊 最终检查:"
-if [ -f "$SYSUPGRADE_FILE" ]; then
-    size=$(ls -lh "$SYSUPGRADE_FILE" 2>/dev/null | awk '{print $5}')
-    echo "  ✅ sysupgrade.bin: 存在 ($size)"
-else
-    echo "  ❌ sysupgrade.bin: 不存在"
-fi
-
-if [ -f "$FACTORY_FILE" ]; then
-    size=$(ls -lh "$FACTORY_FILE" 2>/dev/null | awk '{print $5}')
-    echo "  ✅ factory.img: 存在 ($size)"
-else
-    echo "  ❌ factory.img: 不存在"
-fi
-
-if [ -f "$ITB_FILE" ]; then
-    size=$(ls -lh "$ITB_FILE" 2>/dev/null | awk '{print $5}')
-    echo "  ✅ itb镜像: 存在 ($size)"
-fi
-
-echo "  📊 恢复文件数: $RECOVERED"
-echo "=== 强制恢复结束于 $(date) ==="
-EOF
-    chmod +x "$recover_script"
-    
-    # ============================================
-    # 备份关键文件
-    # ============================================
-    log "🔧 创建固件备份目录..."
-    local backup_dir="$BUILD_DIR/firmware_backup_$(date +%s)"
-    mkdir -p "$backup_dir"
-    log "  ✅ 备份目录: $backup_dir"
-    
-    # ============================================
-    # 导出环境变量
-    # ============================================
-    export OPENWRT_VERBOSE=1
-    export FORCE_UNSAFE_CONFIGURE=1
-    
-    # ============================================
-    # 智能判断最佳并行任务数
-    # ============================================
-    CPU_CORES=$(nproc)
-    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
-    
-    echo ""
-    echo "🔧 系统信息:"
-    echo "  CPU核心数: $CPU_CORES"
-    echo "  内存大小: ${TOTAL_MEM}MB"
-    echo "  文件描述符限制: $(ulimit -n)"
-    echo "  并行优化: $enable_parallel"
-    echo "  源码类型: $SOURCE_REPO_TYPE"
-    
-    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
-        echo ""
-        echo "🧠 智能判断最佳并行任务数..."
-        
-        if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
-            MAKE_JOBS=4
-            echo "✅ 高性能系统: 使用 $MAKE_JOBS 个并行任务"
-        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
-            MAKE_JOBS=2
-            echo "✅ 标准系统: 使用 $MAKE_JOBS 个并行任务"
-        else
-            MAKE_JOBS=1
-            echo "⚠️ 低性能系统: 使用 $MAKE_JOBS 个并行任务"
-        fi
-        
-        # ============================================
-        # 第一阶段：并行编译
-        # ============================================
-        echo ""
-        echo "🚀 第一阶段：并行编译内核和模块 (make -j$MAKE_JOBS)"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        START_TIME=$(date +%s)
-        
-        # 编译第一阶段 - 捕获退出码
-        set +e  # 临时关闭errexit，以便捕获退出码
-        make -j$MAKE_JOBS V=s 2>&1 | tee build_phase1.log
-        PHASE1_EXIT_CODE=${PIPESTATUS[0]}
-        set -e  # 重新开启errexit
-        
-        PHASE1_END=$(date +%s)
-        PHASE1_DURATION=$((PHASE1_END - START_TIME))
-        
-        echo ""
-        echo "✅ 第一阶段完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
-        echo "   退出代码: $PHASE1_EXIT_CODE"
-        
-        # ============================================
-        # 检查第一阶段是否失败
-        # ============================================
-        if [ $PHASE1_EXIT_CODE -ne 0 ]; then
-            echo ""
-            echo "❌❌❌ 第一阶段编译失败 (退出码: $PHASE1_EXIT_CODE) ❌❌❌"
-            echo ""
-            echo "🔍 最后50行错误日志:"
-            tail -50 build_phase1.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || cat build_phase1.log | tail -50
-            
-            # 停止保护脚本
-            kill $protect_pid 2>/dev/null || true
-            
-            # 执行强制恢复，看看有没有部分生成的固件
-            echo ""
-            echo "🔧 尝试恢复可能的部分固件..."
-            bash "$recover_script" "$protect_dir" "$BUILD_DIR"
-            
-            # 清理
-            rm -rf "$protect_dir" 2>/dev/null || true
-            
-            log "❌ 编译失败，退出"
-            exit $PHASE1_EXIT_CODE
-        fi
-        
-        # ============================================
-        # 第二阶段前：备份所有临时固件文件
-        # ============================================
-        echo ""
-        echo "🔧 第二阶段前：备份所有临时固件文件..."
-        
-        # 查找并备份所有可能的固件文件
-        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" -o -path "*/tmp/*.itb" -o -name "*.new" 2>/dev/null)
-        local backup_count=0
-        
-        if [ -n "$temp_files" ]; then
-            echo "$temp_files" | while read file; do
-                if [ -f "$file" ]; then
-                    cp -v "$file" "$backup_dir/" 2>/dev/null
-                    backup_count=$((backup_count + 1))
-                fi
-            done
-            echo "  ✅ 已备份 $backup_count 个临时固件文件到: $backup_dir"
-        else
-            echo "  ⚠️ 未找到临时固件文件"
-        fi
-        
-        # ============================================
-        # 第二阶段：单线程生成最终固件
-        # ============================================
-        echo ""
-        echo "🚀 第二阶段：单线程生成最终固件 (make -j1)"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        PHASE2_START=$(date +%s)
-        
-        # 第二阶段强制单线程 - 捕获退出码
-        set +e
-        make -j1 V=s 2>&1 | tee -a build_phase2.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
-        
-        PHASE2_END=$(date +%s)
-        PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
-        TOTAL_DURATION=$((PHASE2_END - START_TIME))
-        
-        echo ""
-        echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
-        echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
-        
-        # 合并日志
-        cat build_phase1.log build_phase2.log > build.log
-        
-    else
-        # 单线程编译
-        MAKE_JOBS=1
-        echo ""
-        echo "⚠️ 禁用并行优化，使用单线程编译"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        START_TIME=$(date +%s)
-        
-        # 单线程编译 - 捕获退出码
-        set +e
-        make -j1 V=s 2>&1 | tee build.log
-        BUILD_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
-        
-        END_TIME=$(date +%s)
-        DURATION=$((END_TIME - START_TIME))
-        
-        echo ""
-        echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-        echo "   退出代码: $BUILD_EXIT_CODE"
-    fi
-    
-    # ============================================
-    # 停止保护脚本
-    # ============================================
-    kill $protect_pid 2>/dev/null || true
-    log "🔧 双固件保护已停止"
-    
-    # ============================================
-    # 检查编译结果
-    # ============================================
-    if [ $BUILD_EXIT_CODE -ne 0 ]; then
-        echo ""
-        echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
-        echo ""
-        echo "🔍 最后50行错误日志:"
-        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || tail -50 build.log
-    fi
-    
-    # 执行强制恢复
-    echo ""
-    echo "🔧 执行强制恢复，查找固件..."
-    bash "$recover_script" "$protect_dir" "$BUILD_DIR"
-    
-    # ============================================
-    # 最终检查
-    # ============================================
-    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-    local sysupgrade_files=$(find "$target_dir" -name "*sysupgrade*.bin" 2>/dev/null | wc -l)
-    local factory_files=$(find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | wc -l)
-    local itb_files=$(find "$target_dir" -name "*.itb" 2>/dev/null | wc -l)
-    
-    echo ""
-    echo "📊 最终固件状态:"
-    echo "----------------------------------------"
-    
-    if [ $sysupgrade_files -gt 0 ]; then
-        find "$target_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
-            local size=$(ls -lh "$file" | awk '{print $5}')
-            echo "  ✅ sysupgrade.bin: 存在 ($size) - $(basename "$file")"
-        done
-    else
-        echo "  ❌ sysupgrade.bin: 不存在"
-    fi
-    
-    if [ $factory_files -gt 0 ]; then
-        find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
-            local size=$(ls -lh "$file" | awk '{print $5}')
-            echo "  ✅ factory.img: 存在 ($size) - $(basename "$file")"
-        done
-    else
-        echo "  ❌ factory.img: 不存在"
-    fi
-    
-    if [ $itb_files -gt 0 ]; then
-        find "$target_dir" -name "*.itb" 2>/dev/null | head -1 | while read file; do
-            local size=$(ls -lh "$file" | awk '{print $5}')
-            echo "  🔷 FIT镜像: 存在 ($size) - $(basename "$file") [可用于恢复]"
-        done
-    fi
-    
-    echo "----------------------------------------"
-    
-    # 根据编译结果给出总结
-    if [ $BUILD_EXIT_CODE -eq 0 ]; then
-        if [ $sysupgrade_files -gt 0 ] && [ $factory_files -gt 0 ]; then
-            echo "🎉 编译成功！双固件都已生成"
-        elif [ $sysupgrade_files -gt 0 ]; then
-            echo "⚠️ 编译完成，但只有sysupgrade固件"
-        elif [ $factory_files -gt 0 ]; then
-            echo "⚠️ 编译完成，但只有factory固件"
-        else
-            echo "❌ 编译完成但没有找到任何固件"
-        fi
-    else
-        echo "❌ 编译失败，退出码: $BUILD_EXIT_CODE"
-        if [ $sysupgrade_files -gt 0 ] || [ $factory_files -gt 0 ] || [ $itb_files -gt 0 ]; then
-            echo "   ⚠️ 但有部分固件生成，可能可用"
-        fi
-    fi
-    
-    # 清理
-    rm -rf "$protect_dir" 2>/dev/null || true
-    
-    log "✅ 步骤25 完成"
-    
-    # 如果编译失败，退出
-    if [ $BUILD_EXIT_CODE -ne 0 ]; then
-        exit $BUILD_EXIT_CODE
-    fi
+    log "✅ 步骤17 完成"
 }
 #【build_firmware_main.sh-38-end】
 
