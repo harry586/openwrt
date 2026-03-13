@@ -3907,8 +3907,10 @@ workflow_step10_verify_sdk() {
         log "  工具链生成时间: $COMPILE_TIME"
     else
         # 使用目录修改时间
-        MOD_TIME=$(stat -c %y staging_dir 2>/dev/null | cut -d'.' -f1)
-        log "  工具链最后修改: $MOD_TIME"
+        if [ -d "staging_dir" ]; then
+            MOD_TIME=$(stat -c %y staging_dir 2>/dev/null | cut -d'.' -f1)
+            log "  工具链最后修改: $MOD_TIME"
+        fi
     fi
     
     # 根据检查结果决定是否继续
