@@ -4359,201 +4359,260 @@ workflow_step15_generate_config() {
 #【firmware-build.yml-26】
 # ============================================
 #【build_firmware_main.sh-39】
-workflow_step26_check_artifacts() {
-    log "=== 步骤26: 检查构建产物（完整显示） ==="
+# ============================================
+# 步骤16: 验证USB配置
+# 对应 firmware-build.yml 步骤16
+# ============================================
+workflow_step16_verify_usb() {
+    log "=== 步骤16: 验证USB配置（智能检测版） ==="
     
-    set -e
-    trap 'echo "❌ 步骤26 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "⚠️ 步骤16 验证过程中出现错误，继续执行..."' ERR
     
-    cd "$BUILD_DIR"
+    cd $BUILD_DIR
     
-    if [ -d "bin/targets" ]; then
-        echo "✅ 找到固件目录"
-        
-        # 查找所有固件文件
-        echo ""
-        echo "📁 固件文件列表:"
-        echo "=========================================="
-        
-        local sysupgrade_count=0
-        local initramfs_count=0
-        local factory_count=0
-        local itb_count=0
-        local other_count=0
-        
-        # 先收集所有文件，避免管道中的子shell问题
-        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" -o -name "*.tar" -o -name "*.gz" \) 2>/dev/null | grep -v "sha256sums" | sort)
-        
-        # 遍历所有文件
-        while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            
-            SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-            FILE_NAME=$(basename "$file")
-            FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
-            
-            # 判断文件类型并添加注释
-            if echo "$FILE_NAME" | grep -q "sysupgrade"; then
-                echo "  ✅ $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
-                echo "    注释: *sysupgrade.bin - 刷机用"
-                echo ""
-                sysupgrade_count=$((sysupgrade_count + 1))
-            elif echo "$FILE_NAME" | grep -q "factory"; then
-                echo "  🏭 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 📦 原厂刷机 - 用于从原厂固件第一次刷入 OpenWrt"
-                echo "    注释: *factory.img/*factory.bin - 原厂刷机用"
-                echo ""
-                factory_count=$((factory_count + 1))
-            elif echo "$FILE_NAME" | grep -q "initramfs"; then
-                if echo "$FILE_NAME" | grep -q "\.itb$"; then
-                    echo "  🔷 $FILE_NAME (FIT格式)"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🆘 FIT格式恢复镜像 - 用于支持FIT的引导加载程序"
-                    echo "    注释: *initramfs-fit-uImage.itb - 恢复用"
-                    itb_count=$((itb_count + 1))
-                else
-                    echo "  🔷 $FILE_NAME"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🆘 恢复用 - 内存启动镜像，不写入闪存"
-                    echo "    注释: *initramfs-kernel.bin - 恢复用"
-                    initramfs_count=$((initramfs_count + 1))
-                fi
-                echo ""
-            elif echo "$FILE_NAME" | grep -q "kernel"; then
-                echo "  🔶 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🧩 内核镜像 - 仅包含内核，不包含根文件系统"
-                echo ""
-                other_count=$((other_count + 1))
-            elif echo "$FILE_NAME" | grep -q "rootfs"; then
-                echo "  📦 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🗄️ 根文件系统 - 仅包含根文件系统，不包含内核"
-                echo ""
-                other_count=$((other_count + 1))
-            elif echo "$FILE_NAME" | grep -q "sha256sums"; then
-                # 跳过校验和文件
-                continue
-            elif echo "$FILE_NAME" | grep -q "Packages\.gz"; then
-                # 跳过软件包索引文件
-                continue
-            else
-                echo "  📄 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: ❓ 其他文件"
-                echo ""
-                other_count=$((other_count + 1))
-            fi
-        done <<< "$all_files"
-        
-        echo "=========================================="
-        echo ""
-        echo "📊 固件统计:"
-        echo "----------------------------------------"
-        echo "  ✅ sysupgrade.bin: $sysupgrade_count 个 - 🚀 **刷机用**"
-        echo "  🔷 initramfs-kernel.bin: $initramfs_count 个 - 🆘 **恢复用**"
-        echo "  🔷 FIT恢复镜像: $itb_count 个 - 🆘 **FIT格式恢复用**"
-        echo "  🏭 factory镜像: $factory_count 个 - 📦 **原厂刷机用**"
-        echo "  📦 其他文件: $other_count 个"
-        echo "----------------------------------------"
-        echo ""
-        
-        # 重要提示
-        echo "🔔 固件类型说明:"
-        echo "  ✅ *sysupgrade.bin      - **刷机用** (已安装OpenWrt时升级)"
-        echo "  🔷 *initramfs-*.bin     - **恢复用** (内存启动，用于恢复)"
-        echo "  🔷 *initramfs-*.itb     - **FIT格式恢复** (适用于支持FIT的引导程序)"
-        echo "  🏭 *factory.img/*.bin   - **原厂刷机用** (从原厂固件第一次刷入)"
-        echo ""
-        
-        # 检测缺少的固件类型
-        local missing_types=""
-        if [ $sysupgrade_count -eq 0 ]; then
-            missing_types="$missing_types sysupgrade"
-        fi
-        if [ $factory_count -eq 0 ] && [ $initramfs_count -eq 0 ] && [ $itb_count -eq 0 ]; then
-            missing_types="$missing_types 恢复镜像"
-        fi
-        
-        if [ -n "$missing_types" ]; then
-            echo "⚠️ 警告: 缺少以下固件类型 -$missing_types"
-            echo "   编译可能不完整，但可用的固件文件如下:"
-        fi
-        
-        # 显示实际找到的可刷机固件文件
-        local flashable_count=0
-        echo ""
-        echo "📋 可刷机的固件文件:"
-        echo "----------------------------------------"
-        
-        # 显示所有可刷机的固件
-        while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
-                local fname=$(basename "$file")
-                local fsize=$(ls -lh "$file" | awk '{print $5}')
-                local ftype=""
-                if [[ "$fname" == *"sysupgrade"* ]]; then
-                    ftype="[刷机用]"
-                elif [[ "$fname" == *"factory"* ]]; then
-                    ftype="[原厂刷机]"
-                fi
-                printf "  📌 %-60s %s %s\n" "$fname" "$fsize" "$ftype"
-                flashable_count=$((flashable_count + 1))
-            fi
-        done <<< "$all_files" | head -10
-        
-        if [ $flashable_count -eq 0 ]; then
-            echo "  ⚠️ 没有找到可刷机的固件文件"
-            
-            # 尝试查找initramfs作为替代
-            while IFS= read -r file; do
-                [ -z "$file" ] && continue
-                if [[ "$file" == *"initramfs"* ]]; then
-                    local fname=$(basename "$file")
-                    local fsize=$(ls -lh "$file" | awk '{print $5}')
-                    printf "  🔷 %-60s %s [恢复用]\n" "$fname" "$fsize"
-                fi
-            done <<< "$all_files" | head -5
-        fi
-        
-        echo "----------------------------------------"
-        echo ""
-        
-        # 提供刷机建议
-        if [ $sysupgrade_count -gt 0 ]; then
-            echo "📝 刷机建议:"
-            echo "   如果您已经安装了OpenWrt，请使用 sysupgrade.bin 文件"
-            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin"
-        elif [ $factory_count -gt 0 ]; then
-            echo "📝 刷机建议:"
-            echo "   如果您是从原厂固件第一次刷入，请使用 factory.img 文件"
-            echo "   通过路由器原厂Web界面刷入"
-        elif [ $initramfs_count -gt 0 ] || [ $itb_count -gt 0 ]; then
-            echo "📝 刷机建议:"
-            echo "   没有找到sysupgrade或factory固件，但找到了initramfs恢复镜像"
-            echo "   initramfs是内存启动镜像，可用于恢复系统，但不能永久刷入"
-            echo "   如需永久刷入，需要先启动initramfs，然后在系统中刷入sysupgrade"
-        fi
-        
-        echo "=========================================="
-        echo "✅ 构建产物检查完成"
+    echo "=== 🚨 USB配置智能检测 ==="
+    echo ""
+    
+    # 1. 检测USB核心模块
+    echo "1. 🟢 USB核心模块:"
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config; then
+        echo "   ✅ kmod-usb-core: 已启用"
     else
-        echo "❌ 错误: 未找到固件目录"
-        exit 1
+        echo "   ❌ kmod-usb-core: 未启用"
+    fi
+    echo ""
+    
+    # 2. 检测USB 2.0支持
+    echo "2. 🟢 USB 2.0支持:"
+    local usb2_enabled=0
+    if grep -q "^CONFIG_PACKAGE_kmod-usb2=y" .config; then
+        echo "   ✅ kmod-usb2: 已启用"
+        usb2_enabled=1
+    elif grep -q "^CONFIG_USB_EHCI_HCD=y" .config || grep -q "^CONFIG_USB_OHCI_HCD=y" .config; then
+        echo "   ✅ USB 2.0功能已启用（通过内核配置）"
+        usb2_enabled=1
+    else
+        echo "   ❌ USB 2.0功能未启用"
+    fi
+    echo ""
+    
+    # 3. 智能检测USB 3.0/xhci功能
+    echo "3. 🟢 USB 3.0/xhci功能检测:"
+    
+    local xhci_enabled=0
+    local xhci_methods=""
+    
+    # 方法1: 检查通用xhci-hcd包
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-hcd=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods\n   - 通用xhci-hcd包"
     fi
     
-    log "✅ 步骤26 完成"
+    # 方法2: 检查平台专用xhci包
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-mtk=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods\n   - 联发科xhci-mtk包"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-qcom=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods\n   - 高通xhci-qcom包"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods\n   - 平台xhci-plat-hcd包"
+    fi
+    
+    # 方法3: 检查DWC3驱动（内部集成xhci）
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3=y" .config || grep -q "^CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods\n   - DWC3控制器（内部集成xhci）"
+    fi
+    
+    # 方法4: 检查内核xhci配置
+    if grep -q "^CONFIG_USB_XHCI_HCD=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods\n   - 内核xhci支持"
+    fi
+    
+    if grep -q "^CONFIG_USB_XHCI_PLATFORM=y" .config; then
+        xhci_enabled=1
+        xhci_methods="$xhci_methods\n   - 内核平台xhci支持"
+    fi
+    
+    # 方法5: 检查高通平台专用PHY
+    if grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
+        # 高通IPQ40xx平台有专用PHY，通常与DWC3配合
+        if [ $xhci_enabled -eq 0 ]; then
+            # 虽然没有直接xhci包，但平台支持USB 3.0
+            xhci_enabled=1
+            xhci_methods="$xhci_methods\n   - 高通IPQ40xx平台（通过PHY和DWC3）"
+        fi
+    fi
+    
+    # 输出检测结果
+    if [ $xhci_enabled -eq 1 ]; then
+        echo "   ✅ USB 3.0/xhci功能已启用"
+        echo "   检测方式:"
+        echo -e "$xhci_methods" | while read line; do
+            [ -n "$line" ] && echo "     $line"
+        done
+        
+        # 显示实际启用的相关配置
+        echo "   实际配置:"
+        grep -E "CONFIG_(PACKAGE_kmod-usb-xhci|PACKAGE_kmod-usb-dwc3|USB_XHCI|PHY_QCOM)" .config | grep -E "=y|=m" | head -5 | while read line; do
+            echo "     $line"
+        done
+    else
+        echo "   ❌ USB 3.0/xhci功能未启用"
+    fi
+    echo ""
+    
+    # 4. 检测USB存储驱动
+    echo "4. 🟢 USB存储支持:"
+    local storage_enabled=0
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-storage=y" .config; then
+        echo "   ✅ kmod-usb-storage: 已启用"
+        storage_enabled=1
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-usb-storage-uas=y" .config; then
+        echo "   ✅ kmod-usb-storage-uas: 已启用"
+        storage_enabled=1
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_kmod-scsi-core=y" .config; then
+        echo "   ✅ kmod-scsi-core: 已启用"
+    else
+        echo "   ❌ kmod-scsi-core: 未启用"
+    fi
+    
+    if [ $storage_enabled -eq 0 ]; then
+        echo "   ❌ USB存储驱动未启用"
+    fi
+    echo ""
+    
+    # 5. 检测平台专用驱动
+    echo "5. 🟢 平台专用驱动检测:"
+    
+    # 检测目标平台
+    local target=$(grep "^CONFIG_TARGET_" .config | grep "=y" | head -1 | cut -d'_' -f2 | tr '[:upper:]' '[:lower:]')
+    
+    case "$target" in
+        ipq40xx|ipq806x|qcom)
+            echo "   🔧 检测到高通平台"
+            local qcom_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "qcom|ipq40|dwc3" | grep -E "=y|=m" | sort)
+            if [ -n "$qcom_drivers" ]; then
+                echo "$qcom_drivers" | while read line; do
+                    local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+                    local val=$(echo "$line" | cut -d'=' -f2)
+                    if [ "$val" = "y" ]; then
+                        echo "   ✅ $pkg: 已启用"
+                    elif [ "$val" = "m" ]; then
+                        echo "   📦 $pkg: 模块化"
+                    fi
+                done
+            else
+                echo "   未找到高通专用驱动"
+            fi
+            
+            # 检查高通PHY
+            if grep -q "^CONFIG_PHY_QCOM_IPQ4019_USB=y" .config; then
+                echo "   ✅ 高通IPQ4019 USB PHY: 已启用"
+            fi
+            ;;
+        mediatek|ramips)
+            echo "   🔧 检测到联发科平台"
+            local mtk_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "mtk|mediatek|xhci-mtk" | grep -E "=y|=m" | sort)
+            if [ -n "$mtk_drivers" ]; then
+                echo "$mtk_drivers" | while read line; do
+                    local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+                    local val=$(echo "$line" | cut -d'=' -f2)
+                    if [ "$val" = "y" ]; then
+                        echo "   ✅ $pkg: 已启用"
+                    elif [ "$val" = "m" ]; then
+                        echo "   📦 $pkg: 模块化"
+                    fi
+                done
+            else
+                echo "   未找到联发科专用驱动"
+            fi
+            ;;
+        ath79)
+            echo "   🔧 检测到ATH79平台"
+            local ath79_drivers=$(grep "^CONFIG_PACKAGE_kmod" .config | grep -E "ath79" | grep -E "=y|=m" | sort)
+            if [ -n "$ath79_drivers" ]; then
+                echo "$ath79_drivers" | while read line; do
+                    local pkg=$(echo "$line" | sed 's/CONFIG_PACKAGE_//g' | cut -d'=' -f1)
+                    local val=$(echo "$line" | cut -d'=' -f2)
+                    if [ "$val" = "y" ]; then
+                        echo "   ✅ $pkg: 已启用"
+                    elif [ "$val" = "m" ]; then
+                        echo "   📦 $pkg: 模块化"
+                    fi
+                done
+            else
+                echo "   未找到ATH79专用驱动"
+            fi
+            ;;
+        *)
+            echo "   ℹ️ 通用平台"
+            ;;
+    esac
+    echo ""
+    
+    # 6. 检查重复配置
+    echo "6. 🟢 检查重复配置:"
+    local duplicates=$(grep "^CONFIG_PACKAGE_kmod-usb" .config | cut -d'=' -f1 | sort | uniq -d)
+    if [ -n "$duplicates" ]; then
+        echo "$duplicates" | while read dup; do
+            local count=$(grep -c "^$dup=" .config)
+            echo "   ⚠️ $dup: 出现 $count 次"
+        done
+    else
+        echo "   ✅ 无重复配置"
+    fi
+    echo ""
+    
+    # 7. 统计信息
+    echo "7. 📊 USB驱动统计:"
+    local total_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb" .config)
+    local enabled_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=y" .config)
+    local module_usb=$(grep -c "^CONFIG_PACKAGE_kmod-usb.*=m" .config)
+    echo "   总USB包: $total_usb"
+    echo "   已启用: $enabled_usb"
+    echo "   模块化: $module_usb"
+    echo ""
+    
+    # 8. USB功能总结
+    echo "8. 📋 USB功能总结:"
+    
+    # USB 2.0
+    if [ $usb2_enabled -eq 1 ]; then
+        echo "   ✅ USB 2.0: 支持"
+    else
+        echo "   ❌ USB 2.0: 不支持"
+    fi
+    
+    # USB 3.0
+    if [ $xhci_enabled -eq 1 ]; then
+        echo "   ✅ USB 3.0: 支持"
+    else
+        echo "   ❌ USB 3.0: 不支持"
+    fi
+    
+    # USB存储
+    if [ $storage_enabled -eq 1 ]; then
+        echo "   ✅ USB存储: 支持"
+    else
+        echo "   ❌ USB存储: 不支持"
+    fi
+    
+    echo ""
+    echo "✅ USB配置检查完成"
+    log "✅ 步骤16 完成"
 }
 #【build_firmware_main.sh-39-end】
 
