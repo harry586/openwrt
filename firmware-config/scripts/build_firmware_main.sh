@@ -4108,20 +4108,248 @@ workflow_step14_pre_build_space_check() {
 # ============================================
 #【build_firmware_main.sh-38】
 # ============================================
-# 步骤17: USB驱动完整性检查
-# 对应 firmware-build.yml 步骤17
+# 步骤15: 智能配置生成
+# 对应 firmware-build.yml 步骤15
 # ============================================
-workflow_step17_check_usb_drivers() {
-    log "=== 步骤17: USB驱动完整性检查（动态检测版） ==="
+workflow_step15_generate_config() {
+    local extra_packages="$1"
     
-    trap 'echo "⚠️ 步骤17 检查过程中出现错误，继续执行..."' ERR
+    log "=== 步骤15: 智能配置生成【优化版 - 最多2次尝试】 ==="
+    log "当前设备: $DEVICE"
+    log "当前目标: $TARGET"
+    log "当前子目标: $SUBTARGET"
     
-    cd $BUILD_DIR
+    set -e
+    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
     
-    # 调用 check_usb_drivers_integrity 函数
-    check_usb_drivers_integrity
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
+    fi
     
-    log "✅ 步骤17 完成"
+    if [ -z "$DEVICE" ] && [ -n "$2" ]; then
+        DEVICE="$2"
+        log "⚠️ DEVICE为空，使用参数: $DEVICE"
+    fi
+    
+    local device_for_config="$DEVICE"
+    case "$DEVICE" in
+        ac42u|rt-ac42u)
+            device_for_config="asus_rt-ac42u"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        acrh17|rt-acrh17)
+            device_for_config="asus_rt-acrh17"
+            log "🔧 设备名转换: $DEVICE -> $device_for_config"
+            ;;
+        *)
+            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            ;;
+    esac
+    
+    cd "$BUILD_DIR" || handle_error "无法进入构建目录"
+    
+    log ""
+    log "=== 🔍 设备定义文件验证（前置检查） ==="
+    
+    local search_device=""
+    case "$DEVICE" in
+        ac42u|rt-ac42u|asus_rt-ac42u)
+            search_device="ac42u"
+            ;;
+        acrh17|rt-acrh17|asus_rt-acrh17)
+            search_device="acrh17"
+            ;;
+        *)
+            search_device="$DEVICE"
+            ;;
+    esac
+    
+    log "搜索设备名: $search_device"
+    log "搜索路径: target/linux/$TARGET"
+    
+    echo ""
+    echo "📁 所有子平台 .mk 文件列表:"
+    local mk_files=()
+    while IFS= read -r file; do
+        mk_files+=("$file")
+    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
+    
+    if [ ${#mk_files[@]} -gt 0 ]; then
+        echo "----------------------------------------"
+        for i in "${!mk_files[@]}"; do
+            printf "[%2d] %s\n" $((i+1)) "${mk_files[$i]}"
+        done
+        echo "----------------------------------------"
+        echo "📊 共找到 ${#mk_files[@]} 个 .mk 文件"
+    else
+        echo "   未找到 .mk 文件"
+    fi
+    echo ""
+    
+    local device_file=""
+    for mkfile in "${mk_files[@]}"; do
+        if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
+            device_file="$mkfile"
+            break
+        fi
+    done
+    
+    if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
+        log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
+        log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
+        exit 1
+    fi
+    
+    log "✅ 找到设备定义文件: $device_file"
+    
+    local device_block=""
+    device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+    
+    if [ -n "$device_block" ]; then
+        echo ""
+        echo "📋 设备定义信息（关键字段）:"
+        echo "----------------------------------------"
+        echo "$device_block" | grep -E "define Device" | head -1
+        echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
+        echo "----------------------------------------"
+    else
+        log "⚠️ 警告：无法提取设备 $search_device 的配置块"
+    fi
+    
+    # 调用 generate_config 函数
+    generate_config "$extra_packages" "$device_for_config"
+    
+    log ""
+    log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
+    
+    # 获取基础禁用列表
+    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
+    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
+    
+    # 生成完整禁用列表
+    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
+    
+    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
+    
+    cp .config .config.before_disable
+    
+    # 第一轮：禁用所有主包和子包
+    log "🔧 第一轮禁用..."
+    for plugin in "${full_forbidden_list[@]}"; do
+        [ -z "$plugin" ] && continue
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+    done
+    
+    # 特别处理 nlbwmon 和 wol（确保彻底禁用）
+    log "🔧 特别处理 nlbwmon 和 wol..."
+    local special_plugins=(
+        "nlbwmon"
+        "luci-app-nlbwmon"
+        "luci-i18n-nlbwmon-zh-cn"
+        "nlbwmon-database"
+        "wol"
+        "luci-app-wol"
+        "luci-i18n-wol-zh-cn"
+        "etherwake"
+    )
+    
+    for plugin in "${special_plugins[@]}"; do
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+    done
+    
+    # 删除所有 INCLUDE 子选项
+    sed -i '/CONFIG_PACKAGE_luci-app-.*_INCLUDE_/d' .config
+    
+    sort -u .config > .config.tmp && mv .config.tmp .config
+    
+    local max_attempts=2
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig_disable_attempt${attempt}.log 2>&1 || {
+            log "⚠️ make defconfig 警告，但继续"
+        }
+        
+        local still_enabled=0
+        # 检查基础包
+        for plugin in "${BASE_PKGS[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
+                still_enabled=$((still_enabled + 1))
+                log "  ⚠️ 发现残留: $plugin"
+            fi
+        done
+        
+        if [ $still_enabled -eq 0 ]; then
+            log "✅ 第 $attempt 次尝试后所有主插件已成功禁用"
+            break
+        else
+            if [ $attempt -lt $max_attempts ]; then
+                log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
+                for plugin in "${BASE_PKGS[@]}"; do
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=y/d" .config
+                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=m/d" .config
+                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+                    echo "# CONFIG_PACKAGE_luci-app-${plugin} is not set" >> .config
+                done
+                sort -u .config > .config.tmp && mv .config.tmp .config
+            fi
+        fi
+        attempt=$((attempt + 1))
+    done
+    
+    log ""
+    log "📊 最终插件状态验证:"
+    local still_enabled_final=0
+    
+    # 检查所有需要禁用的插件
+    for plugin in "${BASE_PKGS[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            log "  ❌ $plugin 仍然被启用"
+            still_enabled_final=$((still_enabled_final + 1))
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            log "  ❌ $plugin 仍然被模块化"
+            still_enabled_final=$((still_enabled_final + 1))
+        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
+            log "  ❌ luci-app-$plugin 仍然被启用"
+            still_enabled_final=$((still_enabled_final + 1))
+        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
+            log "  ❌ luci-app-$plugin 仍然被模块化"
+            still_enabled_final=$((still_enabled_final + 1))
+        else
+            log "  ✅ $plugin 已正确禁用"
+        fi
+    done
+    
+    if [ $still_enabled_final -eq 0 ]; then
+        log "🎉 所有指定插件已成功禁用"
+    else
+        log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
+        
+        # 最终强力禁用
+        log "🔧 执行最终强力禁用..."
+        for plugin in "${BASE_PKGS[@]}"; do
+            sed -i "/${plugin}/d" .config
+            sed -i "/$(echo $plugin | tr '[:lower:]' '[:upper:]')/d" .config
+        done
+        make defconfig > /dev/null 2>&1
+    fi
+    
+    log ""
+    log "📊 配置统计（禁用后）:"
+    log "  总配置行数: $(wc -l < .config)"
+    log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
+    log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
+    
+    log "✅ 步骤15 完成"
 }
 #【build_firmware_main.sh-38-end】
 
