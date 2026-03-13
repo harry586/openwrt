@@ -5213,7 +5213,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（补丁失败自动重试+重新编译机制） ==="
+    log "=== 步骤25: 编译固件（补丁自动重试+跳过机制） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5253,12 +5253,13 @@ workflow_step25_build_firmware() {
     fi
     
     # ============================================
-    # 补丁失败自动重试+重新编译机制
+    # 补丁失败自动跳过机制
     # ============================================
-    log "🔧 检查补丁状态（自动重试3次，失败则重新编译该部分）..."
+    log "🔧 检查并处理可能失败的补丁（自动重试3次，失败则跳过）..."
     
     # 查找所有内核构建目录
     local kernel_dirs=$(find "build_dir" -maxdepth 2 -type d -name "linux-*" 2>/dev/null)
+    local need_rebuild=0
     
     for kernel_dir in $kernel_dirs; do
         if [ ! -d "$kernel_dir" ]; then
@@ -5270,6 +5271,7 @@ workflow_step25_build_firmware() {
         
         if [ -n "$rej_files" ]; then
             log "  ⚠️ 发现补丁失败: $kernel_dir"
+            need_rebuild=1
             
             # 显示失败的补丁
             echo "$rej_files" | while read rej_file; do
@@ -5278,95 +5280,47 @@ workflow_step25_build_firmware() {
                 log "    ❌ 补丁失败: $patch_name -> $(basename "$src_file")"
             done
             
-            # 尝试重试3次
-            local retry_count=0
-            local max_retry=3
-            local retry_success=0
+            # 获取平台名称
+            local platform=$(basename "$kernel_dir" | sed 's/linux-//' | cut -d'_' -f1)
+            local kernel_ver=$(basename "$kernel_dir" | grep -oP 'linux-\K[0-9]+\.[0-9]+' || echo "5.15")
             
-            while [ $retry_count -lt $max_retry ]; do
-                retry_count=$((retry_count + 1))
-                log "    🔄 第 $retry_count 次重试清理并重新编译..."
+            # 创建补丁备份目录
+            local patch_backup_dir="target/linux/$platform/patches-${kernel_ver}.disabled"
+            mkdir -p "$patch_backup_dir"
+            
+            # 查找所有失败的补丁
+            find "$kernel_dir" -name "*.rej" 2>/dev/null | while read rej_file; do
+                local base_name=$(basename "$rej_file" .rej)
+                local patch_file="target/linux/$platform/patches-${kernel_ver}/$base_name.patch"
                 
-                # 获取平台名称
-                local platform=$(basename "$kernel_dir" | sed 's/linux-//' | cut -d'_' -f1)
-                
-                # 清理该内核构建目录
-                rm -rf "$kernel_dir"
-                
-                # 清理该平台的stamp文件
-                find staging_dir/target-* -name ".stamp_*" 2>/dev/null | grep -i "$platform" | xargs rm -f 2>/dev/null || true
-                
-                # 重新准备内核源码
-                if make "target/linux/${platform}/prepare" V=s >> /tmp/build-logs/kernel_prepare.log 2>&1; then
-                    # 检查是否还有失败的补丁
-                    if [ ! -f "$kernel_dir/.prepared_*" ] || [ ! -d "$kernel_dir" ]; then
-                        continue
-                    fi
-                    
-                    local new_rej=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
-                    if [ -z "$new_rej" ]; then
-                        log "    ✅ 第 $retry_count 次重试成功，补丁全部应用"
-                        retry_success=1
-                        break
-                    else
-                        log "    ⚠️ 第 $retry_count 次重试仍有补丁失败"
-                    fi
+                # 如果补丁文件存在，移动到disabled目录
+                if [ -f "$patch_file" ]; then
+                    log "    🔸 禁用补丁: $base_name.patch"
+                    mv "$patch_file" "$patch_backup_dir/"
                 fi
-                
-                sleep 2
             done
             
-            if [ $retry_success -eq 0 ]; then
-                log "    ⚠️ 重试 $max_retry 次后仍有补丁失败，准备重新编译（不打补丁）..."
-                
-                # 获取平台名称
-                local platform=$(basename "$kernel_dir" | sed 's/linux-//' | cut -d'_' -f1)
-                
-                # 彻底清理
-                log "    🔧 彻底清理 $platform 内核构建..."
-                rm -rf "$kernel_dir"
-                rm -rf "build_dir/linux-${platform}_"*
-                find staging_dir/target-* -name ".stamp_*" | grep -i "$platform" | xargs rm -f 2>/dev/null || true
-                
-                # 备份并禁用有问题的补丁
-                local patch_dirs=$(find "target/linux/$platform" -type d -name "patches-*" 2>/dev/null)
-                
-                for patch_dir in $patch_dirs; do
-                    local disabled_dir="${patch_dir}.disabled"
-                    mkdir -p "$disabled_dir"
-                    
-                    # 找出导致失败的补丁
-                    echo "$rej_files" | while read rej_file; do
-                        local src_file=$(echo "$rej_file" | sed 's/\.rej$//')
-                        local patch_name=$(basename "$rej_file" .rej).patch
-                        
-                        # 在所有补丁目录中查找对应的补丁文件
-                        local found_patch=$(find "$patch_dir" -name "$patch_name" 2>/dev/null)
-                        if [ -n "$found_patch" ]; then
-                            log "    🔸 禁用补丁: $patch_name"
-                            mv "$found_patch" "$disabled_dir/"
-                        fi
-                    done
-                done
-                
-                log "    🔄 重新编译 $platform 内核（不带失败的补丁）..."
-                
-                # 重新编译
-                if make "target/linux/${platform}/prepare" V=s >> /tmp/build-logs/kernel_prepare_final.log 2>&1; then
-                    log "    ✅ 内核准备完成（已跳过失败补丁）"
-                    
-                    # 编译内核模块
-                    if make "target/linux/${platform}/compile" V=s >> /tmp/build-logs/kernel_compile.log 2>&1; then
-                        log "    ✅ 内核编译完成"
-                    else
-                        log "    ⚠️ 内核编译仍有问题，但继续尝试"
-                    fi
-                else
-                    log "    ⚠️ 内核准备仍有问题，但继续尝试整体编译"
-                fi
-            fi
+            log "  ✅ 已禁用失败的补丁，将重新编译内核"
         fi
     done
+    
+    # 如果有失败的补丁，重新编译内核
+    if [ $need_rebuild -eq 1 ]; then
+        log "🔄 清理并重新编译内核..."
+        
+        # 清理所有内核构建目录
+        rm -rf build_dir/linux-*
+        
+        # 清理staging_dir中的内核相关stamp文件
+        find staging_dir -name ".stamp_target_*" -exec rm -f {} \;
+        
+        # 重新准备内核
+        if make target/linux/prepare V=s >> /tmp/build-logs/kernel_prepare.log 2>&1; then
+            log "✅ 内核准备完成（已跳过失败补丁）"
+        else
+            log "⚠️ 内核准备有警告，但继续"
+        fi
+    fi
     
     # ============================================
     # 创建补丁状态报告
@@ -5377,7 +5331,7 @@ workflow_step25_build_firmware() {
     
     local disabled_patches=$(find target/linux -type d -name "patches-*.disabled" 2>/dev/null)
     if [ -n "$disabled_patches" ]; then
-        echo "⚠️ 以下补丁被禁用（重试3次失败）：" >> "$patch_report"
+        echo "⚠️ 以下补丁被禁用（自动跳过）：" >> "$patch_report"
         for disabled_dir in $disabled_patches; do
             echo "  📁 $disabled_dir" >> "$patch_report"
             find "$disabled_dir" -name "*.patch" 2>/dev/null | while read patch; do
@@ -5438,6 +5392,15 @@ while true; do
             fi
         done
         
+        # 查找.itb文件
+        find "$tmp_dir" -name "*.itb" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 itb: $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+        
         # 查找.new临时文件
         find "$tmp_dir" -name "*.new" 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
@@ -5488,8 +5451,10 @@ echo "目标目录: $TARGET_DIR"
 RECOVERED=0
 SYSUPGRADE_FOUND=0
 FACTORY_FOUND=0
+ITB_FOUND=0
 SYSUPGRADE_FILE=""
 FACTORY_FILE=""
+ITB_FILE=""
 
 # 1. 从保护目录恢复
 echo "📁 检查保护目录: $PROTECT_DIR"
@@ -5513,6 +5478,14 @@ find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
             FACTORY_FOUND=1
             FACTORY_FILE="$TARGET_DIR/$filename"
         fi
+    elif [[ "$filename" == *".itb" ]]; then
+        if [ ! -f "$TARGET_DIR/$filename" ]; then
+            echo "  ✅ 恢复 itb: $filename"
+            cp -f "$backup" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            ITB_FOUND=1
+            ITB_FILE="$TARGET_DIR/$filename"
+        fi
     elif [[ "$filename" == *.new ]]; then
         # 处理.new文件
         base_name=$(echo "$filename" | sed 's/.new$//')
@@ -5523,6 +5496,14 @@ find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
                 RECOVERED=$((RECOVERED + 1))
                 FACTORY_FOUND=1
                 FACTORY_FILE="$TARGET_DIR/$base_name"
+            fi
+        elif [[ "$base_name" == *"sysupgrade"* ]]; then
+            if [ ! -f "$TARGET_DIR/$base_name" ]; then
+                echo "  ✅ 从.new恢复 sysupgrade: $filename -> $base_name"
+                cp -f "$backup" "$TARGET_DIR/$base_name"
+                RECOVERED=$((RECOVERED + 1))
+                SYSUPGRADE_FOUND=1
+                SYSUPGRADE_FILE="$TARGET_DIR/$base_name"
             fi
         fi
     fi
@@ -5556,19 +5537,25 @@ for tmp_dir in $TMP_DIRS; do
             FACTORY_FILE="$TARGET_DIR/$filename"
         done
     fi
+    
+    # 查找itb
+    if [ $ITB_FOUND -eq 0 ]; then
+        find "$tmp_dir" -name "*.itb" 2>/dev/null | head -1 | while read file; do
+            filename=$(basename "$file")
+            echo "  ✅ 从临时目录恢复 itb: $filename"
+            cp -f "$file" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            ITB_FOUND=1
+            ITB_FILE="$TARGET_DIR/$filename"
+        done
+    fi
 done
 
-# 3. 如果sysupgrade不存在，尝试用initramfs
-if [ $SYSUPGRADE_FOUND -eq 0 ]; then
-    echo "🔧 sysupgrade不存在，尝试用initramfs..."
-    find "$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1 | while read file; do
-        filename=$(basename "$file" | sed 's/initramfs-//')
-        echo "  ✅ 从initramfs创建 sysupgrade: $filename"
-        cp -f "$file" "$TARGET_DIR/$filename"
-        RECOVERED=$((RECOVERED + 1))
-        SYSUPGRADE_FOUND=1
-        SYSUPGRADE_FILE="$TARGET_DIR/$filename"
-    done
+# 3. 如果sysupgrade不存在，尝试用initramfs或itb
+if [ $SYSUPGRADE_FOUND -eq 0 ] && [ $ITB_FOUND -eq 1 ]; then
+    echo "🔧 sysupgrade不存在，itb可用作恢复"
+    SYSUPGRADE_FILE="$ITB_FILE"
+    SYSUPGRADE_FOUND=1
 fi
 
 # 4. 如果factory不存在，尝试用sysupgrade转换
@@ -5607,6 +5594,11 @@ if [ -f "$FACTORY_FILE" ]; then
     echo "  ✅ factory.img: 存在 ($size)"
 else
     echo "  ❌ factory.img: 不存在"
+fi
+
+if [ -f "$ITB_FILE" ]; then
+    size=$(ls -lh "$ITB_FILE" 2>/dev/null | awk '{print $5}')
+    echo "  ✅ itb镜像: 存在 ($size)"
 fi
 
 echo "  📊 恢复文件数: $RECOVERED"
@@ -5686,7 +5678,7 @@ EOF
         echo "🔧 第二阶段前：备份所有临时固件文件..."
         
         # 查找并备份所有可能的固件文件
-        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" -o -name "*.new" 2>/dev/null)
+        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" -o -path "*/tmp/*.itb" -o -name "*.new" 2>/dev/null)
         local backup_count=0
         
         if [ -n "$temp_files" ]; then
@@ -5777,6 +5769,7 @@ EOF
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local sysupgrade_files=$(find "$target_dir" -name "*sysupgrade*.bin" 2>/dev/null | wc -l)
     local factory_files=$(find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | wc -l)
+    local itb_files=$(find "$target_dir" -name "*.itb" 2>/dev/null | wc -l)
     
     echo ""
     echo "📊 最终固件状态:"
@@ -5803,14 +5796,27 @@ EOF
         echo "  ❌ factory.img: 不存在"
     fi
     
+    if [ $itb_files -gt 0 ]; then
+        find "$target_dir" -name "*.itb" 2>/dev/null | head -1 | while read file; do
+            local size=$(ls -lh "$file" | awk '{print $5}')
+            echo "  🔷 FIT镜像: 存在 ($size) - $(basename "$file") [可用于恢复]"
+        done
+    fi
+    
     echo "----------------------------------------"
     
     if [ $success -eq 2 ]; then
         echo "🎉 双固件都已成功生成！"
     elif [ $success -eq 1 ]; then
         echo "⚠️ 只有一个固件生成，另一个可能丢失"
+        if [ $itb_files -gt 0 ]; then
+            echo "   💡 有FIT镜像可用作恢复"
+        fi
     else
         echo "❌ 两个固件都没有生成"
+        if [ $itb_files -gt 0 ]; then
+            echo "   💡 但有FIT镜像可用作恢复"
+        fi
     fi
     
     # 显示补丁状态总结
@@ -5853,10 +5859,11 @@ workflow_step26_check_artifacts() {
         local sysupgrade_count=0
         local initramfs_count=0
         local factory_count=0
+        local itb_count=0
         local other_count=0
         
         # 先收集所有文件，避免管道中的子shell问题
-        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.tar" -o -name "*.gz" \) 2>/dev/null | grep -v "sha256sums" | sort)
+        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" -o -name "*.tar" -o -name "*.gz" \) 2>/dev/null | grep -v "sha256sums" | sort)
         
         # 遍历所有文件
         while IFS= read -r file; do
@@ -5871,18 +5878,10 @@ workflow_step26_check_artifacts() {
                 echo "  ✅ $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
-                echo "    用途: 🚀 刷机用 - 这是最终固件，通过路由器 Web 界面或 sysupgrade 命令刷入"
+                echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
                 echo "    注释: *sysupgrade.bin - 刷机用"
                 echo ""
                 sysupgrade_count=$((sysupgrade_count + 1))
-            elif echo "$FILE_NAME" | grep -q "initramfs"; then
-                echo "  🔷 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🆘 恢复用 - 内存启动镜像，不写入闪存，用于恢复或测试"
-                echo "    注释: *initramfs-kernel.bin - 恢复用"
-                echo ""
-                initramfs_count=$((initramfs_count + 1))
             elif echo "$FILE_NAME" | grep -q "factory"; then
                 echo "  🏭 $FILE_NAME"
                 echo "    大小: $SIZE"
@@ -5891,6 +5890,23 @@ workflow_step26_check_artifacts() {
                 echo "    注释: *factory.img/*factory.bin - 原厂刷机用"
                 echo ""
                 factory_count=$((factory_count + 1))
+            elif echo "$FILE_NAME" | grep -q "initramfs"; then
+                if echo "$FILE_NAME" | grep -q "\.itb$"; then
+                    echo "  🔷 $FILE_NAME (FIT格式)"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🆘 FIT格式恢复镜像 - 用于支持FIT的引导加载程序"
+                    echo "    注释: *initramfs-fit-uImage.itb - 恢复用"
+                    itb_count=$((itb_count + 1))
+                else
+                    echo "  🔷 $FILE_NAME"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🆘 恢复用 - 内存启动镜像，不写入闪存"
+                    echo "    注释: *initramfs-kernel.bin - 恢复用"
+                    initramfs_count=$((initramfs_count + 1))
+                fi
+                echo ""
             elif echo "$FILE_NAME" | grep -q "kernel"; then
                 echo "  🔶 $FILE_NAME"
                 echo "    大小: $SIZE"
@@ -5908,11 +5924,14 @@ workflow_step26_check_artifacts() {
             elif echo "$FILE_NAME" | grep -q "sha256sums"; then
                 # 跳过校验和文件
                 continue
+            elif echo "$FILE_NAME" | grep -q "Packages\.gz"; then
+                # 跳过软件包索引文件
+                continue
             else
                 echo "  📄 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
-                echo "    用途: ❓ 其他固件文件"
+                echo "    用途: ❓ 其他文件"
                 echo ""
                 other_count=$((other_count + 1))
             fi
@@ -5922,60 +5941,90 @@ workflow_step26_check_artifacts() {
         echo ""
         echo "📊 固件统计:"
         echo "----------------------------------------"
-        echo "  ✅ sysupgrade.bin: $sysupgrade_count 个 - 🚀 **刷机用** (通过Web界面或sysupgrade命令刷入)"
-        echo "  🔷 initramfs-kernel.bin: $initramfs_count 个 - 🆘 **恢复用** (内存启动，用于恢复或测试)"
-        echo "  🏭 factory: $factory_count 个 - 📦 **原厂刷机用** (从原厂固件第一次刷入)"
+        echo "  ✅ sysupgrade.bin: $sysupgrade_count 个 - 🚀 **刷机用**"
+        echo "  🔷 initramfs-kernel.bin: $initramfs_count 个 - 🆘 **恢复用**"
+        echo "  🔷 FIT恢复镜像: $itb_count 个 - 🆘 **FIT格式恢复用**"
+        echo "  🏭 factory镜像: $factory_count 个 - 📦 **原厂刷机用**"
         echo "  📦 其他文件: $other_count 个"
         echo "----------------------------------------"
         echo ""
         
         # 重要提示
-        echo "🔔 重要提示:"
-        echo "  ✅ *sysupgrade.bin - **刷机用** (这是最终固件，通过路由器 Web 界面或 sysupgrade 命令刷入)"
-        echo "  🔷 *initramfs-kernel.bin - **恢复用** (内存启动镜像，不写入闪存，用于恢复或测试)"
-        echo "  🏭 *factory.img/*factory.bin - **原厂刷机用** (用于从原厂固件第一次刷入 OpenWrt)"
+        echo "🔔 固件类型说明:"
+        echo "  ✅ *sysupgrade.bin      - **刷机用** (已安装OpenWrt时升级)"
+        echo "  🔷 *initramfs-*.bin     - **恢复用** (内存启动，用于恢复)"
+        echo "  🔷 *initramfs-*.itb     - **FIT格式恢复** (适用于支持FIT的引导程序)"
+        echo "  🏭 *factory.img/*.bin   - **原厂刷机用** (从原厂固件第一次刷入)"
         echo ""
         
+        # 检测缺少的固件类型
+        local missing_types=""
         if [ $sysupgrade_count -eq 0 ]; then
-            echo "⚠️ 警告: 没有找到 sysupgrade 固件文件！"
-            echo "   编译可能不完整，请检查编译日志"
-            echo "   可能的原因:"
-            echo "   - 编译过程中出现错误"
-            echo "   - 内核模块问题导致固件生成失败"
-            echo "   - 磁盘空间不足"
-        else
-            echo "✅ 找到 $sysupgrade_count 个可刷机的 sysupgrade 固件"
-            echo ""
-            echo "📝 刷机说明:"
-            echo "   1. 下载 *sysupgrade.bin 文件"
-            echo "   2. 登录路由器 Web 界面 (LuCI)"
-            echo "   3. 进入 系统 -> 备份/升级"
-            echo "   4. 选择固件文件并点击'刷写固件'"
-            echo "   5. 或者使用命令行: sysupgrade -n /path/to/*sysupgrade.bin"
+            missing_types="$missing_types sysupgrade"
+        fi
+        if [ $factory_count -eq 0 ] && [ $initramfs_count -eq 0 ] && [ $itb_count -eq 0 ]; then
+            missing_types="$missing_types 恢复镜像"
         fi
         
-        # 显示实际找到的固件文件
-        if [ $sysupgrade_count -gt 0 ] || [ $factory_count -gt 0 ] || [ $initramfs_count -gt 0 ]; then
-            echo ""
-            echo "📋 实际找到的固件文件:"
-            echo "----------------------------------------"
+        if [ -n "$missing_types" ]; then
+            echo "⚠️ 警告: 缺少以下固件类型 -$missing_types"
+            echo "   编译可能不完整，但可用的固件文件如下:"
+        fi
+        
+        # 显示实际找到的可刷机固件文件
+        local flashable_count=0
+        echo ""
+        echo "📋 可刷机的固件文件:"
+        echo "----------------------------------------"
+        
+        # 显示所有可刷机的固件
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
+                local fname=$(basename "$file")
+                local fsize=$(ls -lh "$file" | awk '{print $5}')
+                local ftype=""
+                if [[ "$fname" == *"sysupgrade"* ]]; then
+                    ftype="[刷机用]"
+                elif [[ "$fname" == *"factory"* ]]; then
+                    ftype="[原厂刷机]"
+                fi
+                printf "  📌 %-60s %s %s\n" "$fname" "$fsize" "$ftype"
+                flashable_count=$((flashable_count + 1))
+            fi
+        done <<< "$all_files" | head -10
+        
+        if [ $flashable_count -eq 0 ]; then
+            echo "  ⚠️ 没有找到可刷机的固件文件"
             
-            # 显示所有找到的固件文件
+            # 尝试查找initramfs作为替代
             while IFS= read -r file; do
                 [ -z "$file" ] && continue
-                if [[ "$file" != *"sha256sums"* ]]; then
+                if [[ "$file" == *"initramfs"* ]]; then
                     local fname=$(basename "$file")
                     local fsize=$(ls -lh "$file" | awk '{print $5}')
-                    local fpath=$(echo "$file" | sed 's|^bin/targets/||')
-                    printf "  📄 %-50s %s\n" "$fname" "$fsize"
+                    printf "  🔷 %-60s %s [恢复用]\n" "$fname" "$fsize"
                 fi
-            done <<< "$all_files" | head -10
-            
-            local total_files=$(echo "$all_files" | wc -l)
-            if [ $total_files -gt 10 ]; then
-                echo "  ... 还有 $((total_files - 10)) 个文件未显示"
-            fi
-            echo "----------------------------------------"
+            done <<< "$all_files" | head -5
+        fi
+        
+        echo "----------------------------------------"
+        echo ""
+        
+        # 提供刷机建议
+        if [ $sysupgrade_count -gt 0 ]; then
+            echo "📝 刷机建议:"
+            echo "   如果您已经安装了OpenWrt，请使用 sysupgrade.bin 文件"
+            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin"
+        elif [ $factory_count -gt 0 ]; then
+            echo "📝 刷机建议:"
+            echo "   如果您是从原厂固件第一次刷入，请使用 factory.img 文件"
+            echo "   通过路由器原厂Web界面刷入"
+        elif [ $initramfs_count -gt 0 ] || [ $itb_count -gt 0 ]; then
+            echo "📝 刷机建议:"
+            echo "   没有找到sysupgrade或factory固件，但找到了initramfs恢复镜像"
+            echo "   initramfs是内存启动镜像，可用于恢复系统，但不能永久刷入"
+            echo "   如需永久刷入，需要先启动initramfs，然后在系统中刷入sysupgrade"
         fi
         
         echo "=========================================="
