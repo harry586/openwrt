@@ -3982,42 +3982,23 @@ workflow_step12_configure_feeds() {
 # ============================================
 #【build_firmware_main.sh-34】
 # ============================================
-# 编译前空间检查函数
+# 步骤13: 安装TurboACC包
+# 对应 firmware-build.yml 步骤13
 # ============================================
-pre_build_space_check() {
-    log "=== 编译前空间检查 ==="
+workflow_step13_install_turboacc() {
+    log "=== 步骤13: 安装 TurboACC 包 ==="
     
-    echo "当前目录: $(pwd)"
-    echo "构建目录: $BUILD_DIR"
+    set -e
+    trap 'echo "❌ 步骤13 失败，退出代码: $?"; exit 1' ERR
     
-    echo "=== 磁盘使用情况 ==="
-    df -h
+    install_turboacc_packages
     
-    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | awk '{print $1}') || echo "无法获取构建目录大小"
-    echo "构建目录大小: $build_dir_usage"
-    
-    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
-    local available_gb=$((available_space / 1024 / 1024))
-    echo "/mnt 可用空间: ${available_gb}G"
-    
-    local root_available_space=$(df / --output=avail | tail -1)
-    local root_available_gb=$((root_available_space / 1024 / 1024))
-    echo "/ 可用空间: ${root_available_gb}G"
-    
-    echo "=== 内存使用情况 ==="
-    free -h
-    
-    echo "=== CPU信息 ==="
-    echo "CPU核心数: $(nproc)"
-    
-    local estimated_space=15
-    if [ $available_gb -lt $estimated_space ]; then
-        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
-    else
-        log "✅ 磁盘空间充足: ${available_gb}G 可用"
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 安装TurboACC包失败"
+        exit 1
     fi
     
-    log "✅ 空间检查完成"
+    log "✅ 步骤13 完成"
 }
 #【build_firmware_main.sh-34-end】
 
@@ -4028,24 +4009,21 @@ pre_build_space_check() {
 # ============================================
 #【build_firmware_main.sh-35】
 # ============================================
-# 步骤14: 编译前空间检查
-# 对应 firmware-build.yml 步骤14
+# 安装TurboACC包函数
 # ============================================
-workflow_step14_pre_build_space_check() {
-    log "=== 步骤14: 编译前空间检查 ==="
+install_turboacc_packages() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    set -e
-    trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
+    log "=== 安装 TurboACC 包 ==="
     
-    # 调用空间检查函数
-    pre_build_space_check
+    ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
     
-    if [ $? -ne 0 ]; then
-        echo "❌ 错误: 编译前空间检查失败"
-        exit 1
-    fi
+    ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
+    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败"
+    ./scripts/feeds install -p turboacc kmod-fast-classifier || handle_error "安装kmod-fast-classifier失败"
     
-    log "✅ 步骤14 完成"
+    log "✅ TurboACC 包安装完成"
 }
 #【build_firmware_main.sh-35-end】
 
