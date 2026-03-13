@@ -4034,51 +4034,42 @@ install_turboacc_packages() {
 # ============================================
 #【build_firmware_main.sh-36】
 # ============================================
-# 步骤15: 智能配置生成
-# 对应 firmware-build.yml 步骤15
+# 编译前空间检查函数
 # ============================================
-workflow_step15_generate_config() {
-    local extra_packages="$1"
+pre_build_space_check() {
+    log "=== 编译前空间检查 ==="
     
-    log "=== 步骤15: 智能配置生成【优化版 - 最多2次尝试】 ==="
-    log "当前设备: $DEVICE"
-    log "当前目标: $TARGET"
-    log "当前子目标: $SUBTARGET"
+    echo "当前目录: $(pwd)"
+    echo "构建目录: $BUILD_DIR"
     
-    set -e
-    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
+    echo "=== 磁盘使用情况 ==="
+    df -h
     
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        log "✅ 从环境文件重新加载: DEVICE=$DEVICE, TARGET=$TARGET"
+    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | awk '{print $1}') || echo "无法获取构建目录大小"
+    echo "构建目录大小: $build_dir_usage"
+    
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    echo "/mnt 可用空间: ${available_gb}G"
+    
+    local root_available_space=$(df / --output=avail | tail -1)
+    local root_available_gb=$((root_available_space / 1024 / 1024))
+    echo "/ 可用空间: ${root_available_gb}G"
+    
+    echo "=== 内存使用情况 ==="
+    free -h
+    
+    echo "=== CPU信息 ==="
+    echo "CPU核心数: $(nproc)"
+    
+    local estimated_space=15
+    if [ $available_gb -lt $estimated_space ]; then
+        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
+    else
+        log "✅ 磁盘空间充足: ${available_gb}G 可用"
     fi
     
-    if [ -z "$DEVICE" ] && [ -n "$2" ]; then
-        DEVICE="$2"
-        log "⚠️ DEVICE为空，使用参数: $DEVICE"
-    fi
-    
-    local device_for_config="$DEVICE"
-    case "$DEVICE" in
-        ac42u|rt-ac42u)
-            device_for_config="asus_rt-ac42u"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        acrh17|rt-acrh17)
-            device_for_config="asus_rt-acrh17"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        *)
-            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-            ;;
-    esac
-    
-    cd "$BUILD_DIR" || handle_error "无法进入构建目录"
-    
-    # 调用 generate_config 函数
-    generate_config "$extra_packages" "$device_for_config"
-    
-    log "✅ 步骤15 完成"
+    log "✅ 空间检查完成"
 }
 #【build_firmware_main.sh-36-end】
 
@@ -4089,20 +4080,24 @@ workflow_step15_generate_config() {
 # ============================================
 #【build_firmware_main.sh-37】
 # ============================================
-# 步骤16: 验证USB配置
-# 对应 firmware-build.yml 步骤16
+# 步骤14: 编译前空间检查
+# 对应 firmware-build.yml 步骤14
 # ============================================
-workflow_step16_verify_usb() {
-    log "=== 步骤16: 验证USB配置（智能检测版） ==="
+workflow_step14_pre_build_space_check() {
+    log "=== 步骤14: 编译前空间检查 ==="
     
-    trap 'echo "⚠️ 步骤16 验证过程中出现错误，继续执行..."' ERR
+    set -e
+    trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
+    # 调用空间检查函数
+    pre_build_space_check
     
-    # 调用 verify_usb_config 函数
-    verify_usb_config
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 编译前空间检查失败"
+        exit 1
+    fi
     
-    log "✅ 步骤16 完成"
+    log "✅ 步骤14 完成"
 }
 #【build_firmware_main.sh-37-end】
 
