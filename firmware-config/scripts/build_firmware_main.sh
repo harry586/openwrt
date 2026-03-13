@@ -3423,41 +3423,19 @@ cleanup() {
 #【build_firmware_main.sh-24-end】
 
 #【build_firmware_main.sh-25】
-save_source_code_info() {
-    load_env
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+# ============================================
+# 步骤05: 安装基础工具
+# 对应 firmware-build.yml 步骤05
+# ============================================
+workflow_step05_install_basic_tools() {
+    log "=== 步骤05: 安装基础工具（优化版） ==="
     
-    log "=== 保存源代码信息 ==="
+    set -e
+    trap 'echo "❌ 步骤05 失败，退出代码: $?"; exit 1' ERR
     
-    local source_info_file="$REPO_ROOT/firmware-config/source-info.txt"
+    setup_environment
     
-    echo "=== 源代码信息 ===" > "$source_info_file"
-    echo "生成时间: $(date)" >> "$source_info_file"
-    echo "构建目录: $BUILD_DIR" >> "$source_info_file"
-    echo "仓库URL: $SELECTED_REPO_URL" >> "$source_info_file"
-    echo "分支: $SELECTED_BRANCH" >> "$source_info_file"
-    echo "目标: $TARGET" >> "$source_info_file"
-    echo "子目标: $SUBTARGET" >> "$source_info_file"
-    echo "设备: $DEVICE" >> "$source_info_file"
-    echo "配置模式: $CONFIG_MODE" >> "$source_info_file"
-    echo "编译器目录: $COMPILER_DIR" >> "$source_info_file"
-    
-    echo "" >> "$source_info_file"
-    echo "=== 目录结构 ===" >> "$source_info_file"
-    find . -maxdepth 2 -type d 2>/dev/null | sort >> "$source_info_file"
-    
-    echo "" >> "$source_info_file"
-    echo "=== 关键文件 ===" >> "$source_info_file"
-    local key_files=("Makefile" "feeds.conf.default" ".config" "rules.mk" "Config.in")
-    for file in "${key_files[@]}"; do
-        if [ -f "$file" ]; then
-            echo "$file: 存在 ($(ls -lh "$file" 2>/dev/null | awk '{print $5}' 2>/dev/null || echo '未知大小'))" >> "$source_info_file"
-        else
-            echo "$file: 不存在" >> "$source_info_file"
-        fi
-    done
-    
-    log "✅ 源代码信息已保存到: $source_info_file"
+    log "✅ 步骤05 完成"
 }
 #【build_firmware_main.sh-25-end】
 
@@ -3468,145 +3446,38 @@ save_source_code_info() {
 # ============================================
 #【build_firmware_main.sh-26】
 # ============================================
-# 步骤09: 编译源码自带工具链
-# 对应 firmware-build.yml 步骤09
+# 步骤06: 初始空间检查
+# 对应 firmware-build.yml 步骤06
 # ============================================
-workflow_step09_download_sdk() {
-    local device_name="$1"
-    
-    log "=== 步骤09: 编译源码自带工具链 ==="
+workflow_step06_initial_space_check() {
+    log "=== 步骤06: 初始空间检查 ==="
     
     set -e
-    trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤06 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
+    echo "=== 🚨 初始磁盘空间检查 ==="
     
-    # 加载环境变量
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-    fi
+    echo "📊 磁盘使用情况:"
+    df -h
     
-    log "📌 开始编译工具链..."
-    log "   源码类型: $SOURCE_REPO_TYPE"
-    log "   目标平台: $TARGET/$SUBTARGET"
-    log "   设备: $device_name"
+    AVAILABLE_SPACE=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
+    AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+    echo "可用空间: ${AVAILABLE_GB}G"
     
-    # 检查是否已经编译过工具链
-    if [ -d "staging_dir" ] && [ -f "staging_dir/host/bin/gcc" ]; then
-        log "  ✅ 工具链已存在，跳过编译"
-        COMPILER_DIR="$BUILD_DIR"
-        save_env
-        log "✅ 步骤09 完成"
-        return 0
-    fi
-    
-    # 步骤1: 更新feeds
-    log ""
-    log "🔄 步骤1: 更新feeds..."
-    ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
-        log "⚠️ feeds更新有警告，继续..."
-    }
-    
-    # 步骤2: 安装基础feed
-    log ""
-    log "🔄 步骤2: 安装基础feed..."
-    ./scripts/feeds install base > /tmp/build-logs/base_install.log 2>&1 || true
-    
-    # 步骤3: 准备编译工具链
-    log ""
-    log "🔄 步骤3: 配置工具链..."
-    
-    # 获取目标平台和子平台
-    local target="${TARGET:-ipq40xx}"
-    local subtarget="${SUBTARGET:-generic}"
-    
-    # 创建最小配置（只编译工具链）
-    cat > .config.toolchain << EOF
-CONFIG_TARGET_${target}=y
-CONFIG_TARGET_${target}_${subtarget}=y
-# 只编译工具链，不编译固件
-CONFIG_DEVEL=y
-CONFIG_TOOLCHAINOPTS=y
-# 禁用所有固件相关的配置
-CONFIG_TARGET_ROOTFS_INITRAMFS=n
-CONFIG_TARGET_ROOTFS_SQUASHFS=n
-CONFIG_TARGET_ROOTFS_EXT4FS=n
-CONFIG_TARGET_ROOTFS_JFFS2=n
-# 禁用内核编译（只编译工具链）
-CONFIG_KERNEL_NONE=y
-EOF
-    
-    # 使用最小配置
-    cp .config.toolchain .config
-    
-    # 运行defconfig
-    log "  运行 make defconfig..."
-    make defconfig > /tmp/build-logs/toolchain_defconfig.log 2>&1
-    
-    # 步骤4: 编译工具链
-    log ""
-    log "🔄 步骤4: 编译工具链..."
-    log "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-    log ""
-    
-    START_TIME=$(date +%s)
-    
-    # 先编译tools（基础工具）
-    log "  编译 tools (基础工具)..."
-    if make tools/compile -j$(nproc) V=s > /tmp/build-logs/tools_compile.log 2>&1; then
-        log "  ✅ tools编译完成"
+    if [ $AVAILABLE_GB -lt 20 ]; then
+        echo "⚠️ 警告: 初始磁盘空间可能不足 (当前${AVAILABLE_GB}G，建议至少20G)"
     else
-        log "  ⚠️ tools编译有警告，检查日志..."
-        tail -50 /tmp/build-logs/tools_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
+        echo "✅ 初始磁盘空间充足"
     fi
     
-    # 再编译toolchain（交叉编译工具链）
-    log "  编译 toolchain (交叉工具链)..."
-    if make toolchain/compile -j$(nproc) V=s > /tmp/build-logs/toolchain_compile.log 2>&1; then
-        log "  ✅ toolchain编译完成"
-    else
-        log "  ⚠️ toolchain编译有警告，检查日志..."
-        tail -50 /tmp/build-logs/toolchain_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
-    fi
+    echo "💻 CPU信息:"
+    echo "  CPU核心数: $(nproc)"
+    echo "  CPU型号: $(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs || echo '未知')"
     
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
+    echo "🧠 内存信息:"
+    free -h
     
-    log ""
-    log "✅ 工具链编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-    
-    # 验证工具链
-    log ""
-    log "🔍 验证工具链..."
-    
-    if [ -d "staging_dir" ]; then
-        log "  ✅ staging_dir目录存在"
-        
-        # 查找GCC编译器
-        GCC_FILE=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
-        
-        if [ -n "$GCC_FILE" ]; then
-            log "  ✅ GCC编译器已生成: $(basename "$GCC_FILE")"
-            GCC_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            log "     版本: $GCC_VERSION"
-        else
-            log "  ⚠️ GCC编译器未找到，但可能正在生成中"
-        fi
-        
-        # 统计工具链大小
-        TOOLCHAIN_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-        log "  📊 工具链大小: $TOOLCHAIN_SIZE"
-    else
-        log "  ❌ staging_dir目录不存在，工具链编译可能失败"
-        exit 1
-    fi
-    
-    # 保存工具链信息到环境变量
-    COMPILER_DIR="$BUILD_DIR"
-    save_env
-    
-    log "✅ 步骤09 完成"
+    log "✅ 步骤06 完成"
 }
 #【build_firmware_main.sh-26-end】
 
@@ -3617,183 +3488,18 @@ EOF
 # ============================================
 #【build_firmware_main.sh-27】
 # ============================================
-# 步骤10: 验证工具链编译结果
-# 对应 firmware-build.yml 步骤10
+# 步骤07: 创建构建目录
+# 对应 firmware-build.yml 步骤07
 # ============================================
-workflow_step10_verify_sdk() {
-    log "=== 步骤10: 验证工具链编译结果 ==="
+workflow_step07_create_build_dir() {
+    log "=== 步骤07: 创建构建目录 ==="
     
     set -e
-    trap 'echo "❌ 步骤10 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤07 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
+    create_build_dir
     
-    # 加载环境变量
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-    fi
-    
-    log "🔍 检查工具链编译结果..."
-    
-    # 检查关键目录
-    log ""
-    log "📁 检查关键目录:"
-    
-    local missing_items=0
-    local warning_items=0
-    
-    # 检查staging_dir
-    if [ -d "staging_dir" ]; then
-        log "  ✅ staging_dir: 存在"
-        
-        # 检查host目录
-        if [ -d "staging_dir/host" ]; then
-            log "    ✅ host工具: 存在"
-            HOST_BIN_COUNT=$(find staging_dir/host/bin -type f 2>/dev/null | wc -l)
-            log "       host工具数量: $HOST_BIN_COUNT"
-            
-            # 列出关键host工具
-            local host_tools="make sed awk grep patch tar gzip bzip2"
-            for tool in $host_tools; do
-                if [ -f "staging_dir/host/bin/$tool" ] || [ -f "staging_dir/host/bin/$tool.exe" ]; then
-                    log "      ✅ $tool: 存在"
-                else
-                    log "      ⚠️ $tool: 未找到"
-                    warning_items=$((warning_items + 1))
-                fi
-            done
-        else
-            log "    ❌ host工具: 不存在"
-            missing_items=$((missing_items + 1))
-        fi
-        
-        # 检查target目录
-        TARGET_DIRS=$(find staging_dir -maxdepth 1 -type d -name "target-*" 2>/dev/null)
-        if [ -n "$TARGET_DIRS" ]; then
-            log "    ✅ target工具链: 存在"
-            for target_dir in $TARGET_DIRS; do
-                log "       📁 $(basename "$target_dir")"
-                
-                # 检查bin目录
-                if [ -d "$target_dir/bin" ]; then
-                    BIN_COUNT=$(find "$target_dir/bin" -type f 2>/dev/null | wc -l)
-                    log "         工具数量: $BIN_COUNT"
-                    
-                    # 检查关键编译工具
-                    local compile_tools="gcc g++ ar as ld objcopy strip"
-                    for tool in $compile_tools; do
-                        if [ -f "$target_dir/bin/"*"-$tool" ] || [ -f "$target_dir/bin/$tool" ]; then
-                            log "          ✅ $tool: 存在"
-                        fi
-                    done
-                fi
-            done
-        else
-            log "    ❌ target工具链: 不存在"
-            missing_items=$((missing_items + 1))
-        fi
-    else
-        log "  ❌ staging_dir: 不存在"
-        missing_items=$((missing_items + 1))
-    fi
-    
-    # 检查工具链GCC
-    log ""
-    log "🔧 检查GCC编译器:"
-    
-    GCC_FILES=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null)
-    GCC_COUNT=$(echo "$GCC_FILES" | wc -l)
-    
-    if [ $GCC_COUNT -gt 0 ]; then
-        log "  ✅ 找到 $GCC_COUNT 个GCC编译器"
-        
-        # 显示第一个GCC的信息
-        FIRST_GCC=$(echo "$GCC_FILES" | head -1)
-        log "  📌 示例: $(basename "$FIRST_GCC")"
-        log "     路径: $FIRST_GCC"
-        
-        # 检查GCC版本
-        if [ -x "$FIRST_GCC" ]; then
-            GCC_VERSION=$("$FIRST_GCC" --version 2>&1 | head -1)
-            log "     版本: $GCC_VERSION"
-            
-            # 检查是否为目标平台编译器
-            if [[ "$FIRST_GCC" == *"$TARGET"* ]] || [[ "$FIRST_GCC" == *"openwrt"* ]]; then
-                log "     ✅ 是目标平台交叉编译器"
-            fi
-        fi
-    else
-        log "  ❌ 未找到GCC编译器"
-        missing_items=$((missing_items + 1))
-    fi
-    
-    # 检查关键头文件
-    log ""
-    log "📋 检查关键头文件:"
-    
-    KERNEL_HEADERS=$(find staging_dir -name "linux" -type d 2>/dev/null | grep -E "include/linux$" | head -1)
-    if [ -n "$KERNEL_HEADERS" ]; then
-        log "  ✅ 内核头文件: 存在"
-        log "     📁 $KERNEL_HEADERS"
-        
-        # 检查几个关键头文件
-        local headers="kernel.h types.h fs.h"
-        for header in $headers; do
-            if [ -f "$KERNEL_HEADERS/$header" ]; then
-                log "      ✅ $header: 存在"
-            fi
-        done
-    else
-        log "  ⚠️ 内核头文件: 未找到（可能正在生成）"
-        warning_items=$((warning_items + 1))
-    fi
-    
-    # 检查库文件
-    log ""
-    log "📚 检查基础库文件:"
-    
-    LIBS=$(find staging_dir -name "libc.so" -o -name "libgcc_s.so" -o -name "libstdc++.so" 2>/dev/null | head -5)
-    if [ -n "$LIBS" ]; then
-        log "  ✅ 基础库文件: 存在"
-        echo "$LIBS" | while read lib; do
-            log "     📄 $(basename "$lib")"
-        done
-    else
-        log "  ⚠️ 基础库文件: 未找到"
-        warning_items=$((warning_items + 1))
-    fi
-    
-    # 统计工具链大小
-    log ""
-    log "📊 工具链统计:"
-    if [ -d "staging_dir" ]; then
-        TOTAL_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-        log "  总大小: $TOTAL_SIZE"
-        
-        HOST_SIZE=$(du -sh staging_dir/host 2>/dev/null | awk '{print $1}' || echo "0B")
-        log "  host工具: $HOST_SIZE"
-        
-        TARGET_SIZE=$(du -sh staging_dir/target-* 2>/dev/null | awk '{print $1}' || echo "0B")
-        log "  target工具链: $TARGET_SIZE"
-    fi
-    
-    # 根据检查结果决定是否继续
-    log ""
-    if [ $missing_items -eq 0 ]; then
-        if [ $warning_items -eq 0 ]; then
-            log "✅✅✅ 工具链验证完全通过，所有组件都存在 ✅✅✅"
-        else
-            log "✅ 工具链验证通过，但有 $warning_items 个警告（不影响编译）"
-        fi
-        return 0
-    else
-        log "❌ 工具链验证失败，缺少 $missing_items 个关键组件"
-        log "   请检查工具链编译日志: /tmp/build-logs/tools_compile.log 和 /tmp/build-logs/toolchain_compile.log"
-        exit 1
-    fi
-    
-    log "✅ 步骤10 完成"
+    log "✅ 步骤07 完成"
 }
 #【build_firmware_main.sh-27-end】
 
@@ -3803,20 +3509,23 @@ workflow_step10_verify_sdk() {
 #【firmware-build.yml-12】
 # ============================================
 #【build_firmware_main.sh-28】
-workflow_step12_configure_feeds() {
-    log "=== 步骤12: 配置Feeds ==="
+# ============================================
+# 步骤08: 初始化构建环境
+# 对应 firmware-build.yml 步骤08
+# ============================================
+workflow_step08_initialize_build_env() {
+    local device_name="$1"
+    local version_selection="$2"
+    local config_mode="$3"
+    
+    log "=== 步骤08: 初始化构建环境 ==="
     
     set -e
-    trap 'echo "❌ 步骤12 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
     
-    configure_feeds
+    initialize_build_env "$device_name" "$version_selection" "$config_mode"
     
-    if [ $? -ne 0 ]; then
-        echo "❌ 错误: 配置Feeds失败"
-        exit 1
-    fi
-    
-    log "✅ 步骤12 完成"
+    log "✅ 步骤08 完成"
 }
 #【build_firmware_main.sh-28-end】
 
@@ -3826,20 +3535,26 @@ workflow_step12_configure_feeds() {
 #【firmware-build.yml-13】
 # ============================================
 #【build_firmware_main.sh-29】
-workflow_step13_install_turboacc() {
-    log "=== 步骤13: 安装 TurboACC 包 ==="
-    
+# ============================================
+# 步骤08混合模式: 初始化构建环境（混合模式）
+# 对应 firmware-build.yml 步骤08混合模式
+# ============================================
+workflow_step08_initialize_build_env_hybrid() {
+    local device_name="$1"
+    local version_selection="$2"
+    local config_mode="$3"
+    local manual_target="$4"
+    local manual_subtarget="$5"
+
+    log "=== 步骤08: 初始化构建环境（混合模式：优先使用手动输入） ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
+
     set -e
-    trap 'echo "❌ 步骤13 失败，退出代码: $?"; exit 1' ERR
-    
-    install_turboacc_packages
-    
-    if [ $? -ne 0 ]; then
-        echo "❌ 错误: 安装TurboACC包失败"
-        exit 1
-    fi
-    
-    log "✅ 步骤13 完成"
+    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
+
+    initialize_build_env "$device_name" "$version_selection" "$config_mode" "$manual_target" "$manual_subtarget"
+
+    log "✅ 步骤08 完成"
 }
 #【build_firmware_main.sh-29-end】
 
