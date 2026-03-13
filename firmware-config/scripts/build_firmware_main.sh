@@ -5213,7 +5213,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（补丁自动重试+跳过机制） ==="
+    log "=== 步骤25: 编译固件（补丁自动跳过+编译失败检测机制） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5253,96 +5253,27 @@ workflow_step25_build_firmware() {
     fi
     
     # ============================================
-    # 补丁失败自动跳过机制
+    # 编译前检查：查看是否有失败的补丁
     # ============================================
-    log "🔧 检查并处理可能失败的补丁（自动重试3次，失败则跳过）..."
+    log "🔧 检查可能失败的补丁..."
     
-    # 查找所有内核构建目录
-    local kernel_dirs=$(find "build_dir" -maxdepth 2 -type d -name "linux-*" 2>/dev/null)
-    local need_rebuild=0
-    
-    for kernel_dir in $kernel_dirs; do
-        if [ ! -d "$kernel_dir" ]; then
-            continue
-        fi
+    # 查找所有内核构建目录中是否有.rej文件
+    local rej_files=$(find build_dir -name "*.rej" 2>/dev/null)
+    if [ -n "$rej_files" ]; then
+        log "  ⚠️ 发现补丁失败，将在编译前处理"
         
-        # 检查是否有补丁失败的标记（.rej文件）
-        local rej_files=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
-        
-        if [ -n "$rej_files" ]; then
-            log "  ⚠️ 发现补丁失败: $kernel_dir"
-            need_rebuild=1
-            
-            # 显示失败的补丁
-            echo "$rej_files" | while read rej_file; do
-                local src_file=$(echo "$rej_file" | sed 's/\.rej$//')
-                local patch_name=$(basename "$rej_file" .rej).patch
-                log "    ❌ 补丁失败: $patch_name -> $(basename "$src_file")"
-            done
-            
-            # 获取平台名称
-            local platform=$(basename "$kernel_dir" | sed 's/linux-//' | cut -d'_' -f1)
-            local kernel_ver=$(basename "$kernel_dir" | grep -oP 'linux-\K[0-9]+\.[0-9]+' || echo "5.15")
-            
-            # 创建补丁备份目录
-            local patch_backup_dir="target/linux/$platform/patches-${kernel_ver}.disabled"
-            mkdir -p "$patch_backup_dir"
-            
-            # 查找所有失败的补丁
-            find "$kernel_dir" -name "*.rej" 2>/dev/null | while read rej_file; do
-                local base_name=$(basename "$rej_file" .rej)
-                local patch_file="target/linux/$platform/patches-${kernel_ver}/$base_name.patch"
-                
-                # 如果补丁文件存在，移动到disabled目录
-                if [ -f "$patch_file" ]; then
-                    log "    🔸 禁用补丁: $base_name.patch"
-                    mv "$patch_file" "$patch_backup_dir/"
-                fi
-            done
-            
-            log "  ✅ 已禁用失败的补丁，将重新编译内核"
-        fi
-    done
-    
-    # 如果有失败的补丁，重新编译内核
-    if [ $need_rebuild -eq 1 ]; then
-        log "🔄 清理并重新编译内核..."
+        # 显示失败的补丁
+        echo "$rej_files" | while read rej_file; do
+            log "    ❌ 补丁失败: $(basename "$rej_file" .rej).patch"
+        done
         
         # 清理所有内核构建目录
+        log "  🔧 清理内核构建目录..."
         rm -rf build_dir/linux-*
+        rm -rf staging_dir/target-*/.stamp_target_*
         
-        # 清理staging_dir中的内核相关stamp文件
-        find staging_dir -name ".stamp_target_*" -exec rm -f {} \;
-        
-        # 重新准备内核
-        if make target/linux/prepare V=s >> /tmp/build-logs/kernel_prepare.log 2>&1; then
-            log "✅ 内核准备完成（已跳过失败补丁）"
-        else
-            log "⚠️ 内核准备有警告，但继续"
-        fi
+        log "  ✅ 已清理，将重新编译"
     fi
-    
-    # ============================================
-    # 创建补丁状态报告
-    # ============================================
-    local patch_report="$BUILD_DIR/.patch_status.txt"
-    echo "=== 补丁状态报告 $(date) ===" > "$patch_report"
-    echo "" >> "$patch_report"
-    
-    local disabled_patches=$(find target/linux -type d -name "patches-*.disabled" 2>/dev/null)
-    if [ -n "$disabled_patches" ]; then
-        echo "⚠️ 以下补丁被禁用（自动跳过）：" >> "$patch_report"
-        for disabled_dir in $disabled_patches; do
-            echo "  📁 $disabled_dir" >> "$patch_report"
-            find "$disabled_dir" -name "*.patch" 2>/dev/null | while read patch; do
-                echo "    ❌ $(basename "$patch")" >> "$patch_report"
-            done
-        done
-    else
-        echo "✅ 所有补丁都成功应用" >> "$patch_report"
-    fi
-    
-    log "📊 补丁状态报告已保存: $patch_report"
     
     # ============================================
     # 设置文件描述符限制
@@ -5398,15 +5329,6 @@ while true; do
                 backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
                 echo "$(date): 备份 itb: $(basename "$file")" >> "$LOG_FILE"
-            fi
-        done
-        
-        # 查找.new临时文件
-        find "$tmp_dir" -name "*.new" 2>/dev/null | while read file; do
-            if [ -f "$file" ]; then
-                backup="$PROTECT_DIR/$(basename "$file").backup"
-                cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份临时文件: $(basename "$file")" >> "$LOG_FILE"
             fi
         done
     done
@@ -5486,26 +5408,6 @@ find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
             ITB_FOUND=1
             ITB_FILE="$TARGET_DIR/$filename"
         fi
-    elif [[ "$filename" == *.new ]]; then
-        # 处理.new文件
-        base_name=$(echo "$filename" | sed 's/.new$//')
-        if [[ "$base_name" == *"factory"* ]]; then
-            if [ ! -f "$TARGET_DIR/$base_name" ] && [ ! -f "$TARGET_DIR/${base_name}.img" ]; then
-                echo "  ✅ 从.new恢复 factory: $filename -> $base_name"
-                cp -f "$backup" "$TARGET_DIR/$base_name"
-                RECOVERED=$((RECOVERED + 1))
-                FACTORY_FOUND=1
-                FACTORY_FILE="$TARGET_DIR/$base_name"
-            fi
-        elif [[ "$base_name" == *"sysupgrade"* ]]; then
-            if [ ! -f "$TARGET_DIR/$base_name" ]; then
-                echo "  ✅ 从.new恢复 sysupgrade: $filename -> $base_name"
-                cp -f "$backup" "$TARGET_DIR/$base_name"
-                RECOVERED=$((RECOVERED + 1))
-                SYSUPGRADE_FOUND=1
-                SYSUPGRADE_FILE="$TARGET_DIR/$base_name"
-            fi
-        fi
     fi
 done
 
@@ -5551,35 +5453,13 @@ for tmp_dir in $TMP_DIRS; do
     fi
 done
 
-# 3. 如果sysupgrade不存在，尝试用initramfs或itb
-if [ $SYSUPGRADE_FOUND -eq 0 ] && [ $ITB_FOUND -eq 1 ]; then
-    echo "🔧 sysupgrade不存在，itb可用作恢复"
-    SYSUPGRADE_FILE="$ITB_FILE"
-    SYSUPGRADE_FOUND=1
-fi
-
-# 4. 如果factory不存在，尝试用sysupgrade转换
-if [ $FACTORY_FOUND -eq 0 ] && [ $SYSUPGRADE_FOUND -eq 1 ] && [ -n "$SYSUPGRADE_FILE" ]; then
-    echo "🔧 factory不存在，复制 sysupgrade 作为 factory"
-    factory_name=$(basename "$SYSUPGRADE_FILE" | sed 's/sysupgrade\.bin$/factory.img/')
-    if [ "$factory_name" = "$(basename "$SYSUPGRADE_FILE")" ]; then
-        # 如果替换失败，使用原文件名加.img后缀
-        factory_name="$(basename "$SYSUPGRADE_FILE" .bin).img"
-    fi
-    cp -f "$SYSUPGRADE_FILE" "$TARGET_DIR/$factory_name"
-    FACTORY_FOUND=1
-    FACTORY_FILE="$TARGET_DIR/$factory_name"
-    RECOVERED=$((RECOVERED + 1))
-    echo "  ✅ 创建 factory: $factory_name"
-fi
-
-# 5. 创建sha256sum
+# 3. 创建sha256sum
 if [ -n "$SYSUPGRADE_FILE" ] && [ -f "$SYSUPGRADE_FILE" ]; then
     (cd "$TARGET_DIR" && sha256sum "$(basename "$SYSUPGRADE_FILE")" > "$(basename "$SYSUPGRADE_FILE").sha256sum")
     echo "  ✅ 创建 sha256sum"
 fi
 
-# 6. 最终检查
+# 4. 最终检查
 echo ""
 echo "📊 最终检查:"
 if [ -f "$SYSUPGRADE_FILE" ]; then
@@ -5633,7 +5513,6 @@ EOF
     echo "  文件描述符限制: $(ulimit -n)"
     echo "  并行优化: $enable_parallel"
     echo "  源码类型: $SOURCE_REPO_TYPE"
-    echo "  补丁状态: $(find target/linux -name "*.disabled" 2>/dev/null | wc -l) 个补丁被禁用"
     
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         echo ""
@@ -5660,9 +5539,11 @@ EOF
         
         START_TIME=$(date +%s)
         
-        # 编译第一阶段
+        # 编译第一阶段 - 捕获退出码
+        set +e  # 临时关闭errexit，以便捕获退出码
         make -j$MAKE_JOBS V=s 2>&1 | tee build_phase1.log
         PHASE1_EXIT_CODE=${PIPESTATUS[0]}
+        set -e  # 重新开启errexit
         
         PHASE1_END=$(date +%s)
         PHASE1_DURATION=$((PHASE1_END - START_TIME))
@@ -5670,6 +5551,31 @@ EOF
         echo ""
         echo "✅ 第一阶段完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
         echo "   退出代码: $PHASE1_EXIT_CODE"
+        
+        # ============================================
+        # 检查第一阶段是否失败
+        # ============================================
+        if [ $PHASE1_EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "❌❌❌ 第一阶段编译失败 (退出码: $PHASE1_EXIT_CODE) ❌❌❌"
+            echo ""
+            echo "🔍 最后50行错误日志:"
+            tail -50 build_phase1.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || cat build_phase1.log | tail -50
+            
+            # 停止保护脚本
+            kill $protect_pid 2>/dev/null || true
+            
+            # 执行强制恢复，看看有没有部分生成的固件
+            echo ""
+            echo "🔧 尝试恢复可能的部分固件..."
+            bash "$recover_script" "$protect_dir" "$BUILD_DIR"
+            
+            # 清理
+            rm -rf "$protect_dir" 2>/dev/null || true
+            
+            log "❌ 编译失败，退出"
+            exit $PHASE1_EXIT_CODE
+        fi
         
         # ============================================
         # 第二阶段前：备份所有临时固件文件
@@ -5703,9 +5609,11 @@ EOF
         
         PHASE2_START=$(date +%s)
         
-        # 第二阶段强制单线程
+        # 第二阶段强制单线程 - 捕获退出码
+        set +e
         make -j1 V=s 2>&1 | tee -a build_phase2.log
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
         
         PHASE2_END=$(date +%s)
         PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
@@ -5728,8 +5636,11 @@ EOF
         
         START_TIME=$(date +%s)
         
+        # 单线程编译 - 捕获退出码
+        set +e
         make -j1 V=s 2>&1 | tee build.log
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
         
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
@@ -5746,21 +5657,19 @@ EOF
     log "🔧 双固件保护已停止"
     
     # ============================================
-    # 检查编译结果并强制恢复
+    # 检查编译结果
     # ============================================
     if [ $BUILD_EXIT_CODE -ne 0 ]; then
         echo ""
         echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
         echo ""
         echo "🔍 最后50行错误日志:"
-        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
-        echo ""
-        echo "📝 完整日志请查看: build.log"
+        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || tail -50 build.log
     fi
     
-    # 无论成功失败，都执行强制恢复
+    # 执行强制恢复
     echo ""
-    echo "🔧 执行强制恢复，确保双固件存在..."
+    echo "🔧 执行强制恢复，查找固件..."
     bash "$recover_script" "$protect_dir" "$BUILD_DIR"
     
     # ============================================
@@ -5775,13 +5684,11 @@ EOF
     echo "📊 最终固件状态:"
     echo "----------------------------------------"
     
-    local success=0
     if [ $sysupgrade_files -gt 0 ]; then
         find "$target_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
             local size=$(ls -lh "$file" | awk '{print $5}')
             echo "  ✅ sysupgrade.bin: 存在 ($size) - $(basename "$file")"
         done
-        success=$((success + 1))
     else
         echo "  ❌ sysupgrade.bin: 不存在"
     fi
@@ -5791,7 +5698,6 @@ EOF
             local size=$(ls -lh "$file" | awk '{print $5}')
             echo "  ✅ factory.img: 存在 ($size) - $(basename "$file")"
         done
-        success=$((success + 1))
     else
         echo "  ❌ factory.img: 不存在"
     fi
@@ -5805,32 +5711,33 @@ EOF
     
     echo "----------------------------------------"
     
-    if [ $success -eq 2 ]; then
-        echo "🎉 双固件都已成功生成！"
-    elif [ $success -eq 1 ]; then
-        echo "⚠️ 只有一个固件生成，另一个可能丢失"
-        if [ $itb_files -gt 0 ]; then
-            echo "   💡 有FIT镜像可用作恢复"
+    # 根据编译结果给出总结
+    if [ $BUILD_EXIT_CODE -eq 0 ]; then
+        if [ $sysupgrade_files -gt 0 ] && [ $factory_files -gt 0 ]; then
+            echo "🎉 编译成功！双固件都已生成"
+        elif [ $sysupgrade_files -gt 0 ]; then
+            echo "⚠️ 编译完成，但只有sysupgrade固件"
+        elif [ $factory_files -gt 0 ]; then
+            echo "⚠️ 编译完成，但只有factory固件"
+        else
+            echo "❌ 编译完成但没有找到任何固件"
         fi
     else
-        echo "❌ 两个固件都没有生成"
-        if [ $itb_files -gt 0 ]; then
-            echo "   💡 但有FIT镜像可用作恢复"
+        echo "❌ 编译失败，退出码: $BUILD_EXIT_CODE"
+        if [ $sysupgrade_files -gt 0 ] || [ $factory_files -gt 0 ] || [ $itb_files -gt 0 ]; then
+            echo "   ⚠️ 但有部分固件生成，可能可用"
         fi
-    fi
-    
-    # 显示补丁状态总结
-    local disabled_count=$(find target/linux -type d -name "patches-*.disabled" 2>/dev/null | wc -l)
-    if [ $disabled_count -gt 0 ]; then
-        echo ""
-        echo "⚠️ 补丁状态: $disabled_count 个补丁目录被禁用"
-        echo "   查看详细报告: $patch_report"
     fi
     
     # 清理
     rm -rf "$protect_dir" 2>/dev/null || true
     
     log "✅ 步骤25 完成"
+    
+    # 如果编译失败，退出
+    if [ $BUILD_EXIT_CODE -ne 0 ]; then
+        exit $BUILD_EXIT_CODE
+    fi
 }
 #【build_firmware_main.sh-38-end】
 
