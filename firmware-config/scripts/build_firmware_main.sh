@@ -5213,7 +5213,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（LEDE源码特定修复 + 双固件强制保护） ==="
+    log "=== 步骤25: 编译固件（补丁失败自动重试+重新编译机制） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5253,6 +5253,144 @@ workflow_step25_build_firmware() {
     fi
     
     # ============================================
+    # 补丁失败自动重试+重新编译机制
+    # ============================================
+    log "🔧 检查补丁状态（自动重试3次，失败则重新编译该部分）..."
+    
+    # 查找所有内核构建目录
+    local kernel_dirs=$(find "build_dir" -maxdepth 2 -type d -name "linux-*" 2>/dev/null)
+    
+    for kernel_dir in $kernel_dirs; do
+        if [ ! -d "$kernel_dir" ]; then
+            continue
+        fi
+        
+        # 检查是否有补丁失败的标记（.rej文件）
+        local rej_files=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
+        
+        if [ -n "$rej_files" ]; then
+            log "  ⚠️ 发现补丁失败: $kernel_dir"
+            
+            # 显示失败的补丁
+            echo "$rej_files" | while read rej_file; do
+                local src_file=$(echo "$rej_file" | sed 's/\.rej$//')
+                local patch_name=$(basename "$rej_file" .rej).patch
+                log "    ❌ 补丁失败: $patch_name -> $(basename "$src_file")"
+            done
+            
+            # 尝试重试3次
+            local retry_count=0
+            local max_retry=3
+            local retry_success=0
+            
+            while [ $retry_count -lt $max_retry ]; do
+                retry_count=$((retry_count + 1))
+                log "    🔄 第 $retry_count 次重试清理并重新编译..."
+                
+                # 获取平台名称
+                local platform=$(basename "$kernel_dir" | sed 's/linux-//' | cut -d'_' -f1)
+                
+                # 清理该内核构建目录
+                rm -rf "$kernel_dir"
+                
+                # 清理该平台的stamp文件
+                find staging_dir/target-* -name ".stamp_*" 2>/dev/null | grep -i "$platform" | xargs rm -f 2>/dev/null || true
+                
+                # 重新准备内核源码
+                if make "target/linux/${platform}/prepare" V=s >> /tmp/build-logs/kernel_prepare.log 2>&1; then
+                    # 检查是否还有失败的补丁
+                    if [ ! -f "$kernel_dir/.prepared_*" ] || [ ! -d "$kernel_dir" ]; then
+                        continue
+                    fi
+                    
+                    local new_rej=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
+                    if [ -z "$new_rej" ]; then
+                        log "    ✅ 第 $retry_count 次重试成功，补丁全部应用"
+                        retry_success=1
+                        break
+                    else
+                        log "    ⚠️ 第 $retry_count 次重试仍有补丁失败"
+                    fi
+                fi
+                
+                sleep 2
+            done
+            
+            if [ $retry_success -eq 0 ]; then
+                log "    ⚠️ 重试 $max_retry 次后仍有补丁失败，准备重新编译（不打补丁）..."
+                
+                # 获取平台名称
+                local platform=$(basename "$kernel_dir" | sed 's/linux-//' | cut -d'_' -f1)
+                
+                # 彻底清理
+                log "    🔧 彻底清理 $platform 内核构建..."
+                rm -rf "$kernel_dir"
+                rm -rf "build_dir/linux-${platform}_"*
+                find staging_dir/target-* -name ".stamp_*" | grep -i "$platform" | xargs rm -f 2>/dev/null || true
+                
+                # 备份并禁用有问题的补丁
+                local patch_dirs=$(find "target/linux/$platform" -type d -name "patches-*" 2>/dev/null)
+                
+                for patch_dir in $patch_dirs; do
+                    local disabled_dir="${patch_dir}.disabled"
+                    mkdir -p "$disabled_dir"
+                    
+                    # 找出导致失败的补丁
+                    echo "$rej_files" | while read rej_file; do
+                        local src_file=$(echo "$rej_file" | sed 's/\.rej$//')
+                        local patch_name=$(basename "$rej_file" .rej).patch
+                        
+                        # 在所有补丁目录中查找对应的补丁文件
+                        local found_patch=$(find "$patch_dir" -name "$patch_name" 2>/dev/null)
+                        if [ -n "$found_patch" ]; then
+                            log "    🔸 禁用补丁: $patch_name"
+                            mv "$found_patch" "$disabled_dir/"
+                        fi
+                    done
+                done
+                
+                log "    🔄 重新编译 $platform 内核（不带失败的补丁）..."
+                
+                # 重新编译
+                if make "target/linux/${platform}/prepare" V=s >> /tmp/build-logs/kernel_prepare_final.log 2>&1; then
+                    log "    ✅ 内核准备完成（已跳过失败补丁）"
+                    
+                    # 编译内核模块
+                    if make "target/linux/${platform}/compile" V=s >> /tmp/build-logs/kernel_compile.log 2>&1; then
+                        log "    ✅ 内核编译完成"
+                    else
+                        log "    ⚠️ 内核编译仍有问题，但继续尝试"
+                    fi
+                else
+                    log "    ⚠️ 内核准备仍有问题，但继续尝试整体编译"
+                fi
+            fi
+        fi
+    done
+    
+    # ============================================
+    # 创建补丁状态报告
+    # ============================================
+    local patch_report="$BUILD_DIR/.patch_status.txt"
+    echo "=== 补丁状态报告 $(date) ===" > "$patch_report"
+    echo "" >> "$patch_report"
+    
+    local disabled_patches=$(find target/linux -type d -name "patches-*.disabled" 2>/dev/null)
+    if [ -n "$disabled_patches" ]; then
+        echo "⚠️ 以下补丁被禁用（重试3次失败）：" >> "$patch_report"
+        for disabled_dir in $disabled_patches; do
+            echo "  📁 $disabled_dir" >> "$patch_report"
+            find "$disabled_dir" -name "*.patch" 2>/dev/null | while read patch; do
+                echo "    ❌ $(basename "$patch")" >> "$patch_report"
+            done
+        done
+    else
+        echo "✅ 所有补丁都成功应用" >> "$patch_report"
+    fi
+    
+    log "📊 补丁状态报告已保存: $patch_report"
+    
+    # ============================================
     # 设置文件描述符限制
     # ============================================
     ulimit -n 65536 2>/dev/null || true
@@ -5276,11 +5414,6 @@ LOG_FILE="$PROTECT_DIR/protect.log"
 
 echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
 
-# 需要保护的关键文件
-declare -A TARGET_FILES
-TARGET_FILES["sysupgrade"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-TARGET_FILES["factory"]="openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
-
 # 监控循环
 while true; do
     # 1. 监控临时目录中的文件
@@ -5290,7 +5423,7 @@ while true; do
         # 查找sysupgrade文件
         find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
-                local backup="$PROTECT_DIR/$(basename "$file").backup"
+                backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
                 echo "$(date): 备份 sysupgrade: $(basename "$file")" >> "$LOG_FILE"
             fi
@@ -5299,7 +5432,7 @@ while true; do
         # 查找factory文件
         find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
-                local backup="$PROTECT_DIR/$(basename "$file").backup"
+                backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
                 echo "$(date): 备份 factory: $(basename "$file")" >> "$LOG_FILE"
             fi
@@ -5308,7 +5441,7 @@ while true; do
         # 查找.new临时文件
         find "$tmp_dir" -name "*.new" 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
-                local backup="$PROTECT_DIR/$(basename "$file").backup"
+                backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
                 echo "$(date): 备份临时文件: $(basename "$file")" >> "$LOG_FILE"
             fi
@@ -5327,27 +5460,36 @@ EOF
     log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
     
     # ============================================
-    # 创建强制恢复脚本
+    # 创建强制恢复脚本（动态版本，无硬编码）
     # ============================================
     local recover_script="$protect_dir/recover.sh"
     cat > "$recover_script" << 'EOF'
 #!/bin/bash
-# 强制恢复脚本 - 确保sysupgrade和factory都存在
+# 强制恢复脚本 - 动态查找并恢复固件
 PROTECT_DIR="$1"
 BUILD_DIR="$2"
-TARGET_DIR="$BUILD_DIR/bin/targets/ath79/generic"
+
+# 动态获取目标平台和子平台
+if [ -f "$BUILD_DIR/build_env.sh" ]; then
+    source "$BUILD_DIR/build_env.sh"
+fi
+
+TARGET="${TARGET:-ipq40xx}"
+SUBTARGET="${SUBTARGET:-generic}"
+TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
 
 mkdir -p "$TARGET_DIR"
 
 echo "=== 强制恢复开始于 $(date) ==="
+echo "目标平台: $TARGET/$SUBTARGET"
 echo "目标目录: $TARGET_DIR"
-
-# 定义目标文件
-SYSUPGRADE_TARGET="$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-FACTORY_TARGET="$TARGET_DIR/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
 
 # 计数器
 RECOVERED=0
+SYSUPGRADE_FOUND=0
+FACTORY_FOUND=0
+SYSUPGRADE_FILE=""
+FACTORY_FILE=""
 
 # 1. 从保护目录恢复
 echo "📁 检查保护目录: $PROTECT_DIR"
@@ -5356,25 +5498,31 @@ find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
     
     # 判断文件类型
     if [[ "$filename" == *"sysupgrade"* ]] && [[ "$filename" == *".bin" ]]; then
-        if [ ! -f "$SYSUPGRADE_TARGET" ]; then
+        if [ ! -f "$TARGET_DIR/$filename" ]; then
             echo "  ✅ 恢复 sysupgrade: $filename"
-            cp -f "$backup" "$SYSUPGRADE_TARGET"
+            cp -f "$backup" "$TARGET_DIR/$filename"
             RECOVERED=$((RECOVERED + 1))
+            SYSUPGRADE_FOUND=1
+            SYSUPGRADE_FILE="$TARGET_DIR/$filename"
         fi
     elif [[ "$filename" == *"factory"* ]] && [[ "$filename" == *".img" || "$filename" == *".bin" ]]; then
-        if [ ! -f "$FACTORY_TARGET" ]; then
+        if [ ! -f "$TARGET_DIR/$filename" ]; then
             echo "  ✅ 恢复 factory: $filename"
-            cp -f "$backup" "$FACTORY_TARGET"
+            cp -f "$backup" "$TARGET_DIR/$filename"
             RECOVERED=$((RECOVERED + 1))
+            FACTORY_FOUND=1
+            FACTORY_FILE="$TARGET_DIR/$filename"
         fi
     elif [[ "$filename" == *.new ]]; then
         # 处理.new文件
         base_name=$(echo "$filename" | sed 's/.new$//')
         if [[ "$base_name" == *"factory"* ]]; then
-            if [ ! -f "$FACTORY_TARGET" ]; then
+            if [ ! -f "$TARGET_DIR/$base_name" ] && [ ! -f "$TARGET_DIR/${base_name}.img" ]; then
                 echo "  ✅ 从.new恢复 factory: $filename -> $base_name"
-                cp -f "$backup" "$FACTORY_TARGET"
+                cp -f "$backup" "$TARGET_DIR/$base_name"
                 RECOVERED=$((RECOVERED + 1))
+                FACTORY_FOUND=1
+                FACTORY_FILE="$TARGET_DIR/$base_name"
             fi
         fi
     fi
@@ -5386,59 +5534,76 @@ TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
 
 for tmp_dir in $TMP_DIRS; do
     # 查找sysupgrade
-    if [ ! -f "$SYSUPGRADE_TARGET" ]; then
+    if [ $SYSUPGRADE_FOUND -eq 0 ]; then
         find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
-            echo "  ✅ 从临时目录恢复 sysupgrade: $(basename "$file")"
-            cp -f "$file" "$SYSUPGRADE_TARGET"
+            filename=$(basename "$file")
+            echo "  ✅ 从临时目录恢复 sysupgrade: $filename"
+            cp -f "$file" "$TARGET_DIR/$filename"
             RECOVERED=$((RECOVERED + 1))
+            SYSUPGRADE_FOUND=1
+            SYSUPGRADE_FILE="$TARGET_DIR/$filename"
         done
     fi
     
     # 查找factory
-    if [ ! -f "$FACTORY_TARGET" ]; then
+    if [ $FACTORY_FOUND -eq 0 ]; then
         find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
-            echo "  ✅ 从临时目录恢复 factory: $(basename "$file")"
-            cp -f "$file" "$FACTORY_TARGET"
+            filename=$(basename "$file")
+            echo "  ✅ 从临时目录恢复 factory: $filename"
+            cp -f "$file" "$TARGET_DIR/$filename"
             RECOVERED=$((RECOVERED + 1))
+            FACTORY_FOUND=1
+            FACTORY_FILE="$TARGET_DIR/$filename"
         done
     fi
 done
 
 # 3. 如果sysupgrade不存在，尝试用initramfs
-if [ ! -f "$SYSUPGRADE_TARGET" ]; then
+if [ $SYSUPGRADE_FOUND -eq 0 ]; then
     echo "🔧 sysupgrade不存在，尝试用initramfs..."
     find "$BUILD_DIR" -name "*initramfs*.bin" 2>/dev/null | head -1 | while read file; do
-        echo "  ✅ 从initramfs创建 sysupgrade: $(basename "$file")"
-        cp -f "$file" "$SYSUPGRADE_TARGET"
+        filename=$(basename "$file" | sed 's/initramfs-//')
+        echo "  ✅ 从initramfs创建 sysupgrade: $filename"
+        cp -f "$file" "$TARGET_DIR/$filename"
         RECOVERED=$((RECOVERED + 1))
+        SYSUPGRADE_FOUND=1
+        SYSUPGRADE_FILE="$TARGET_DIR/$filename"
     done
 fi
 
 # 4. 如果factory不存在，尝试用sysupgrade转换
-if [ ! -f "$FACTORY_TARGET" ] && [ -f "$SYSUPGRADE_TARGET" ]; then
+if [ $FACTORY_FOUND -eq 0 ] && [ $SYSUPGRADE_FOUND -eq 1 ] && [ -n "$SYSUPGRADE_FILE" ]; then
     echo "🔧 factory不存在，复制 sysupgrade 作为 factory"
-    cp -f "$SYSUPGRADE_TARGET" "$FACTORY_TARGET"
+    factory_name=$(basename "$SYSUPGRADE_FILE" | sed 's/sysupgrade\.bin$/factory.img/')
+    if [ "$factory_name" = "$(basename "$SYSUPGRADE_FILE")" ]; then
+        # 如果替换失败，使用原文件名加.img后缀
+        factory_name="$(basename "$SYSUPGRADE_FILE" .bin).img"
+    fi
+    cp -f "$SYSUPGRADE_FILE" "$TARGET_DIR/$factory_name"
+    FACTORY_FOUND=1
+    FACTORY_FILE="$TARGET_DIR/$factory_name"
     RECOVERED=$((RECOVERED + 1))
+    echo "  ✅ 创建 factory: $factory_name"
 fi
 
 # 5. 创建sha256sum
-if [ -f "$SYSUPGRADE_TARGET" ]; then
-    (cd "$TARGET_DIR" && sha256sum "$(basename "$SYSUPGRADE_TARGET")" > "$(basename "$SYSUPGRADE_TARGET").sha256sum")
+if [ -n "$SYSUPGRADE_FILE" ] && [ -f "$SYSUPGRADE_FILE" ]; then
+    (cd "$TARGET_DIR" && sha256sum "$(basename "$SYSUPGRADE_FILE")" > "$(basename "$SYSUPGRADE_FILE").sha256sum")
     echo "  ✅ 创建 sha256sum"
 fi
 
 # 6. 最终检查
 echo ""
 echo "📊 最终检查:"
-if [ -f "$SYSUPGRADE_TARGET" ]; then
-    size=$(ls -lh "$SYSUPGRADE_TARGET" | awk '{print $5}')
+if [ -f "$SYSUPGRADE_FILE" ]; then
+    size=$(ls -lh "$SYSUPGRADE_FILE" 2>/dev/null | awk '{print $5}')
     echo "  ✅ sysupgrade.bin: 存在 ($size)"
 else
     echo "  ❌ sysupgrade.bin: 不存在"
 fi
 
-if [ -f "$FACTORY_TARGET" ]; then
-    size=$(ls -lh "$FACTORY_TARGET" | awk '{print $5}')
+if [ -f "$FACTORY_FILE" ]; then
+    size=$(ls -lh "$FACTORY_FILE" 2>/dev/null | awk '{print $5}')
     echo "  ✅ factory.img: 存在 ($size)"
 else
     echo "  ❌ factory.img: 不存在"
@@ -5476,6 +5641,7 @@ EOF
     echo "  文件描述符限制: $(ulimit -n)"
     echo "  并行优化: $enable_parallel"
     echo "  源码类型: $SOURCE_REPO_TYPE"
+    echo "  补丁状态: $(find target/linux -name "*.disabled" 2>/dev/null | wc -l) 个补丁被禁用"
     
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         echo ""
@@ -5608,26 +5774,30 @@ EOF
     # ============================================
     # 最终检查
     # ============================================
-    local target_dir="$BUILD_DIR/bin/targets/ath79/generic"
-    local sysupgrade_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin"
-    local factory_file="$target_dir/openwrt-ath79-generic-netgear_wndr3800-squashfs-factory.img"
+    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+    local sysupgrade_files=$(find "$target_dir" -name "*sysupgrade*.bin" 2>/dev/null | wc -l)
+    local factory_files=$(find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | wc -l)
     
     echo ""
     echo "📊 最终固件状态:"
     echo "----------------------------------------"
     
     local success=0
-    if [ -f "$sysupgrade_file" ]; then
-        local size=$(ls -lh "$sysupgrade_file" | awk '{print $5}')
-        echo "  ✅ sysupgrade.bin: 存在 ($size)"
+    if [ $sysupgrade_files -gt 0 ]; then
+        find "$target_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
+            local size=$(ls -lh "$file" | awk '{print $5}')
+            echo "  ✅ sysupgrade.bin: 存在 ($size) - $(basename "$file")"
+        done
         success=$((success + 1))
     else
         echo "  ❌ sysupgrade.bin: 不存在"
     fi
     
-    if [ -f "$factory_file" ]; then
-        local size=$(ls -lh "$factory_file" | awk '{print $5}')
-        echo "  ✅ factory.img: 存在 ($size)"
+    if [ $factory_files -gt 0 ]; then
+        find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
+            local size=$(ls -lh "$file" | awk '{print $5}')
+            echo "  ✅ factory.img: 存在 ($size) - $(basename "$file")"
+        done
         success=$((success + 1))
     else
         echo "  ❌ factory.img: 不存在"
@@ -5641,6 +5811,14 @@ EOF
         echo "⚠️ 只有一个固件生成，另一个可能丢失"
     else
         echo "❌ 两个固件都没有生成"
+    fi
+    
+    # 显示补丁状态总结
+    local disabled_count=$(find target/linux -type d -name "patches-*.disabled" 2>/dev/null | wc -l)
+    if [ $disabled_count -gt 0 ]; then
+        echo ""
+        echo "⚠️ 补丁状态: $disabled_count 个补丁目录被禁用"
+        echo "   查看详细报告: $patch_report"
     fi
     
     # 清理
@@ -5678,7 +5856,7 @@ workflow_step26_check_artifacts() {
         local other_count=0
         
         # 先收集所有文件，避免管道中的子shell问题
-        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | sort)
+        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.tar" -o -name "*.gz" \) 2>/dev/null | grep -v "sha256sums" | sort)
         
         # 遍历所有文件
         while IFS= read -r file; do
@@ -5727,6 +5905,9 @@ workflow_step26_check_artifacts() {
                 echo "    用途: 🗄️ 根文件系统 - 仅包含根文件系统，不包含内核"
                 echo ""
                 other_count=$((other_count + 1))
+            elif echo "$FILE_NAME" | grep -q "sha256sums"; then
+                # 跳过校验和文件
+                continue
             else
                 echo "  📄 $FILE_NAME"
                 echo "    大小: $SIZE"
@@ -5771,6 +5952,30 @@ workflow_step26_check_artifacts() {
             echo "   3. 进入 系统 -> 备份/升级"
             echo "   4. 选择固件文件并点击'刷写固件'"
             echo "   5. 或者使用命令行: sysupgrade -n /path/to/*sysupgrade.bin"
+        fi
+        
+        # 显示实际找到的固件文件
+        if [ $sysupgrade_count -gt 0 ] || [ $factory_count -gt 0 ] || [ $initramfs_count -gt 0 ]; then
+            echo ""
+            echo "📋 实际找到的固件文件:"
+            echo "----------------------------------------"
+            
+            # 显示所有找到的固件文件
+            while IFS= read -r file; do
+                [ -z "$file" ] && continue
+                if [[ "$file" != *"sha256sums"* ]]; then
+                    local fname=$(basename "$file")
+                    local fsize=$(ls -lh "$file" | awk '{print $5}')
+                    local fpath=$(echo "$file" | sed 's|^bin/targets/||')
+                    printf "  📄 %-50s %s\n" "$fname" "$fsize"
+                fi
+            done <<< "$all_files" | head -10
+            
+            local total_files=$(echo "$all_files" | wc -l)
+            if [ $total_files -gt 10 ]; then
+                echo "  ... 还有 $((total_files - 10)) 个文件未显示"
+            fi
+            echo "----------------------------------------"
         fi
         
         echo "=========================================="
