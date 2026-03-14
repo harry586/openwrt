@@ -4620,18 +4620,24 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件（补丁失败直接删除+重新编译机制）
+# 步骤25: 编译固件（补丁失败直接删除+禁止恢复机制）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（补丁失败直接删除+重新编译机制） ==="
+    log "=== 步骤25: 编译固件（补丁失败直接删除+禁止恢复机制） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
+    
+    # ============================================
+    # 创建补丁黑名单文件 - 记录要永久删除的补丁
+    # ============================================
+    local patch_blacklist="$BUILD_DIR/.patch_blacklist"
+    touch "$patch_blacklist"
     
     # ============================================
     # 设置文件描述符限制
@@ -4888,7 +4894,7 @@ EOF
         fi
         
         # ============================================
-        # 编译循环 - 检测到补丁失败直接删除
+        # 编译循环 - 检测到补丁失败直接删除并加入黑名单
         # ============================================
         local max_attempts=3
         local attempt=1
@@ -4930,13 +4936,14 @@ EOF
                 local rej_files=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
                 
                 if [ -n "$rej_files" ]; then
-                    log "  ⚠️ 发现补丁失败，直接删除失败的补丁..."
+                    log "  ⚠️ 发现补丁失败，直接删除失败的补丁并加入黑名单..."
                     
                     # 找到对应的补丁目录
                     local patch_dir="target/linux/$target/patches-$kernel_ver"
                     
                     if [ -d "$patch_dir" ]; then
-                        # 删除所有失败的补丁
+                        # 删除所有失败的补丁并加入黑名单
+                        local deleted_count=0
                         echo "$rej_files" | while read rej_file; do
                             local patch_name=$(basename "$rej_file" .rej).patch
                             local patch_file="$patch_dir/$patch_name"
@@ -4944,10 +4951,27 @@ EOF
                             if [ -f "$patch_file" ]; then
                                 log "    🗑️ 删除补丁: $patch_name"
                                 rm -f "$patch_file"
+                                
+                                # 加入黑名单（永久禁止）
+                                echo "$target:$kernel_ver:$patch_name" >> "$patch_blacklist"
+                                deleted_count=$((deleted_count + 1))
                             fi
                         done
                         
-                        log "  ✅ 失败的补丁已删除"
+                        log "  ✅ 已删除 $deleted_count 个失败补丁并加入黑名单"
+                        
+                        # 检查黑名单中的补丁是否还有残留
+                        if [ -f "$patch_blacklist" ]; then
+                            while IFS=: read -r blacklist_target blacklist_ver blacklist_patch; do
+                                if [ "$blacklist_target" = "$target" ] && [ "$blacklist_ver" = "$kernel_ver" ]; then
+                                    local blacklisted_file="$patch_dir/$blacklist_patch"
+                                    if [ -f "$blacklisted_file" ]; then
+                                        log "    ⚠️ 发现黑名单补丁残留: $blacklist_patch"
+                                        rm -f "$blacklisted_file"
+                                    fi
+                                fi
+                            done < "$patch_blacklist"
+                        fi
                         
                         # 彻底清理内核构建目录
                         log "  🔄 彻底清理内核构建目录..."
@@ -4959,7 +4983,10 @@ EOF
                         log "  🔄 重新运行 make defconfig..."
                         make defconfig > /tmp/build-logs/defconfig_after_patch_removal.log 2>&1 || true
                         
-                        log "  🔄 准备第 $((attempt + 1)) 次重试..."
+                        # 如果还有下一次重试，继续
+                        if [ $attempt -lt $max_attempts ]; then
+                            log "  🔄 准备第 $((attempt + 1)) 次重试..."
+                        fi
                     else
                         log "  ⚠️ 未找到补丁目录: $patch_dir"
                     fi
@@ -5011,6 +5038,13 @@ EOF
                 tail -50 "$latest_log" | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || cat "$latest_log" | tail -50
             else
                 echo "未找到编译日志"
+            fi
+            
+            # 显示黑名单中的补丁
+            if [ -f "$patch_blacklist" ] && [ -s "$patch_blacklist" ]; then
+                echo ""
+                echo "📋 已永久禁用的补丁列表:"
+                cat "$patch_blacklist"
             fi
             
             # 停止保护脚本
