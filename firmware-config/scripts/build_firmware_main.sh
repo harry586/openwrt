@@ -5010,12 +5010,15 @@ EOF
                 local rej_files=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
                 
                 if [ -n "$rej_files" ]; then
-                    log "  ⚠️ 发现补丁失败，尝试禁用失败的补丁..."
+                    log "  ⚠️ 发现补丁失败，尝试禁用失败的补丁并更新配置..."
                     
                     # 禁用失败的补丁
                     local patch_dir="target/linux/$target/patches-$kernel_ver"
                     local disabled_dir="${patch_dir}.disabled.$(date +%s)"
                     mkdir -p "$disabled_dir"
+                    
+                    # 记录被禁用的补丁
+                    local disabled_patches=()
                     
                     echo "$rej_files" | while read rej_file; do
                         local patch_name=$(basename "$rej_file" .rej).patch
@@ -5024,17 +5027,96 @@ EOF
                         if [ -n "$patch_file" ]; then
                             log "    ❌ 禁用补丁: $patch_name"
                             mv "$patch_file" "$disabled_dir/" 2>/dev/null || true
+                            disabled_patches+=("$patch_name")
                         fi
                     done
                     
-                    # 清理并准备重试
-                    log "  🔄 清理内核构建目录..."
+                    log "  🔄 清理内核构建目录和相关配置..."
+                    
+                    # 1. 清理内核构建目录
                     rm -rf "build_dir/linux-${target}_"*
-                    rm -rf "staging_dir/target-*/.stamp_target_*"
+                    
+                    # 2. 清理stamp文件
+                    find staging_dir/target-* -name ".stamp_*" 2>/dev/null | grep -i "$target" | xargs rm -f 2>/dev/null || true
+                    
+                    # 3. 关键步骤：重新生成内核配置（重要！）
+                    log "  🔄 重新生成内核配置（跳过失败补丁）..."
+                    
+                    # 备份原配置
+                    if [ -f ".config" ]; then
+                        cp ".config" ".config.bak.patch_retry"
+                    fi
+                    
+                    # 重新运行内核配置
+                    if make "target/linux/${target}/config" V=s >> /tmp/build-logs/kernel_config_${target}_${compile_attempt}.log 2>&1; then
+                        log "  ✅ 内核配置已更新"
+                    else
+                        log "  ⚠️ 内核配置更新有警告，继续尝试"
+                    fi
+                    
+                    # 4. 重新运行defconfig以更新所有依赖
+                    if [ -f ".config" ]; then
+                        log "  🔄 重新运行make defconfig..."
+                        make defconfig >> /tmp/build-logs/defconfig_retry_${compile_attempt}.log 2>&1 || true
+                    fi
+                    
+                    # 5. 特别处理：如果禁用的是MMC相关补丁，可能需要调整MMC配置
+                    local mmc_disabled=0
+                    for patch_name in "${disabled_patches[@]}"; do
+                        if [[ "$patch_name" == *"mmc"* ]] || [[ "$patch_name" == *"sdhci"* ]]; then
+                            mmc_disabled=1
+                            break
+                        fi
+                    done
+                    
+                    if [ $mmc_disabled -eq 1 ]; then
+                        log "  ⚠️ 检测到MMC相关补丁被禁用，检查MMC配置..."
+                        
+                        # 检查是否启用了MMC
+                        if grep -q "^CONFIG_MMC=y" .config 2>/dev/null; then
+                            log "  ⚠️ MMC功能已启用，但相关补丁被禁用，尝试在配置中禁用MMC"
+                            
+                            # 备份配置
+                            cp ".config" ".config.before_mmc_disable"
+                            
+                            # 使用脚本配置工具禁用MMC相关选项
+                            if [ -f "scripts/config" ]; then
+                                ./scripts/config --disable CONFIG_MMC
+                                ./scripts/config --disable CONFIG_MMC_BLOCK
+                                ./scripts/config --disable CONFIG_MMC_SDHCI
+                                ./scripts/config --disable CONFIG_MMC_SDHCI_MSM
+                            else
+                                # 直接修改配置文件
+                                sed -i 's/^CONFIG_MMC=y/# CONFIG_MMC is not set/' .config
+                                sed -i 's/^CONFIG_MMC_BLOCK=y/# CONFIG_MMC_BLOCK is not set/' .config
+                                sed -i 's/^CONFIG_MMC_SDHCI=y/# CONFIG_MMC_SDHCI is not set/' .config
+                                sed -i 's/^CONFIG_MMC_SDHCI_MSM=y/# CONFIG_MMC_SDHCI_MSM is not set/' .config
+                            fi
+                            
+                            # 重新运行defconfig
+                            make defconfig >> /tmp/build-logs/defconfig_mmc_${compile_attempt}.log 2>&1
+                            log "  ✅ MMC功能已在配置中禁用"
+                        fi
+                    fi
+                    
+                    # 6. 显示当前配置状态（调试用）
+                    log "  📊 当前内核配置摘要:"
+                    grep -E "CONFIG_MMC=|CONFIG_MMC_SDHCI=|CONFIG_USB=" .config 2>/dev/null | head -10 || true
+                    
                 else
                     # 没有补丁失败，但编译失败 - 可能是其他原因
                     log "  ⚠️ 编译失败但未发现补丁失败，可能是其他原因"
-                    break
+                    
+                    # 检查日志最后50行，看看是否有其他错误
+                    log "  📋 最后10行错误日志:"
+                    tail -20 build_phase1_attempt${compile_attempt}.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" | tail -10 || true
+                    
+                    # 如果不是最后一次尝试，继续重试
+                    if [ $compile_attempt -lt $max_retry ]; then
+                        log "  🔄 准备第 $((compile_attempt + 1)) 次重试..."
+                    else
+                        break
+                    fi
                 fi
             else
                 # 没有内核目录，无法处理
@@ -5050,7 +5132,21 @@ EOF
             echo "❌❌❌ 编译失败，已重试 $max_retry 次 ❌❌❌"
             echo ""
             echo "🔍 最后50行错误日志:"
-            tail -50 build_phase1_attempt${compile_attempt}.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || cat build_phase1_attempt${compile_attempt}.log | tail -50
+            
+            # 查找最新的日志文件
+            local latest_log=""
+            for i in $(seq $max_retry -1 1); do
+                if [ -f "build_phase1_attempt${i}.log" ]; then
+                    latest_log="build_phase1_attempt${i}.log"
+                    break
+                fi
+            done
+            
+            if [ -n "$latest_log" ]; then
+                tail -50 "$latest_log" | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || cat "$latest_log" | tail -50
+            else
+                echo "未找到编译日志"
+            fi
             
             # 停止保护脚本
             kill $protect_pid 2>/dev/null || true
