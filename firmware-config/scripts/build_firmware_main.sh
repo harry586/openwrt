@@ -4620,13 +4620,13 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件
+# 步骤25: 编译固件（补丁自动重试3次+失败跳过机制）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（补丁自动跳过+编译失败检测机制） ==="
+    log "=== 步骤25: 编译固件（补丁自动重试3次+失败跳过机制） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -4634,27 +4634,143 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 编译前检查：查看是否有失败的补丁
+    # 补丁预处理：自动重试3次，失败则跳过
     # ============================================
-    log "🔧 检查可能失败的补丁..."
+    log "🔧 预处理：检查并处理可能失败的补丁（自动重试3次，失败则跳过）..."
     
-    # 查找所有内核构建目录中是否有.rej文件
-    local rej_files=$(find build_dir -name "*.rej" 2>/dev/null)
-    if [ -n "$rej_files" ]; then
-        log "  ⚠️ 发现补丁失败，将在编译前处理"
+    # 创建补丁状态报告文件
+    local patch_report="$BUILD_DIR/.patch_status_$(date +%s).txt"
+    echo "=== 补丁处理报告 $(date) ===" > "$patch_report"
+    echo "" >> "$patch_report"
+    
+    # 查找所有内核构建目录
+    local kernel_dirs=$(find build_dir -maxdepth 2 -type d -name "linux-*" 2>/dev/null)
+    local need_rebuild=0
+    
+    for kernel_dir in $kernel_dirs; do
+        if [ ! -d "$kernel_dir" ]; then
+            continue
+        fi
         
-        # 显示失败的补丁
-        echo "$rej_files" | while read rej_file; do
-            log "    ❌ 补丁失败: $(basename "$rej_file" .rej).patch"
-        done
+        # 提取平台和内核版本
+        local platform=$(basename "$kernel_dir" | sed 's/linux-//' | cut -d'_' -f1)
+        local kernel_ver=$(basename "$kernel_dir" | grep -oP 'linux-\K[0-9]+\.[0-9]+' || echo "unknown")
+        
+        # 检查是否有补丁失败的标记（.rej文件）
+        local rej_files=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
+        
+        if [ -n "$rej_files" ]; then
+            log "  ⚠️ 发现补丁失败: $kernel_dir"
+            echo "📁 平台: $platform, 内核: $kernel_ver" >> "$patch_report"
+            echo "  发现失败的补丁:" >> "$patch_report"
+            
+            # 显示失败的补丁
+            echo "$rej_files" | while read rej_file; do
+                local src_file=$(echo "$rej_file" | sed 's/\.rej$//')
+                local patch_name=$(basename "$rej_file" .rej).patch
+                log "    ❌ 补丁失败: $patch_name -> $(basename "$src_file")"
+                echo "    ❌ $patch_name" >> "$patch_report"
+            done
+            
+            # 尝试重试3次
+            local retry_count=0
+            local max_retry=3
+            local retry_success=0
+            
+            while [ $retry_count -lt $max_retry ]; do
+                retry_count=$((retry_count + 1))
+                log "    🔄 第 $retry_count 次重试清理并重新编译 $platform 内核..."
+                
+                # 清理该内核构建目录
+                rm -rf "$kernel_dir"
+                
+                # 清理该平台的stamp文件
+                find staging_dir/target-* -name ".stamp_*" 2>/dev/null | grep -i "$platform" | xargs rm -f 2>/dev/null || true
+                
+                # 重新准备内核源码
+                if make "target/linux/${platform}/prepare" V=s >> /tmp/build-logs/kernel_prepare_${platform}_${retry_count}.log 2>&1; then
+                    # 检查是否还有失败的补丁
+                    if [ ! -d "$kernel_dir" ]; then
+                        continue
+                    fi
+                    
+                    local new_rej=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
+                    if [ -z "$new_rej" ]; then
+                        log "    ✅ 第 $retry_count 次重试成功，补丁全部应用"
+                        echo "   ✅ 第 $retry_count 次重试成功" >> "$patch_report"
+                        retry_success=1
+                        break
+                    else
+                        log "    ⚠️ 第 $retry_count 次重试仍有补丁失败"
+                        echo "   ⚠️ 第 $retry_count 次重试仍有补丁失败" >> "$patch_report"
+                    fi
+                else
+                    log "    ⚠️ 第 $retry_count 次重试准备失败"
+                    echo "   ⚠️ 第 $retry_count 次重试准备失败" >> "$patch_report"
+                fi
+                
+                sleep 2
+            done
+            
+            if [ $retry_success -eq 0 ]; then
+                log "    ⚠️ 重试 $max_retry 次后仍有补丁失败，准备跳过这些补丁..."
+                echo "   ⚠️ 重试 $max_retry 次后失败，将跳过这些补丁" >> "$patch_report"
+                
+                # 查找对应的补丁目录
+                local patch_dirs=$(find "target/linux/$platform" -maxdepth 1 -type d -name "patches-*" 2>/dev/null)
+                
+                for patch_dir in $patch_dirs; do
+                    local disabled_dir="${patch_dir}.disabled.$(date +%s)"
+                    
+                    # 找出导致失败的补丁
+                    echo "$rej_files" | while read rej_file; do
+                        local patch_name=$(basename "$rej_file" .rej).patch
+                        
+                        # 在所有补丁目录中查找对应的补丁文件
+                        local found_patch=$(find "$patch_dir" -name "$patch_name" 2>/dev/null)
+                        if [ -n "$found_patch" ]; then
+                            log "    🔸 禁用补丁: $patch_name"
+                            echo "    🔸 禁用补丁: $patch_name" >> "$patch_report"
+                            
+                            # 创建禁用目录（如果不存在）
+                            mkdir -p "$disabled_dir"
+                            
+                            # 移动补丁到禁用目录
+                            mv "$found_patch" "$disabled_dir/" 2>/dev/null || true
+                        fi
+                    done
+                done
+                
+                # 标记需要重新编译
+                need_rebuild=1
+            fi
+        fi
+    done
+    
+    # 如果有需要重新编译的平台
+    if [ $need_rebuild -eq 1 ]; then
+        log "🔄 清理并重新编译所有内核（已跳过失败补丁）..."
         
         # 清理所有内核构建目录
-        log "  🔧 清理内核构建目录..."
         rm -rf build_dir/linux-*
-        rm -rf staging_dir/target-*/.stamp_target_*
         
-        log "  ✅ 已清理，将重新编译"
+        # 清理staging_dir中的内核相关stamp文件
+        find staging_dir -name ".stamp_target_*" -exec rm -f {} \; 2>/dev/null || true
+        
+        # 重新准备所有内核
+        if make target/linux/prepare V=s >> /tmp/build-logs/kernel_prepare_final.log 2>&1; then
+            log "✅ 内核准备完成（已跳过失败补丁）"
+            echo "✅ 内核准备完成（已跳过失败补丁）" >> "$patch_report"
+        else
+            log "⚠️ 内核准备有警告，但继续"
+            echo "⚠️ 内核准备有警告，但继续" >> "$patch_report"
+        fi
     fi
+    
+    # 输出补丁状态报告
+    echo "" >> "$patch_report"
+    echo "=== 补丁处理完成 ===" >> "$patch_report"
+    log "📊 补丁处理报告已保存: $patch_report"
     
     # ============================================
     # 设置文件描述符限制
@@ -5107,6 +5223,16 @@ EOF
         echo "❌ 编译失败，退出码: $BUILD_EXIT_CODE"
         if [ $sysupgrade_files -gt 0 ] || [ $factory_files -gt 0 ] || [ $itb_files -gt 0 ]; then
             echo "   ⚠️ 但有部分固件生成，可能可用"
+        fi
+    fi
+    
+    # 显示补丁状态总结
+    if [ -f "$patch_report" ]; then
+        local disabled_count=$(grep -c "🔸 禁用补丁" "$patch_report" 2>/dev/null || echo "0")
+        if [ $disabled_count -gt 0 ]; then
+            echo ""
+            echo "⚠️ 补丁状态: $disabled_count 个补丁被跳过"
+            echo "   查看详细报告: $patch_report"
         fi
     fi
     
