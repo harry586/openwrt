@@ -4638,127 +4638,137 @@ workflow_step25_build_firmware() {
     # ============================================
     log "🔧 编译前预处理：检查并处理可能失败的补丁..."
     
-    # 获取当前目标平台
-    local target="${TARGET:-ipq40xx}"
-    local kernel_ver="5.15"
-    
-    # 创建补丁状态报告
-    local patch_report="$BUILD_DIR/.patch_status_$(date +%s).txt"
-    echo "=== 补丁预处理报告 $(date) ===" > "$patch_report"
-    echo "目标平台: $target" >> "$patch_report"
-    echo "内核版本: $kernel_ver" >> "$patch_report"
-    echo "" >> "$patch_report"
-    
-    # 查找所有平台的补丁目录
-    local all_patch_dirs=$(find target/linux -type d -name "patches-*" 2>/dev/null | sort)
-    
-    for patch_dir in $all_patch_dirs; do
-        # 提取平台和内核版本
-        local platform=$(echo "$patch_dir" | cut -d'/' -f3)
-        local patch_kernel=$(basename "$patch_dir" | sed 's/patches-//')
-        local disabled_dir="${patch_dir}.disabled"
-        
-        if [ ! -d "$patch_dir" ]; then
-            continue
+    # 获取当前目标平台（只处理当前选择的平台）
+    local target="${TARGET:-}"
+    if [ -z "$target" ]; then
+        if [ -f "$BUILD_DIR/build_env.sh" ]; then
+            source "$BUILD_DIR/build_env.sh"
+            target="$TARGET"
         fi
-        
-        log "📁 检查补丁目录: $patch_dir"
-        
-        # 创建补丁备份目录
-        mkdir -p "$disabled_dir"
-        
-        # 获取所有补丁文件
-        local patches=($(find "$patch_dir" -maxdepth 1 -type f -name "*.patch" | sort))
-        local total_patches=${#patches[@]}
-        local disabled_count=0
-        
-        if [ $total_patches -eq 0 ]; then
-            continue
-        fi
-        
-        log "  找到 $total_patches 个补丁文件"
-        echo "📁 $platform ($patch_kernel): 找到 $total_patches 个补丁" >> "$patch_report"
-        
-        # 检查是否有历史失败记录
-        local history_failures=""
-        if [ -f "$BUILD_DIR/.patch_history" ]; then
-            history_failures=$(grep "FAIL:$platform:$patch_kernel:" "$BUILD_DIR/.patch_history" 2>/dev/null | cut -d':' -f4 | sort -u)
-        fi
-        
-        # 检查每个补丁
-        for patch in "${patches[@]}"; do
-            local patch_name=$(basename "$patch")
-            local should_disable=0
-            local reason=""
-            
-            # 检查历史失败记录
-            if [ -n "$history_failures" ]; then
-                if echo "$history_failures" | grep -q "$patch_name"; then
-                    should_disable=1
-                    reason="历史失败记录"
-                fi
-            fi
-            
-            # 检查补丁是否过大或包含可能问题的模式
-            if [ $should_disable -eq 0 ]; then
-                # 检查补丁行数
-                local patch_lines=$(wc -l < "$patch" 2>/dev/null || echo "0")
-                if [ $patch_lines -gt 500 ]; then
-                    # 大补丁更容易失败
-                    log "    ⚠️ 检测到大补丁 ($patch_lines 行): $patch_name"
-                    should_disable=1
-                    reason="补丁过大 ($patch_lines 行)"
-                fi
-            fi
-            
-            # 检查补丁是否修改核心文件
-            if [ $should_disable -eq 0 ]; then
-                if grep -q "--- a/drivers/mmc/host/" "$patch" 2>/dev/null; then
-                    # MMC驱动补丁容易出问题
-                    log "    ⚠️ 检测到MMC驱动补丁: $patch_name"
-                    should_disable=1
-                    reason="MMC驱动补丁（容易冲突）"
-                fi
-            fi
-            
-            # 如果判断为需要禁用
-            if [ $should_disable -eq 1 ]; then
-                log "      🔸 禁用补丁: $patch_name ($reason)"
-                mv "$patch" "$disabled_dir/" 2>/dev/null || true
-                disabled_count=$((disabled_count + 1))
-                echo "    ❌ 禁用: $patch_name - $reason" >> "$patch_report"
-            else
-                echo "    ✅ 保留: $patch_name" >> "$patch_report"
-            fi
-        done
-        
-        if [ $disabled_count -gt 0 ]; then
-            log "  ✅ 已禁用 $disabled_count 个可能失败的补丁"
-            
-            # 清理空目录
-            if [ -d "$disabled_dir" ] && [ -z "$(ls -A "$disabled_dir")" ]; then
-                rmdir "$disabled_dir" 2>/dev/null || true
-            fi
-        fi
-    done
-    
-    # ============================================
-    # 检查是否有补丁被禁用，如果有则清理内核构建目录
-    # ============================================
-    local total_disabled=$(grep -c "❌ 禁用:" "$patch_report" 2>/dev/null || echo "0")
-    if [ $total_disabled -gt 0 ]; then
-        log "🔄 有 $total_disabled 个补丁被禁用，清理内核构建目录..."
-        rm -rf build_dir/linux-*
-        rm -rf staging_dir/target-*/.stamp_target_*
-        echo "" >> "$patch_report"
-        echo "总共禁用: $total_disabled 个补丁" >> "$patch_report"
-    else
-        echo "没有发现需要禁用的补丁" >> "$patch_report"
-        # 清理空的disabled目录
-        find target/linux -type d -name "*.disabled" -empty -delete 2>/dev/null || true
     fi
     
-    log "📊 补丁预处理报告已保存: $patch_report"
+    if [ -z "$target" ]; then
+        log "⚠️ 无法获取目标平台，跳过补丁预处理"
+    else
+        log "📌 当前目标平台: $target"
+        
+        # 获取内核版本
+        local kernel_ver=""
+        # 从设备定义文件中获取内核版本
+        local device_file=$(find "target/linux/$target" -type f -name "*.mk" 2>/dev/null | head -1)
+        if [ -n "$device_file" ]; then
+            kernel_ver=$(grep -E "^KERNEL_PATCHVER:=" "$device_file" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+        fi
+        if [ -z "$kernel_ver" ]; then
+            # 默认尝试常见版本
+            for ver in 6.6 6.1 5.15 5.10 5.4; do
+                if [ -d "target/linux/$target/patches-$ver" ]; then
+                    kernel_ver="$ver"
+                    break
+                fi
+            done
+        fi
+        
+        if [ -n "$kernel_ver" ]; then
+            log "📌 内核版本: $kernel_ver"
+            
+            # 创建补丁状态报告
+            local patch_report="$BUILD_DIR/.patch_status_$(date +%s).txt"
+            echo "=== 补丁预处理报告 $(date) ===" > "$patch_report"
+            echo "目标平台: $target" >> "$patch_report"
+            echo "内核版本: $kernel_ver" >> "$patch_report"
+            echo "" >> "$patch_report"
+            
+            # 检查当前平台的补丁目录
+            local patch_dir="target/linux/$target/patches-$kernel_ver"
+            local disabled_dir="${patch_dir}.disabled"
+            
+            if [ -d "$patch_dir" ]; then
+                log "📁 检查补丁目录: $patch_dir"
+                
+                # 创建补丁备份目录
+                mkdir -p "$disabled_dir"
+                
+                # 获取所有补丁文件
+                local patches=($(find "$patch_dir" -maxdepth 1 -type f -name "*.patch" | sort))
+                local total_patches=${#patches[@]}
+                local disabled_count=0
+                
+                if [ $total_patches -gt 0 ]; then
+                    log "  找到 $total_patches 个补丁文件"
+                    echo "找到 $total_patches 个补丁" >> "$patch_report"
+                    
+                    # 检查是否有历史失败记录
+                    local history_failures=""
+                    if [ -f "$BUILD_DIR/.patch_history" ]; then
+                        history_failures=$(grep "FAIL:$target:$kernel_ver:" "$BUILD_DIR/.patch_history" 2>/dev/null | cut -d':' -f4 | sort -u)
+                    fi
+                    
+                    # 检查每个补丁
+                    for patch in "${patches[@]}"; do
+                        local patch_name=$(basename "$patch")
+                        local should_disable=0
+                        local reason=""
+                        
+                        # 检查历史失败记录
+                        if [ -n "$history_failures" ]; then
+                            if echo "$history_failures" | grep -q "$patch_name"; then
+                                should_disable=1
+                                reason="历史失败记录"
+                            fi
+                        fi
+                        
+                        # 检查补丁是否过大或包含可能问题的模式
+                        if [ $should_disable -eq 0 ]; then
+                            # 检查补丁行数
+                            local patch_lines=$(wc -l < "$patch" 2>/dev/null || echo "0")
+                            if [ $patch_lines -gt 500 ]; then
+                                # 大补丁更容易失败
+                                log "    ⚠️ 检测到大补丁 ($patch_lines 行): $patch_name"
+                                should_disable=1
+                                reason="补丁过大 ($patch_lines 行)"
+                            fi
+                        fi
+                        
+                        # 如果判断为需要禁用
+                        if [ $should_disable -eq 1 ]; then
+                            log "      🔸 禁用补丁: $patch_name ($reason)"
+                            mv "$patch" "$disabled_dir/" 2>/dev/null || true
+                            disabled_count=$((disabled_count + 1))
+                            echo "    ❌ 禁用: $patch_name - $reason" >> "$patch_report"
+                        else
+                            echo "    ✅ 保留: $patch_name" >> "$patch_report"
+                        fi
+                    done
+                    
+                    if [ $disabled_count -gt 0 ]; then
+                        log "  ✅ 已禁用 $disabled_count 个可能失败的补丁"
+                        echo "" >> "$patch_report"
+                        echo "总共禁用: $disabled_count 个补丁" >> "$patch_report"
+                        
+                        # 清理内核构建目录
+                        log "🔄 清理内核构建目录..."
+                        rm -rf build_dir/linux-*
+                        rm -rf staging_dir/target-*/.stamp_target_*
+                    else
+                        echo "没有发现需要禁用的补丁" >> "$patch_report"
+                        # 清理空的disabled目录
+                        rmdir "$disabled_dir" 2>/dev/null || true
+                    fi
+                else
+                    log "  没有找到补丁文件"
+                    echo "没有找到补丁文件" >> "$patch_report"
+                fi
+            else
+                log "📁 补丁目录不存在: $patch_dir"
+                echo "补丁目录不存在" >> "$patch_report"
+            fi
+            
+            log "📊 补丁预处理报告已保存: $patch_report"
+        else
+            log "⚠️ 无法确定内核版本，跳过补丁预处理"
+        fi
+    fi
     
     # ============================================
     # 设置文件描述符限制
@@ -5055,7 +5065,7 @@ EOF
                 
                 # 记录失败的补丁到历史文件
                 local failed_patches=$(grep "Patch failed!" build_phase1.log | sed 's/.*\/\(.*\.patch\)!.*/\1/' 2>/dev/null)
-                if [ -n "$failed_patches" ]; then
+                if [ -n "$failed_patches" ] && [ -n "$target" ] && [ -n "$kernel_ver" ]; then
                     echo "$failed_patches" | while read patch; do
                         echo "FAIL:$target:$kernel_ver:$patch" >> "$BUILD_DIR/.patch_history"
                     done
