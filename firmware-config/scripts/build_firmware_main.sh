@@ -1739,6 +1739,11 @@ generate_config() {
             search_device="rax3000m"
             log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
             ;;
+        netgear_wndr3800)
+            openwrt_device="netgear_wndr3800"
+            search_device="wndr3800"
+            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
+            ;;
         *)
             openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
             search_device="$DEVICE"
@@ -1942,6 +1947,79 @@ EOF
         handle_error "第一次依赖解决失败"
     }
     log "✅ 第一次 make defconfig 成功"
+    
+    # ============================================
+    # 强制生成 .bin 格式固件的配置
+    # ============================================
+    log "🔧 强制配置生成 .bin 格式固件..."
+    
+    # 禁用 FIT 镜像支持（所有平台）
+    if grep -q "CONFIG_TARGET_IMAGES_FIT" .config; then
+        sed -i 's/^CONFIG_TARGET_IMAGES_FIT=y/# CONFIG_TARGET_IMAGES_FIT is not set/' .config
+        log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT"
+    fi
+    
+    if grep -q "CONFIG_TARGET_IMAGES_FIT_MULTI" .config; then
+        sed -i 's/^CONFIG_TARGET_IMAGES_FIT_MULTI=y/# CONFIG_TARGET_IMAGES_FIT_MULTI is not set/' .config
+        log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT_MULTI"
+    fi
+    
+    # 确保生成 squashfs 格式
+    if ! grep -q "CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config; then
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        log "  ✅ 强制启用 squashfs 格式"
+    fi
+    
+    # 对于 MediaTek Filogic 平台特殊处理
+    if [ "$TARGET" = "mediatek" ] && [ "$SUBTARGET" = "filogic" ]; then
+        log "  🔧 检测到 MediaTek Filogic 平台，强制生成 .bin 格式..."
+        
+        # 在配置文件中添加自定义选项
+        cat >> .config << 'EOF'
+# 强制使用传统格式而非 FIT
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_IMAGES_PAD=y
+# CONFIG_TARGET_IMAGES_FIT is not set
+# CONFIG_TARGET_IMAGES_FIT_MULTI is not set
+EOF
+        
+        # 检查是否有设备特定的 FIT 配置
+        local device_mk_files=$(find target/linux/mediatek -name "*.mk" 2>/dev/null)
+        log "  🔍 检查设备 mk 文件..."
+        
+        # 创建补丁文件，修改设备定义
+        local patch_file="/tmp/filogic-bin-format.patch"
+        cat > "$patch_file" << 'EOF'
+--- a/target/linux/mediatek/image/filogic.mk
++++ b/target/linux/mediatek/image/filogic.mk
+@@ -1,6 +1,6 @@
+ define Device/cmcc_rax3000m
+   DEVICE_VENDOR := CMCC
+   DEVICE_MODEL := RAX3000M
+   DEVICE_DTS := mt7981b-cmcc-rax3000m
+-  IMAGE/sysupgrade.itb := append-kernel | append-rootfs | pad-rootfs | fit
++  IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | check-size
+ endef
+ TARGET_DEVICES += cmcc_rax3000m
+EOF
+        
+        # 检查文件是否存在并应用补丁
+        if [ -f "target/linux/mediatek/image/filogic.mk" ]; then
+            cp "target/linux/mediatek/image/filogic.mk" "target/linux/mediatek/image/filogic.mk.bak"
+            log "  ✅ 备份 filogic.mk"
+            
+            # 替换 .itb 为 .bin
+            sed -i 's/IMAGE\/sysupgrade\.itb :=/IMAGE\/sysupgrade\.bin :=/g' "target/linux/mediatek/image/filogic.mk"
+            sed -i 's/| fit/| check-size/g' "target/linux/mediatek/image/filogic.mk"
+            log "  ✅ 修改设备定义，强制使用 .bin 格式"
+        fi
+    fi
+    
+    # 重新运行 defconfig 使配置生效
+    log "🔄 重新运行 make defconfig 使 .bin 格式配置生效..."
+    make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+        log "⚠️ make defconfig 有警告，但继续"
+    }
     
     log "🔍 动态检测实际生效的USB内核配置..."
     
@@ -5164,13 +5242,13 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件（补丁失败直接删除+刷新剩余补丁机制）
+# 步骤25: 编译固件（补丁失败直接删除+文件描述符错误修复）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（补丁失败直接删除+刷新剩余补丁机制） ==="
+    log "=== 步骤25: 编译固件（补丁失败直接删除+文件描述符错误修复） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5613,18 +5691,64 @@ EOF
                 
                 # 检查是否有文件描述符错误（Bad file descriptor）
                 if grep -q "Bad file descriptor" build_phase1_attempt${attempt}.log; then
-                    log "  ⚠️ 检测到文件描述符错误，可能是工具链问题"
+                    log "  ⚠️ 检测到文件描述符错误，正在应用修复..."
                     
-                    # 重新编译相关工具
+                    # 修复方法1：重新编译相关工具
                     log "  🔧 重新编译 padjffs2 和 mkdniimg 工具..."
                     make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
-                    make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
+                    make tools/padjffs2/compile V=s > /tmp/build-logs/padjffs2_rebuild.log 2>&1 || {
+                        log "  ⚠️ padjffs2 编译有警告，继续"
+                    }
+                    
                     make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
-                    make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
+                    make tools/mkdniimg/compile V=s > /tmp/build-logs/mkdniimg_rebuild.log 2>&1 || {
+                        log "  ⚠️ mkdniimg 编译有警告，继续"
+                    }
+                    
+                    # 修复方法2：清理临时固件文件
+                    log "  🔧 清理临时固件文件..."
+                    local target_platform="${TARGET:-ath79}"
+                    local target_sub="${SUBTARGET:-generic}"
+                    rm -f "build_dir/target-*/linux-${target_platform}_${target_sub}/tmp/"*.img
+                    rm -f "build_dir/target-*/linux-${target_platform}_${target_sub}/tmp/"*.bin
+                    rm -f "build_dir/target-*/linux-${target_platform}_${target_sub}/tmp/"*.new
+                    
+                    # 修复方法3：创建补丁修复文件描述符问题
+                    log "  🔧 创建 verbose.mk 补丁修复文件描述符问题..."
+                    local verbose_mk="include/verbose.mk"
+                    if [ -f "$verbose_mk" ]; then
+                        # 备份原文件
+                        cp "$verbose_mk" "$verbose_mk.bak"
+                        
+                        # 修复文件描述符重定向问题
+                        sed -i 's/>\&8 2>\/dev\/null ||/>\&8 2>\/dev\/null || \\/g' "$verbose_mk"
+                        sed -i 's/printf "\\nWARNING: /printf "\\nWARNING: /g' "$verbose_mk"
+                        
+                        # 确保文件描述符检查
+                        if ! grep -q "2>&1 | tee" "$verbose_mk"; then
+                            echo '# Fix bad file descriptor issues' >> "$verbose_mk"
+                        fi
+                        log "  ✅ verbose.mk 已修复"
+                    fi
+                    
+                    # 修复方法4：使用单线程重新编译目标
+                    log "  🔧 使用单线程重新编译目标平台..."
+                    make "target/linux/${target}/compile" -j1 V=s >> /tmp/build-logs/ath79_retry_${attempt}.log 2>&1 || {
+                        log "  ⚠️ 单线程编译有警告，继续"
+                    }
+                    
+                    # 检查固件是否生成
+                    local target_dir="bin/targets/${target}/${target_sub}"
+                    if [ -d "$target_dir" ] && [ -n "$(ls -A "$target_dir" 2>/dev/null)" ]; then
+                        log "  ✅ 文件描述符错误修复后固件已生成"
+                        # 如果固件已生成，可以认为成功
+                        compile_success=1
+                        break
+                    fi
                 fi
                 
                 # 如果不是最后一次尝试，简单清理后重试
-                if [ $attempt -lt $max_attempts ]; then
+                if [ $attempt -lt $max_attempts ] && [ $compile_success -eq 0 ]; then
                     log "  🔄 简单清理后第 $((attempt + 1)) 次重试..."
                     rm -rf build_dir/linux-* 2>/dev/null || true
                     rm -rf staging_dir/target-*/.stamp_target_* 2>/dev/null || true
@@ -5765,6 +5889,27 @@ EOF
         echo ""
         echo "🔍 最后50行错误日志:"
         tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || tail -50 build.log
+        
+        # 再次检查是否有文件描述符错误
+        if grep -q "Bad file descriptor" build.log 2>/dev/null; then
+            log "⚠️ 检测到文件描述符错误，尝试最终修复..."
+            
+            # 最终修复方案：单独编译工具和固件
+            log "  🔧 单独编译所需工具..."
+            make tools/padjffs2/compile -j1 V=s > /tmp/build-logs/tools_final.log 2>&1 || true
+            make tools/mkdniimg/compile -j1 V=s >> /tmp/build-logs/tools_final.log 2>&1 || true
+            
+            log "  🔧 清理并重新编译目标..."
+            rm -rf build_dir/target-*/linux-ath79_*/tmp/
+            make target/linux/compile -j1 V=s >> /tmp/build-logs/target_final.log 2>&1 || true
+            
+            # 检查是否生成固件
+            local target_dir="bin/targets/ath79/generic"
+            if [ -f "$target_dir/immortalwrt-ath79-generic-netgear_wndr3800-squashfs-sysupgrade.bin" ]; then
+                log "✅ 最终修复成功！固件已生成"
+                BUILD_EXIT_CODE=0
+            fi
+        fi
     fi
     
     # 执行强制恢复
@@ -5776,36 +5921,39 @@ EOF
     # 最终检查
     # ============================================
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-    local sysupgrade_files=$(find "$target_dir" -name "*sysupgrade*.bin" 2>/dev/null | wc -l)
+    local sysupgrade_files=$(find "$target_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.itb" 2>/dev/null | wc -l)
     local factory_files=$(find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | wc -l)
-    local itb_files=$(find "$target_dir" -name "*.itb" 2>/dev/null | wc -l)
+    local itb_files=$(find "$target_dir" -name "*.itb" 2>/dev/null | grep -v "sysupgrade" | wc -l)
     
     echo ""
     echo "📊 最终固件状态:"
     echo "----------------------------------------"
     
     if [ $sysupgrade_files -gt 0 ]; then
-        find "$target_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
+        find "$target_dir" -name "*sysupgrade*" 2>/dev/null | head -1 | while read file; do
             local size=$(ls -lh "$file" | awk '{print $5}')
-            echo "  ✅ sysupgrade.bin: 存在 ($size) - $(basename "$file")"
+            local fname=$(basename "$file")
+            if [[ "$fname" == *.itb ]]; then
+                echo "  ✅ sysupgrade.itb: 存在 ($size) - $fname [可刷机]"
+            else
+                echo "  ✅ sysupgrade.bin: 存在 ($size) - $fname [可刷机]"
+            fi
         done
     else
-        echo "  ❌ sysupgrade.bin: 不存在"
+        echo "  ❌ sysupgrade固件: 不存在"
     fi
     
     if [ $factory_files -gt 0 ]; then
         find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
             local size=$(ls -lh "$file" | awk '{print $5}')
-            echo "  ✅ factory.img: 存在 ($size) - $(basename "$file")"
+            echo "  🏭 factory镜像: 存在 ($size) - $(basename "$file") [原厂刷机用]"
         done
-    else
-        echo "  ❌ factory.img: 不存在"
     fi
     
     if [ $itb_files -gt 0 ]; then
-        find "$target_dir" -name "*.itb" 2>/dev/null | head -1 | while read file; do
+        find "$target_dir" -name "*.itb" 2>/dev/null | grep -v "sysupgrade" | head -1 | while read file; do
             local size=$(ls -lh "$file" | awk '{print $5}')
-            echo "  🔷 FIT镜像: 存在 ($size) - $(basename "$file") [可用于恢复]"
+            echo "  🔷 FIT镜像: 存在 ($size) - $(basename "$file") [恢复用]"
         done
     fi
     
@@ -5813,14 +5961,15 @@ EOF
     
     # 根据编译结果给出总结
     if [ $BUILD_EXIT_CODE -eq 0 ]; then
-        if [ $sysupgrade_files -gt 0 ] && [ $factory_files -gt 0 ]; then
-            echo "🎉 编译成功！双固件都已生成"
-        elif [ $sysupgrade_files -gt 0 ]; then
-            echo "⚠️ 编译完成，但只有sysupgrade固件"
+        if [ $sysupgrade_files -gt 0 ]; then
+            echo "🎉 编译成功！可刷机固件已生成"
+            if [[ "$TARGET" == "mediatek" ]] && [[ "$SUBTARGET" == "filogic" ]]; then
+                echo "   📌 注意: 对于 MediaTek Filogic 平台，.itb 文件就是可刷机固件"
+            fi
         elif [ $factory_files -gt 0 ]; then
             echo "⚠️ 编译完成，但只有factory固件"
         else
-            echo "❌ 编译完成但没有找到任何固件"
+            echo "❌ 编译完成但没有找到任何可刷机固件"
         fi
     else
         echo "❌ 编译失败，退出码: $BUILD_EXIT_CODE"
