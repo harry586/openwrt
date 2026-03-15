@@ -1,7 +1,7 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
 # 版本: 3.3.0
-# 最后更新: 2026-02-25
+# 最后更新: 2026-03-15
 
 name: OpenWrt 智能固件构建工作流
 
@@ -22,7 +22,7 @@ on:
         required: false
         type: choice
         default: "ac42u"
-        options: ["ac42u", "cmcc_rax3000m", "netgear_wndr3800"]
+        options: ["ac42u", "cmcc_rax3000m-nand", "netgear_wndr3800"]
       
       # 手动输入框（竖向排列）
       manual_device_name:
@@ -31,7 +31,7 @@ on:
         type: string
         default: ""
       manual_target:
-        description: "🎯 芯片型号（ipq40xx）"
+        description: "🎯 芯片型号（ipq40xx、mediatek）"
         required: false
         type: string
         default: ""
@@ -86,7 +86,7 @@ jobs:
 #【firmware-build.yml-00-end】
 
     steps:
-      #【firmware-build.yml-01】
+#【firmware-build.yml-01】
       - name: "01. 生成时间戳（UTC+8时区）"
         run: |
           echo "=== 步骤01: 生成时间戳（UTC+8时区） ==="
@@ -96,22 +96,31 @@ jobs:
           START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
           echo "🕐 开始时间: $START_TIME"
           
+          # 确定最终使用的设备名称
+          if [ -n "${{ github.event.inputs.manual_device_name }}" ]; then
+            FINAL_DEVICE_NAME="${{ github.event.inputs.manual_device_name }}"
+          else
+            FINAL_DEVICE_NAME="${{ github.event.inputs.device_name }}"
+          fi
+          
           TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
-          TIMESTAMP_SEC="${{ github.event.inputs.manual_device_name != '' && github.event.inputs.manual_device_name || github.event.inputs.device_name }}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP_LOCAL"
+          TIMESTAMP_SEC="$FINAL_DEVICE_NAME-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP_LOCAL"
           
           echo "TIMESTAMP_SEC=$TIMESTAMP_SEC" >> $GITHUB_ENV
           echo "START_TIME=$START_TIME" >> $GITHUB_ENV
+          echo "FINAL_DEVICE_NAME=$FINAL_DEVICE_NAME" >> $GITHUB_ENV
           
           echo "✅ 生成时间戳: $TIMESTAMP_SEC"
           echo "📋 构建配置:"
           echo "  预定义设备: ${{ github.event.inputs.device_name }}"
           echo "  手动设备名: ${{ github.event.inputs.manual_device_name }}"
+          echo "  最终设备名: $FINAL_DEVICE_NAME"
           echo "  手动芯片型号: ${{ github.event.inputs.manual_target }}"
           echo "  手动子平台: ${{ github.event.inputs.manual_subtarget }}"
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
-      #【firmware-build.yml-01-end】
+#【firmware-build.yml-01-end】
 
       #【firmware-build.yml-02】
       - name: "02. 使用Git Archive API下载源代码"
