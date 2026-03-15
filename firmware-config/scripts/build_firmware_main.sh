@@ -5866,6 +5866,8 @@ workflow_step26_check_artifacts() {
         local initramfs_count=0
         local factory_count=0
         local itb_count=0
+        local preloader_count=0
+        local gpt_count=0
         local other_count=0
         
         # 先收集所有文件，避免管道中的子shell问题
@@ -5881,13 +5883,23 @@ workflow_step26_check_artifacts() {
             
             # 判断文件类型并添加注释
             if echo "$FILE_NAME" | grep -q "sysupgrade"; then
-                echo "  ✅ $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
-                echo "    注释: *sysupgrade.bin - 刷机用"
-                echo ""
-                sysupgrade_count=$((sysupgrade_count + 1))
+                if echo "$FILE_NAME" | grep -q "\.itb$"; then
+                    echo "  ✅ $FILE_NAME (FIT格式)"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🚀 刷机用 - FIT格式固件，通过 sysupgrade 命令刷入"
+                    echo "    注释: *sysupgrade.itb - 刷机用"
+                    echo ""
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                else
+                    echo "  ✅ $FILE_NAME"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
+                    echo "    注释: *sysupgrade.bin - 刷机用"
+                    echo ""
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                fi
             elif echo "$FILE_NAME" | grep -q "factory"; then
                 echo "  🏭 $FILE_NAME"
                 echo "    大小: $SIZE"
@@ -5902,7 +5914,7 @@ workflow_step26_check_artifacts() {
                     echo "    大小: $SIZE"
                     echo "    路径: $FILE_PATH"
                     echo "    用途: 🆘 FIT格式恢复镜像 - 用于支持FIT的引导加载程序"
-                    echo "    注释: *initramfs-fit-uImage.itb - 恢复用"
+                    echo "    注释: *initramfs-recovery.itb - 恢复用"
                     itb_count=$((itb_count + 1))
                 else
                     echo "  🔷 $FILE_NAME"
@@ -5913,6 +5925,22 @@ workflow_step26_check_artifacts() {
                     initramfs_count=$((initramfs_count + 1))
                 fi
                 echo ""
+            elif echo "$FILE_NAME" | grep -q "preloader"; then
+                echo "  ⚙️ $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🔧 预加载器 - 用于启动引导程序"
+                echo "    注释: *preloader.bin - 引导加载程序"
+                echo ""
+                preloader_count=$((preloader_count + 1))
+            elif echo "$FILE_NAME" | grep -q "gpt"; then
+                echo "  💽 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 📋 GPT分区表 - 用于eMMC分区"
+                echo "    注释: *gpt.bin - 分区表"
+                echo ""
+                gpt_count=$((gpt_count + 1))
             elif echo "$FILE_NAME" | grep -q "kernel"; then
                 echo "  🔶 $FILE_NAME"
                 echo "    大小: $SIZE"
@@ -5947,29 +5975,30 @@ workflow_step26_check_artifacts() {
         echo ""
         echo "📊 固件统计:"
         echo "----------------------------------------"
-        echo "  ✅ sysupgrade.bin: $sysupgrade_count 个 - 🚀 **刷机用**"
-        echo "  🔷 initramfs-kernel.bin: $initramfs_count 个 - 🆘 **恢复用**"
+        echo "  ✅ sysupgrade固件: $sysupgrade_count 个 - 🚀 **刷机用**"
+        echo "  🔷 initramfs恢复镜像: $initramfs_count 个 - 🆘 **传统恢复用**"
         echo "  🔷 FIT恢复镜像: $itb_count 个 - 🆘 **FIT格式恢复用**"
         echo "  🏭 factory镜像: $factory_count 个 - 📦 **原厂刷机用**"
+        echo "  ⚙️ preloader: $preloader_count 个 - 🔧 **引导加载程序**"
+        echo "  💽 GPT分区表: $gpt_count 个 - 📋 **eMMC分区表**"
         echo "  📦 其他文件: $other_count 个"
         echo "----------------------------------------"
         echo ""
         
         # 重要提示
         echo "🔔 固件类型说明:"
-        echo "  ✅ *sysupgrade.bin      - **刷机用** (已安装OpenWrt时升级)"
-        echo "  🔷 *initramfs-*.bin     - **恢复用** (内存启动，用于恢复)"
-        echo "  🔷 *initramfs-*.itb     - **FIT格式恢复** (适用于支持FIT的引导程序)"
-        echo "  🏭 *factory.img/*.bin   - **原厂刷机用** (从原厂固件第一次刷入)"
+        echo "  ✅ *sysupgrade.bin/*.itb - **刷机用** (已安装OpenWrt时升级)"
+        echo "  🔷 *initramfs-*.bin        - **传统恢复用** (内存启动，用于恢复)"
+        echo "  🔷 *initramfs-*.itb        - **FIT格式恢复** (适用于支持FIT的引导程序)"
+        echo "  🏭 *factory.img/*.bin      - **原厂刷机用** (从原厂固件第一次刷入)"
+        echo "  ⚙️ *preloader.bin          - **引导预加载器** (写入特定分区)"
+        echo "  💽 *gpt.bin                - **GPT分区表** (用于eMMC)"
         echo ""
         
         # 检测缺少的固件类型
         local missing_types=""
         if [ $sysupgrade_count -eq 0 ]; then
             missing_types="$missing_types sysupgrade"
-        fi
-        if [ $factory_count -eq 0 ] && [ $initramfs_count -eq 0 ] && [ $itb_count -eq 0 ]; then
-            missing_types="$missing_types 恢复镜像"
         fi
         
         if [ -n "$missing_types" ]; then
@@ -5986,7 +6015,7 @@ workflow_step26_check_artifacts() {
         # 显示所有可刷机的固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
-            if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
+            if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"sysupgrade.itb" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
                 local fname=$(basename "$file")
                 local fsize=$(ls -lh "$file" | awk '{print $5}')
                 local ftype=""
@@ -6020,8 +6049,8 @@ workflow_step26_check_artifacts() {
         # 提供刷机建议
         if [ $sysupgrade_count -gt 0 ]; then
             echo "📝 刷机建议:"
-            echo "   如果您已经安装了OpenWrt，请使用 sysupgrade.bin 文件"
-            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin"
+            echo "   如果您已经安装了OpenWrt，请使用 sysupgrade 固件文件"
+            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin 或 *sysupgrade.itb"
         elif [ $factory_count -gt 0 ]; then
             echo "📝 刷机建议:"
             echo "   如果您是从原厂固件第一次刷入，请使用 factory.img 文件"
@@ -6031,6 +6060,15 @@ workflow_step26_check_artifacts() {
             echo "   没有找到sysupgrade或factory固件，但找到了initramfs恢复镜像"
             echo "   initramfs是内存启动镜像，可用于恢复系统，但不能永久刷入"
             echo "   如需永久刷入，需要先启动initramfs，然后在系统中刷入sysupgrade"
+        fi
+        
+        # 如果是RAX3000M，提供特定说明
+        if [[ "$TARGET" == "mediatek" ]] && [[ "$SUBTARGET" == "filogic" ]]; then
+            echo ""
+            echo "📌 适用于 CMCC RAX3000M 的说明:"
+            echo "   - NAND版本: 使用 nand-preloader.bin 和 sysupgrade.itb"
+            echo "   - eMMC版本: 使用 emmc-gpt.bin, emmc-preloader.bin 和 sysupgrade.itb"
+            echo "   - 刷机前请确认您的硬件版本"
         fi
         
         echo "=========================================="
