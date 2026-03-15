@@ -23,7 +23,7 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 #【support.sh-02-end】
 
 #【support.sh-03】
-# 支持的设备列表（仅3个设备）
+# 支持的设备列表
 # 格式: DEVICES["设备名称"]="目标平台 子目标 芯片型号"
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic bcm47189"
