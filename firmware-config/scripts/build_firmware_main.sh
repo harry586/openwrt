@@ -4927,143 +4927,149 @@ EOF
                 break
             fi
             
-            # 检查是否有补丁失败
+            # 检查是否有补丁失败 - 直接从日志中查找失败的补丁
             local target="${TARGET:-ipq40xx}"
             local kernel_ver=$(grep -E "^KERNEL_PATCHVER:=" target/linux/$target/Makefile 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "5.15")
-            local kernel_dir=$(find build_dir -maxdepth 2 -type d -name "linux-${target}*" 2>/dev/null | head -1)
             
-            if [ -d "$kernel_dir" ]; then
-                local rej_files=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
+            log "  🔍 从编译日志中查找失败的补丁..."
+            
+            # 从日志中提取失败的补丁名
+            local failed_patches=$(grep -E "Patch failed!.*patches-.*/[0-9]+-.*\.patch" build_phase1_attempt${attempt}.log | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+            
+            if [ -n "$failed_patches" ]; then
+                log "  ⚠️ 发现失败的补丁:"
                 
-                if [ -n "$rej_files" ]; then
-                    log "  ⚠️ 发现补丁失败，直接删除失败的补丁..."
+                # 找到对应的补丁目录
+                local patch_dir="target/linux/$target/patches-$kernel_ver"
+                
+                if [ -d "$patch_dir" ]; then
+                    # 将failed_patches转换为数组
+                    local failed_array=()
+                    while IFS= read -r line; do
+                        failed_array+=("$line")
+                    done <<< "$failed_patches"
                     
-                    # 找到对应的补丁目录
-                    local patch_dir="target/linux/$target/patches-$kernel_ver"
-                    
-                    if [ -d "$patch_dir" ]; then
-                        # 将rej_files转换为数组
-                        local rej_array=()
-                        while IFS= read -r line; do
-                            rej_array+=("$line")
-                        done <<< "$rej_files"
+                    # 删除所有失败的补丁并加入黑名单
+                    local deleted_count=0
+                    for patch_name in "${failed_array[@]}"; do
+                        [ -z "$patch_name" ] && continue
+                        local patch_file="$patch_dir/$patch_name"
                         
-                        # 删除所有失败的补丁并加入黑名单
-                        local deleted_count=0
-                        for rej_file in "${rej_array[@]}"; do
-                            [ -z "$rej_file" ] && continue
-                            local patch_name=$(basename "$rej_file" .rej).patch
-                            local patch_file="$patch_dir/$patch_name"
+                        if [ -f "$patch_file" ]; then
+                            log "    🗑️ 删除补丁: $patch_name"
+                            rm -f "$patch_file"
                             
-                            if [ -f "$patch_file" ]; then
-                                log "    🗑️ 删除补丁: $patch_name"
-                                rm -f "$patch_file"
-                                
-                                # 加入黑名单（永久禁止）
-                                echo "$target:$kernel_ver:$patch_name" >> "$patch_blacklist"
+                            # 加入黑名单（永久禁止）
+                            echo "$target:$kernel_ver:$patch_name" >> "$patch_blacklist"
+                            deleted_count=$((deleted_count + 1))
+                        else
+                            # 尝试模糊匹配
+                            local found_patch=$(find "$patch_dir" -name "*${patch_name}*" 2>/dev/null | head -1)
+                            if [ -n "$found_patch" ]; then
+                                local found_name=$(basename "$found_patch")
+                                log "    🗑️ 删除补丁(模糊匹配): $found_name"
+                                rm -f "$found_patch"
+                                echo "$target:$kernel_ver:$found_name" >> "$patch_blacklist"
                                 deleted_count=$((deleted_count + 1))
                             fi
-                        done
-                        
-                        log "  ✅ 已删除 $deleted_count 个失败补丁并加入黑名单"
-                        
-                        # 检查黑名单中的补丁是否还有残留
-                        if [ -f "$patch_blacklist" ] && [ -s "$patch_blacklist" ]; then
-                            while IFS=: read -r blacklist_target blacklist_ver blacklist_patch; do
-                                [ -z "$blacklist_target" ] && continue
-                                if [ "$blacklist_target" = "$target" ] && [ "$blacklist_ver" = "$kernel_ver" ]; then
-                                    local blacklisted_file="$patch_dir/$blacklist_patch"
-                                    if [ -f "$blacklisted_file" ]; then
-                                        log "    ⚠️ 发现黑名单补丁残留: $blacklist_patch"
-                                        rm -f "$blacklisted_file"
-                                        deleted_count=$((deleted_count + 1))
-                                    fi
-                                fi
-                            done < "$patch_blacklist"
                         fi
-                        
-                        # 彻底清理内核构建目录
-                        log "  🔄 彻底清理内核构建目录..."
-                        rm -rf "build_dir/linux-${target}_"*
-                        rm -rf "build_dir/target-*"
-                        find staging_dir -name ".stamp_target_*" -exec rm -f {} \; 2>/dev/null || true
-                        
-                        # 重要：刷新剩余的补丁 - 但跳过黑名单中的补丁
-                        log "  🔄 刷新剩余的补丁（跳过黑名单）..."
-                        
-                        # 先备份黑名单
-                        local blacklist_backup="$patch_blacklist.tmp"
-                        cp "$patch_blacklist" "$blacklist_backup"
-                        
-                        # 运行刷新命令
-                        if make "target/linux/$target/refresh" V=s >> /tmp/build-logs/refresh_patches_${attempt}.log 2>&1; then
-                            log "  ✅ 补丁刷新完成"
-                        else
-                            log "  ⚠️ 补丁刷新有警告，但继续"
-                        fi
-                        
-                        # 再次删除黑名单中的补丁（防止刷新时重新生成）
-                        local re_deleted=0
+                    done
+                    
+                    log "  ✅ 已删除 $deleted_count 个失败补丁并加入黑名单"
+                    
+                    # 检查黑名单中的补丁是否还有残留
+                    if [ -f "$patch_blacklist" ] && [ -s "$patch_blacklist" ]; then
+                        local blacklist_deleted=0
                         while IFS=: read -r blacklist_target blacklist_ver blacklist_patch; do
                             [ -z "$blacklist_target" ] && continue
                             if [ "$blacklist_target" = "$target" ] && [ "$blacklist_ver" = "$kernel_ver" ]; then
                                 local blacklisted_file="$patch_dir/$blacklist_patch"
                                 if [ -f "$blacklisted_file" ]; then
-                                    log "    🗑️ 删除刷新后重新出现的黑名单补丁: $blacklist_patch"
+                                    log "    ⚠️ 发现黑名单补丁残留: $blacklist_patch"
                                     rm -f "$blacklisted_file"
-                                    re_deleted=$((re_deleted + 1))
+                                    blacklist_deleted=$((blacklist_deleted + 1))
                                 fi
                             fi
-                        done < "$blacklist_backup"
+                        done < "$patch_blacklist"
                         
-                        if [ $re_deleted -gt 0 ]; then
-                            log "  ✅ 刷新后再次删除了 $re_deleted 个黑名单补丁"
+                        if [ $blacklist_deleted -gt 0 ]; then
+                            log "  ✅ 清理了 $blacklist_deleted 个黑名单补丁残留"
+                            deleted_count=$((deleted_count + blacklist_deleted))
                         fi
-                        
-                        rm -f "$blacklist_backup"
-                        
-                        # 更新内核配置
-                        log "  🔄 更新内核配置..."
-                        if make "target/linux/$target/config" V=s >> /tmp/build-logs/kernel_config_${attempt}.log 2>&1; then
-                            log "  ✅ 内核配置更新完成"
-                        else
-                            log "  ⚠️ 内核配置更新有警告，但继续"
-                        fi
-                        
-                        # 重新运行 defconfig
-                        log "  🔄 重新运行 make defconfig..."
-                        make defconfig > /tmp/build-logs/defconfig_after_patch_removal_${attempt}.log 2>&1 || {
-                            log "  ⚠️ make defconfig 有警告，继续尝试"
-                        }
-                        
-                        # 如果还有下一次重试，继续
-                        if [ $attempt -lt $max_attempts ]; then
-                            log "  🔄 准备第 $((attempt + 1)) 次重试..."
-                        fi
+                    fi
+                    
+                    # 彻底清理内核构建目录
+                    log "  🔄 彻底清理内核构建目录..."
+                    rm -rf "build_dir/linux-${target}_"*
+                    rm -rf "build_dir/target-*"
+                    find staging_dir -name ".stamp_target_*" -exec rm -f {} \; 2>/dev/null || true
+                    
+                    # 重要：刷新剩余的补丁 - 但跳过黑名单中的补丁
+                    log "  🔄 刷新剩余的补丁（跳过黑名单）..."
+                    
+                    # 先备份黑名单
+                    local blacklist_backup="$patch_blacklist.tmp"
+                    cp "$patch_blacklist" "$blacklist_backup"
+                    
+                    # 运行刷新命令
+                    if make "target/linux/$target/refresh" V=s >> /tmp/build-logs/refresh_patches_${attempt}.log 2>&1; then
+                        log "  ✅ 补丁刷新完成"
                     else
-                        log "  ⚠️ 未找到补丁目录: $patch_dir"
+                        log "  ⚠️ 补丁刷新有警告，但继续"
+                    fi
+                    
+                    # 再次删除黑名单中的补丁（防止刷新时重新生成）
+                    local re_deleted=0
+                    while IFS=: read -r blacklist_target blacklist_ver blacklist_patch; do
+                        [ -z "$blacklist_target" ] && continue
+                        if [ "$blacklist_target" = "$target" ] && [ "$blacklist_ver" = "$kernel_ver" ]; then
+                            local blacklisted_file="$patch_dir/$blacklist_patch"
+                            if [ -f "$blacklisted_file" ]; then
+                                log "    🗑️ 删除刷新后重新出现的黑名单补丁: $blacklist_patch"
+                                rm -f "$blacklisted_file"
+                                re_deleted=$((re_deleted + 1))
+                            fi
+                        fi
+                    done < "$blacklist_backup"
+                    
+                    if [ $re_deleted -gt 0 ]; then
+                        log "  ✅ 刷新后再次删除了 $re_deleted 个黑名单补丁"
+                    fi
+                    
+                    rm -f "$blacklist_backup"
+                    
+                    # 更新内核配置
+                    log "  🔄 更新内核配置..."
+                    if make "target/linux/$target/config" V=s >> /tmp/build-logs/kernel_config_${attempt}.log 2>&1; then
+                        log "  ✅ 内核配置更新完成"
+                    else
+                        log "  ⚠️ 内核配置更新有警告，但继续"
+                    fi
+                    
+                    # 重新运行 defconfig
+                    log "  🔄 重新运行 make defconfig..."
+                    make defconfig > /tmp/build-logs/defconfig_after_patch_removal_${attempt}.log 2>&1 || {
+                        log "  ⚠️ make defconfig 有警告，继续尝试"
+                    }
+                    
+                    # 如果还有下一次重试，继续
+                    if [ $attempt -lt $max_attempts ]; then
+                        log "  🔄 准备第 $((attempt + 1)) 次重试..."
                     fi
                 else
-                    # 没有补丁失败，但编译失败 - 可能是其他原因
-                    log "  ⚠️ 编译失败但未发现补丁失败，可能是其他原因"
-                    
-                    # 检查日志最后20行
-                    log "  📋 最后10行错误日志:"
-                    tail -30 build_phase1_attempt${attempt}.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" | tail -10 || true
-                    
-                    # 如果不是最后一次尝试，简单清理后重试
-                    if [ $attempt -lt $max_attempts ]; then
-                        log "  🔄 简单清理后第 $((attempt + 1)) 次重试..."
-                        rm -rf build_dir/linux-* 2>/dev/null || true
-                        rm -rf staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-                    fi
+                    log "  ⚠️ 未找到补丁目录: $patch_dir"
                 fi
             else
-                log "  ⚠️ 未找到内核目录，可能是早期编译阶段失败"
+                # 没有补丁失败，但编译失败 - 可能是其他原因
+                log "  ⚠️ 编译失败但未发现补丁失败，可能是其他原因"
                 
-                # 如果不是最后一次尝试，清理后重试
+                # 检查日志最后20行
+                log "  📋 最后10行错误日志:"
+                tail -30 build_phase1_attempt${attempt}.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" | tail -10 || true
+                
+                # 如果不是最后一次尝试，简单清理后重试
                 if [ $attempt -lt $max_attempts ]; then
-                    log "  🔄 清理后第 $((attempt + 1)) 次重试..."
+                    log "  🔄 简单清理后第 $((attempt + 1)) 次重试..."
                     rm -rf build_dir/linux-* 2>/dev/null || true
                     rm -rf staging_dir/target-*/.stamp_target_* 2>/dev/null || true
                 fi
