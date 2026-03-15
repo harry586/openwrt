@@ -4620,13 +4620,13 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件（补丁失败直接删除+跳过黑名单刷新机制）
+# 步骤25: 编译固件（补丁失败直接删除+刷新剩余补丁机制）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（补丁失败直接删除+跳过黑名单刷新机制） ==="
+    log "=== 步骤25: 编译固件（补丁失败直接删除+刷新剩余补丁机制） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -4894,7 +4894,7 @@ EOF
         fi
         
         # ============================================
-        # 编译循环 - 检测到补丁失败直接删除并跳过黑名单
+        # 编译循环 - 检测到补丁失败直接删除并刷新剩余补丁
         # ============================================
         local max_attempts=3
         local attempt=1
@@ -4942,9 +4942,15 @@ EOF
                     local patch_dir="target/linux/$target/patches-$kernel_ver"
                     
                     if [ -d "$patch_dir" ]; then
+                        # 将rej_files转换为数组
+                        local rej_array=()
+                        while IFS= read -r line; do
+                            rej_array+=("$line")
+                        done <<< "$rej_files"
+                        
                         # 删除所有失败的补丁并加入黑名单
                         local deleted_count=0
-                        while read rej_file; do
+                        for rej_file in "${rej_array[@]}"; do
                             [ -z "$rej_file" ] && continue
                             local patch_name=$(basename "$rej_file" .rej).patch
                             local patch_file="$patch_dir/$patch_name"
@@ -4957,12 +4963,12 @@ EOF
                                 echo "$target:$kernel_ver:$patch_name" >> "$patch_blacklist"
                                 deleted_count=$((deleted_count + 1))
                             fi
-                        done <<< "$rej_files"
+                        done
                         
                         log "  ✅ 已删除 $deleted_count 个失败补丁并加入黑名单"
                         
                         # 检查黑名单中的补丁是否还有残留
-                        if [ -f "$patch_blacklist" ]; then
+                        if [ -f "$patch_blacklist" ] && [ -s "$patch_blacklist" ]; then
                             while IFS=: read -r blacklist_target blacklist_ver blacklist_patch; do
                                 [ -z "$blacklist_target" ] && continue
                                 if [ "$blacklist_target" = "$target" ] && [ "$blacklist_ver" = "$kernel_ver" ]; then
@@ -4970,6 +4976,7 @@ EOF
                                     if [ -f "$blacklisted_file" ]; then
                                         log "    ⚠️ 发现黑名单补丁残留: $blacklist_patch"
                                         rm -f "$blacklisted_file"
+                                        deleted_count=$((deleted_count + 1))
                                     fi
                                 fi
                             done < "$patch_blacklist"
@@ -4996,6 +5003,7 @@ EOF
                         fi
                         
                         # 再次删除黑名单中的补丁（防止刷新时重新生成）
+                        local re_deleted=0
                         while IFS=: read -r blacklist_target blacklist_ver blacklist_patch; do
                             [ -z "$blacklist_target" ] && continue
                             if [ "$blacklist_target" = "$target" ] && [ "$blacklist_ver" = "$kernel_ver" ]; then
@@ -5003,9 +5011,14 @@ EOF
                                 if [ -f "$blacklisted_file" ]; then
                                     log "    🗑️ 删除刷新后重新出现的黑名单补丁: $blacklist_patch"
                                     rm -f "$blacklisted_file"
+                                    re_deleted=$((re_deleted + 1))
                                 fi
                             fi
                         done < "$blacklist_backup"
+                        
+                        if [ $re_deleted -gt 0 ]; then
+                            log "  ✅ 刷新后再次删除了 $re_deleted 个黑名单补丁"
+                        fi
                         
                         rm -f "$blacklist_backup"
                         
