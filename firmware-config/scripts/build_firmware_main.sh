@@ -4620,13 +4620,13 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件（补丁失败直接删除+刷新剩余补丁机制）
+# 步骤25: 编译固件（补丁失败直接删除+跳过黑名单刷新机制）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（补丁失败直接删除+刷新剩余补丁机制） ==="
+    log "=== 步骤25: 编译固件（补丁失败直接删除+跳过黑名单刷新机制） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -4894,7 +4894,7 @@ EOF
         fi
         
         # ============================================
-        # 编译循环 - 检测到补丁失败直接删除并刷新剩余补丁
+        # 编译循环 - 检测到补丁失败直接删除并跳过黑名单
         # ============================================
         local max_attempts=3
         local attempt=1
@@ -4936,7 +4936,7 @@ EOF
                 local rej_files=$(find "$kernel_dir" -name "*.rej" 2>/dev/null)
                 
                 if [ -n "$rej_files" ]; then
-                    log "  ⚠️ 发现补丁失败，直接删除失败的补丁并刷新剩余补丁..."
+                    log "  ⚠️ 发现补丁失败，直接删除失败的补丁..."
                     
                     # 找到对应的补丁目录
                     local patch_dir="target/linux/$target/patches-$kernel_ver"
@@ -4981,13 +4981,33 @@ EOF
                         rm -rf "build_dir/target-*"
                         find staging_dir -name ".stamp_target_*" -exec rm -f {} \; 2>/dev/null || true
                         
-                        # 重要：刷新剩余的补丁（自动调整行号）
-                        log "  🔄 刷新剩余的补丁..."
+                        # 重要：刷新剩余的补丁 - 但跳过黑名单中的补丁
+                        log "  🔄 刷新剩余的补丁（跳过黑名单）..."
+                        
+                        # 先备份黑名单
+                        local blacklist_backup="$patch_blacklist.tmp"
+                        cp "$patch_blacklist" "$blacklist_backup"
+                        
+                        # 运行刷新命令
                         if make "target/linux/$target/refresh" V=s >> /tmp/build-logs/refresh_patches_${attempt}.log 2>&1; then
                             log "  ✅ 补丁刷新完成"
                         else
                             log "  ⚠️ 补丁刷新有警告，但继续"
                         fi
+                        
+                        # 再次删除黑名单中的补丁（防止刷新时重新生成）
+                        while IFS=: read -r blacklist_target blacklist_ver blacklist_patch; do
+                            [ -z "$blacklist_target" ] && continue
+                            if [ "$blacklist_target" = "$target" ] && [ "$blacklist_ver" = "$kernel_ver" ]; then
+                                local blacklisted_file="$patch_dir/$blacklist_patch"
+                                if [ -f "$blacklisted_file" ]; then
+                                    log "    🗑️ 删除刷新后重新出现的黑名单补丁: $blacklist_patch"
+                                    rm -f "$blacklisted_file"
+                                fi
+                            fi
+                        done < "$blacklist_backup"
+                        
+                        rm -f "$blacklist_backup"
                         
                         # 更新内核配置
                         log "  🔄 更新内核配置..."
