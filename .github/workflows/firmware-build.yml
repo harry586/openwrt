@@ -533,6 +533,26 @@ jobs:
             "${{ env.TIMESTAMP_SEC }}" \
             "${{ github.event.inputs.enable_parallel }}"
       #【firmware-build.yml-30-end】
+      
+#【firmware-build.yml-31】
+      - name: "31. 上传错误检查报告"
+        if: always()  # 无论成功失败都上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-report-${{ env.TIMESTAMP_SEC }}
+          path: ${{ github.workspace }}/error-reports/
+          retention-days: 7
+          if-no-files-found: warn
+#【firmware-build.yml-31-end】
+
+#【firmware-build.yml-32】
+# 备用
+#【firmware-build.yml-32-end】
+
+#【firmware-build.yml-33】
+# 备用
+#【firmware-build.yml-33-end】
+
 #【firmware-build.yml-99】
 # 工作流文件结束
 #【firmware-build.yml-99-end】
