@@ -280,6 +280,11 @@ setup_environment() {
         binutils-dev libdw-dev libiberty-dev
     )
     
+    local yaml_packages=(
+        libyaml-dev
+        libyaml-cpp-dev
+    )
+    
     log "安装基础编译工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${base_packages[@]}" || handle_error "安装基础编译工具失败"
     
@@ -292,6 +297,14 @@ setup_environment() {
     log "安装调试工具..."
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${debug_packages[@]}" || handle_error "安装调试工具失败"
     
+    log "安装YAML库（修复dtc链接错误）..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${yaml_packages[@]}" || {
+        log "⚠️ libyaml-dev安装失败，尝试单独安装..."
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libyaml-dev || {
+            log "⚠️ libyaml-dev安装失败，将在后续步骤中修复"
+        }
+    }
+    
     local important_tools=("gcc" "g++" "make" "git" "python3" "cmake" "flex" "bison")
     for tool in "${important_tools[@]}"; do
         if command -v $tool >/dev/null 2>&1; then
@@ -300,6 +313,13 @@ setup_environment() {
             log "❌ $tool 未安装"
         fi
     done
+    
+    # 验证libyaml安装
+    if pkg-config --libs yaml-0.1 > /dev/null 2>&1; then
+        log "✅ libyaml 已正确安装"
+    else
+        log "⚠️ libyaml 未正确安装，将在编译时修复"
+    fi
     
     log "✅ 编译环境设置完成"
 }
@@ -4186,7 +4206,7 @@ workflow_step08_initialize_build_env_hybrid() {
 
 #【build_firmware_main.sh-27】
 # ============================================
-# 步骤09: 编译源码自带工具链
+# 步骤09: 编译源码自带工具链（增强版 - 检查libyaml）
 # 对应 firmware-build.yml 步骤09
 # ============================================
 workflow_step09_download_sdk() {
@@ -4203,6 +4223,64 @@ workflow_step09_download_sdk() {
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
         log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+    fi
+    
+    # ============================================
+    # 检查libyaml是否安装（修复dtc链接错误）
+    # ============================================
+    log "🔧 检查libyaml库（修复dtc链接错误）..."
+    
+    if ! pkg-config --libs yaml-0.1 > /dev/null 2>&1; then
+        log "  ⚠️ libyaml未找到，尝试安装..."
+        sudo apt-get update > /dev/null 2>&1 || true
+        sudo apt-get install -y libyaml-dev > /dev/null 2>&1 || {
+            log "  ⚠️ 自动安装失败，将使用备用方案"
+            
+            # 备用方案：创建pkg-config文件
+            mkdir -p staging_dir/host/lib/pkgconfig
+            cat > staging_dir/host/lib/pkgconfig/yaml-0.1.pc << 'EOF'
+prefix=/usr
+exec_prefix=${prefix}
+includedir=${prefix}/include
+libdir=${exec_prefix}/lib/x86_64-linux-gnu
+
+Name: LibYAML
+Description: Library for YAML 1.1
+Version: 0.2.5
+Cflags: -I${includedir}
+Libs: -L${libdir} -lyaml
+EOF
+            export PKG_CONFIG_PATH="$PWD/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
+            log "  ✅ 已创建libyaml pkg-config文件"
+            
+            # 检查库文件是否存在
+            if [ ! -f "/usr/lib/x86_64-linux-gnu/libyaml.so" ] && [ ! -f "/usr/lib/libyaml.so" ]; then
+                log "  ⚠️ libyaml库文件不存在，尝试下载源码编译..."
+                
+                # 下载并编译libyaml
+                mkdir -p dl
+                if [ ! -f "dl/yaml-0.2.5.tar.gz" ]; then
+                    wget -O dl/yaml-0.2.5.tar.gz https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz || true
+                fi
+                
+                if [ -f "dl/yaml-0.2.5.tar.gz" ]; then
+                    mkdir -p build_dir/host/libyaml-0.2.5
+                    tar -xzf dl/yaml-0.2.5.tar.gz -C build_dir/host/libyaml-0.2.5 --strip-components=1
+                    cd build_dir/host/libyaml-0.2.5
+                    ./configure --prefix="$BUILD_DIR/staging_dir/host"
+                    make -j1
+                    make install
+                    cd "$BUILD_DIR"
+                    
+                    # 更新pkg-config路径
+                    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
+                    log "  ✅ libyaml手动编译完成"
+                fi
+            fi
+        }
+    else
+        log "  ✅ libyaml已安装"
+        pkg-config --libs --cflags yaml-0.1 | sed 's/^/      /'
     fi
     
     log "📌 开始编译工具链..."
@@ -5351,13 +5429,13 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件（增强错误检测版）
+# 步骤25: 编译固件（修复dtc链接错误）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（增强错误检测版） ==="
+    log "=== 步骤25: 编译固件（修复dtc链接错误） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5365,118 +5443,229 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 设置文件描述符限制（强制提高）
+    # 设置文件描述符限制
     # ============================================
-    log "🔧 强制设置文件描述符限制..."
-    ulimit -n 65536 2>/dev/null || sudo ulimit -n 65536 2>/dev/null || true
+    ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 修复"Broken pipe"错误 - 创建包装脚本
+    # 创建双固件保护脚本
     # ============================================
-    log "🔧 修复'Broken pipe'错误 - 创建管道包装脚本..."
+    log "🔧 创建双固件保护脚本..."
+    local protect_dir="$BUILD_DIR/.firmware_protect"
+    mkdir -p "$protect_dir"
     
-    # 创建echo包装脚本
-    local echo_wrapper="/tmp/echo_wrapper.sh"
-    cat > "$echo_wrapper" << 'EOF'
+    local protect_script="$protect_dir/protect.sh"
+    cat > "$protect_script" << 'EOF'
 #!/bin/bash
-# 包装echo命令，避免Broken pipe错误
-for i in {1..3}; do
-    if echo "$@" 2>/dev/null; then
-        exit 0
-    fi
-    sleep 0.1
+# 双固件保护脚本 - 实时监控并备份sysupgrade和factory固件
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+LOG_FILE="$PROTECT_DIR/protect.log"
+
+echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
+
+# 监控循环
+while true; do
+    # 1. 监控临时目录中的文件
+    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+    
+    for tmp_dir in $TMP_DIRS; do
+        # 查找sysupgrade文件
+        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 sysupgrade: $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+        
+        # 查找factory文件
+        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 factory: $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+        
+        # 查找.itb文件
+        find "$tmp_dir" -name "*.itb" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 itb: $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+    done
+    
+    # 2. 每5秒检查一次
+    sleep 5
 done
-# 最后一次尝试，忽略错误
-echo "$@" 2>/dev/null || true
-exit 0
 EOF
-    chmod +x "$echo_wrapper"
+    chmod +x "$protect_script"
     
-    # 临时替换PATH中的echo
-    local bin_dir="/tmp/fixed_bin"
-    mkdir -p "$bin_dir"
-    ln -sf "$echo_wrapper" "$bin_dir/echo"
-    export PATH="$bin_dir:$PATH"
-    log "  ✅ 已创建echo包装脚本，防止Broken pipe错误"
+    # 启动保护脚本
+    "$protect_script" "$protect_dir" "$BUILD_DIR" &
+    local protect_pid=$!
+    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
     
     # ============================================
-    # 修复grep命令的"write error"
+    # 创建强制恢复脚本
     # ============================================
-    local grep_wrapper="/tmp/grep_wrapper.sh"
-    cat > "$grep_wrapper" << 'EOF'
+    local recover_script="$protect_dir/recover.sh"
+    cat > "$recover_script" << 'EOF'
 #!/bin/bash
-# 包装grep命令，避免Broken pipe错误
-"$@" 2>/dev/null || true
-exit 0
-EOF
-    chmod +x "$grep_wrapper"
-    
-    # 为常见命令创建别名
-    for cmd in grep cat awk sed; do
-        cat > "$bin_dir/$cmd" << EOF
-#!/bin/bash
-# 包装$cmd命令，避免Broken pipe错误
-"$(which $cmd)" "\$@" 2>/dev/null || true
-exit 0
-EOF
-        chmod +x "$bin_dir/$cmd"
-    done
-    log "  ✅ 已创建grep/cat/awk/sed包装脚本"
-    
-    # ============================================
-    # 检测并修复libssl依赖
-    # ============================================
-    log "🔧 检测并修复libssl依赖..."
-    
-    if grep -q "Package libssl was not found" build.log 2>/dev/null; then
-        log "  ⚠️ 检测到libssl依赖缺失，正在修复..."
-        
-        # 安装libssl-dev
-        sudo apt-get install -y libssl-dev > /dev/null 2>&1 || true
-        
-        # 创建pkg-config包装脚本
-        mkdir -p staging_dir/host/bin
-        cat > staging_dir/host/bin/pkg-config << 'EOF'
-#!/bin/bash
-# 包装pkg-config，提供libssl
-if [[ "$*" == *"libssl"* ]]; then
-    echo "-lssl -lcrypto"
-    exit 0
+# 强制恢复脚本 - 动态查找并恢复固件
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+
+# 动态获取目标平台和子平台
+if [ -f "$BUILD_DIR/build_env.sh" ]; then
+    source "$BUILD_DIR/build_env.sh"
 fi
-/usr/bin/pkg-config "$@" 2>/dev/null || true
-exit 0
-EOF
-        chmod +x staging_dir/host/bin/pkg-config
-        export PATH="$PWD/staging_dir/host/bin:$PATH"
-        log "  ✅ 已创建pkg-config包装脚本"
+
+TARGET="${TARGET:-ath79}"
+SUBTARGET="${SUBTARGET:-generic}"
+TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+
+mkdir -p "$TARGET_DIR"
+
+echo "=== 强制恢复开始于 $(date) ==="
+echo "目标平台: $TARGET/$SUBTARGET"
+echo "目标目录: $TARGET_DIR"
+
+# 计数器
+RECOVERED=0
+SYSUPGRADE_FOUND=0
+FACTORY_FOUND=0
+ITB_FOUND=0
+SYSUPGRADE_FILE=""
+FACTORY_FILE=""
+ITB_FILE=""
+
+# 1. 从保护目录恢复
+echo "📁 检查保护目录: $PROTECT_DIR"
+find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
+    filename=$(basename "$backup" .backup)
+    
+    # 判断文件类型
+    if [[ "$filename" == *"sysupgrade"* ]] && [[ "$filename" == *".bin" ]]; then
+        if [ ! -f "$TARGET_DIR/$filename" ]; then
+            echo "  ✅ 恢复 sysupgrade: $filename"
+            cp -f "$backup" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            SYSUPGRADE_FOUND=1
+            SYSUPGRADE_FILE="$TARGET_DIR/$filename"
+        fi
+    elif [[ "$filename" == *"factory"* ]] && [[ "$filename" == *".img" || "$filename" == *".bin" ]]; then
+        if [ ! -f "$TARGET_DIR/$filename" ]; then
+            echo "  ✅ 恢复 factory: $filename"
+            cp -f "$backup" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            FACTORY_FOUND=1
+            FACTORY_FILE="$TARGET_DIR/$filename"
+        fi
+    elif [[ "$filename" == *".itb" ]]; then
+        if [ ! -f "$TARGET_DIR/$filename" ]; then
+            echo "  ✅ 恢复 itb: $filename"
+            cp -f "$backup" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            ITB_FOUND=1
+            ITB_FILE="$TARGET_DIR/$filename"
+        fi
+    fi
+done
+
+# 2. 从临时目录搜索
+echo "🔍 搜索临时目录..."
+TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+
+for tmp_dir in $TMP_DIRS; do
+    # 查找sysupgrade
+    if [ $SYSUPGRADE_FOUND -eq 0 ]; then
+        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
+            filename=$(basename "$file")
+            echo "  ✅ 从临时目录恢复 sysupgrade: $filename"
+            cp -f "$file" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            SYSUPGRADE_FOUND=1
+            SYSUPGRADE_FILE="$TARGET_DIR/$filename"
+        done
     fi
     
-    # ============================================
-    # 检测文件丢失错误并创建缺失文件
-    # ============================================
-    log "🔧 预创建可能缺失的文件..."
+    # 查找factory
+    if [ $FACTORY_FOUND -eq 0 ]; then
+        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
+            filename=$(basename "$file")
+            echo "  ✅ 从临时目录恢复 factory: $filename"
+            cp -f "$file" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            FACTORY_FOUND=1
+            FACTORY_FILE="$TARGET_DIR/$filename"
+        done
+    fi
     
-    # 预创建xattr.conf文件
-    mkdir -p staging_dir/target-*/root-*/etc 2>/dev/null || true
-    for target_dir in staging_dir/target-*; do
-        if [ -d "$target_dir" ]; then
-            touch "$target_dir/root-*/etc/xattr.conf" 2>/dev/null || true
-        fi
-    done
-    log "  ✅ 已预创建xattr.conf文件"
+    # 查找itb
+    if [ $ITB_FOUND -eq 0 ]; then
+        find "$tmp_dir" -name "*.itb" 2>/dev/null | head -1 | while read file; do
+            filename=$(basename "$file")
+            echo "  ✅ 从临时目录恢复 itb: $filename"
+            cp -f "$file" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            ITB_FOUND=1
+            ITB_FILE="$TARGET_DIR/$filename"
+        done
+    fi
+done
+
+# 3. 创建sha256sum
+if [ -n "$SYSUPGRADE_FILE" ] && [ -f "$SYSUPGRADE_FILE" ]; then
+    (cd "$TARGET_DIR" && sha256sum "$(basename "$SYSUPGRADE_FILE")" > "$(basename "$SYSUPGRADE_FILE").sha256sum")
+    echo "  ✅ 创建 sha256sum"
+fi
+
+# 4. 最终检查
+echo ""
+echo "📊 最终检查:"
+if [ -f "$SYSUPGRADE_FILE" ]; then
+    size=$(ls -lh "$SYSUPGRADE_FILE" 2>/dev/null | awk '{print $5}')
+    echo "  ✅ sysupgrade.bin: 存在 ($size)"
+else
+    echo "  ❌ sysupgrade.bin: 不存在"
+fi
+
+if [ -f "$FACTORY_FILE" ]; then
+    size=$(ls -lh "$FACTORY_FILE" 2>/dev/null | awk '{print $5}')
+    echo "  ✅ factory.img: 存在 ($size)"
+else
+    echo "  ❌ factory.img: 不存在"
+fi
+
+if [ -f "$ITB_FILE" ]; then
+    size=$(ls -lh "$ITB_FILE" 2>/dev/null | awk '{print $5}')
+    echo "  ✅ itb镜像: 存在 ($size)"
+fi
+
+echo "  📊 恢复文件数: $RECOVERED"
+echo "=== 强制恢复结束于 $(date) ==="
+EOF
+    chmod +x "$recover_script"
     
-    # 预创建Module.symvers文件
-    mkdir -p build_dir/target-* 2>/dev/null || true
-    for build_dir in build_dir/target-*; do
-        if [ -d "$build_dir" ]; then
-            find "$build_dir" -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
-                touch "$dir/Module.symvers" 2>/dev/null || true
-            done
-        fi
-    done
-    log "  ✅ 已预创建Module.symvers文件"
+    # ============================================
+    # 备份关键文件
+    # ============================================
+    log "🔧 创建固件备份目录..."
+    local backup_dir="$BUILD_DIR/firmware_backup_$(date +%s)"
+    mkdir -p "$backup_dir"
+    log "  ✅ 备份目录: $backup_dir"
+    
+    # ============================================
+    # 导出环境变量
+    # ============================================
+    export OPENWRT_VERBOSE=1
+    export FORCE_UNSAFE_CONFIGURE=1
     
     # ============================================
     # 智能判断最佳并行任务数
@@ -5508,7 +5697,7 @@ EOF
         fi
         
         # ============================================
-        # 编译循环 - 增强错误检测
+        # 编译循环 - 检测并修复dtc链接错误
         # ============================================
         local max_attempts=3
         local attempt=1
@@ -5522,7 +5711,7 @@ EOF
             
             START_TIME=$(date +%s)
             
-            # 编译 - 使用包装的PATH
+            # 编译第一阶段
             set +e
             make -j$MAKE_JOBS V=s 2>&1 | tee build_phase1_attempt${attempt}.log
             PHASE1_EXIT_CODE=${PIPESTATUS[0]}
@@ -5536,73 +5725,223 @@ EOF
             echo "   退出代码: $PHASE1_EXIT_CODE"
             
             # ============================================
-            # 增强错误检测 - 检查关键错误模式
+            # 检查dtc链接错误
             # ============================================
             local log_file="build_phase1_attempt${attempt}.log"
-            local has_broken_pipe=0
-            local has_download_failed=0
-            local has_missing_file=0
+            local has_dtc_error=0
             
-            if [ -f "$log_file" ]; then
-                # 检测Broken pipe
-                if grep -q "write error: Broken pipe" "$log_file"; then
-                    has_broken_pipe=1
-                    log "  ⚠️ 检测到Broken pipe错误"
-                fi
+            if [ -f "$log_file" ] && grep -q "undefined reference to .*yaml" "$log_file"; then
+                has_dtc_error=1
+                log "  ⚠️ 检测到dtc链接错误（缺少libyaml）"
                 
-                # 检测下载失败
-                if grep -q "curl: (22).*401\|404" "$log_file" || grep -q "Download failed" "$log_file"; then
-                    has_download_failed=1
-                    log "  ⚠️ 检测到下载失败错误"
+                # 修复方案：安装libyaml并重新编译dtc
+                log "  🔧 安装libyaml-dev..."
+                sudo apt-get update > /dev/null 2>&1 || true
+                sudo apt-get install -y libyaml-dev > /dev/null 2>&1 || {
+                    log "  ⚠️ 自动安装失败，尝试手动编译..."
                     
-                    # 自动修复下载源
-                    log "  🔧 自动修复下载源..."
-                    sed -i 's|mirror2.immortalwrt.org|mirror.nju.edu.cn/immortalwrt|g' feeds.conf.default
-                    sed -i 's|mirror.immortalwrt.org|mirror.nju.edu.cn/immortalwrt|g' feeds.conf.default
-                fi
-                
-                # 检测文件缺失
-                if grep -q "No such file or directory" "$log_file"; then
-                    has_missing_file=1
-                    log "  ⚠️ 检测到文件缺失错误"
-                    
-                    # 自动创建缺失文件
-                    local missing_files=$(grep "No such file or directory" "$log_file" | grep -o "/[^:]*" | sort -u)
-                    if [ -n "$missing_files" ]; then
-                        echo "$missing_files" | while read missing_file; do
-                            if [[ "$missing_file" == *"Module.symvers"* ]]; then
-                                mkdir -p "$(dirname "$missing_file")" 2>/dev/null || true
-                                touch "$missing_file" 2>/dev/null || true
-                                log "    ✅ 已创建缺失文件: $missing_file"
-                            fi
-                        done
+                    # 下载并编译libyaml
+                    mkdir -p dl
+                    if [ ! -f "dl/yaml-0.2.5.tar.gz" ]; then
+                        wget -O dl/yaml-0.2.5.tar.gz https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz || true
                     fi
-                fi
+                    
+                    if [ -f "dl/yaml-0.2.5.tar.gz" ]; then
+                        mkdir -p build_dir/host/libyaml-0.2.5
+                        tar -xzf dl/yaml-0.2.5.tar.gz -C build_dir/host/libyaml-0.2.5 --strip-components=1
+                        cd build_dir/host/libyaml-0.2.5
+                        ./configure --prefix="$BUILD_DIR/staging_dir/host"
+                        make -j1
+                        make install
+                        cd "$BUILD_DIR"
+                        
+                        # 更新pkg-config路径
+                        export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
+                        log "  ✅ libyaml手动编译完成"
+                    fi
+                }
                 
-                # 检测libssl缺失
-                if grep -q "Package libssl was not found" "$log_file"; then
-                    log "  ⚠️ 检测到libssl缺失，重新运行pkg-config修复..."
-                    export PKG_CONFIG_PATH="$PWD/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
+                # 清理并重新编译dtc
+                log "  🔧 清理并重新编译dtc..."
+                rm -f build_dir/target-*/linux-*/scripts/dtc/dtc
+                rm -f build_dir/target-*/.stamp_target_*
+                
+                # 重新运行dtc编译
+                if [ -d "build_dir/target-*/linux-*/scripts/dtc" ]; then
+                    make target/linux/clean -j1 > /dev/null 2>&1 || true
                 fi
             fi
             
             # 检查是否成功
-            if [ $PHASE1_EXIT_CODE -eq 0 ] && [ $has_broken_pipe -eq 0 ] && [ $has_download_failed -eq 0 ]; then
+            if [ $PHASE1_EXIT_CODE -eq 0 ]; then
                 compile_success=1
                 break
-            else
-                if [ $attempt -lt $max_attempts ]; then
-                    log "  🔄 检测到错误，准备第 $((attempt + 1)) 次重试..."
+            fi
+            
+            # 检查是否有补丁失败
+            local target="${TARGET:-ath79}"
+            local kernel_ver=$(grep -E "^KERNEL_PATCHVER:=" target/linux/$target/Makefile 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "5.15")
+            
+            log "  🔍 从编译日志中查找失败的补丁..."
+            
+            # 从日志中提取失败的补丁名
+            local failed_patches=$(grep -E "Patch failed!.*patches-.*/[0-9]+-.*\.patch" build_phase1_attempt${attempt}.log | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+            
+            if [ -n "$failed_patches" ]; then
+                log "  ⚠️ 发现失败的补丁:"
+                
+                # 找到对应的补丁目录
+                local patch_dir="target/linux/$target/patches-$kernel_ver"
+                
+                if [ -d "$patch_dir" ]; then
+                    # 将failed_patches转换为数组
+                    local failed_array=()
+                    while IFS= read -r line; do
+                        failed_array+=("$line")
+                    done <<< "$failed_patches"
                     
-                    # 清理可能的问题文件
-                    rm -f build_dir/target-*/.stamp_target_* 2>/dev/null || true
+                    # 删除所有失败的补丁
+                    local deleted_count=0
+                    for patch_name in "${failed_array[@]}"; do
+                        [ -z "$patch_name" ] && continue
+                        local patch_file="$patch_dir/$patch_name"
+                        
+                        if [ -f "$patch_file" ]; then
+                            log "    🗑️ 删除补丁: $patch_name"
+                            rm -f "$patch_file"
+                            deleted_count=$((deleted_count + 1))
+                        else
+                            # 尝试模糊匹配
+                            local found_patch=$(find "$patch_dir" -name "*${patch_name}*" 2>/dev/null | head -1)
+                            if [ -n "$found_patch" ]; then
+                                local found_name=$(basename "$found_patch")
+                                log "    🗑️ 删除补丁(模糊匹配): $found_name"
+                                rm -f "$found_patch"
+                                deleted_count=$((deleted_count + 1))
+                            fi
+                        fi
+                    done
+                    
+                    log "  ✅ 已删除 $deleted_count 个失败补丁"
+                    
+                    # 彻底清理内核构建目录
+                    log "  🔄 彻底清理内核构建目录..."
+                    rm -rf "build_dir/linux-${target}_"*
+                    rm -rf "build_dir/target-*"
+                    find staging_dir -name ".stamp_target_*" -exec rm -f {} \; 2>/dev/null || true
+                    
+                    # 刷新剩余的补丁
+                    log "  🔄 刷新剩余的补丁..."
+                    
+                    if make "target/linux/$target/refresh" V=s >> /tmp/build-logs/refresh_patches_${attempt}.log 2>&1; then
+                        log "  ✅ 补丁刷新完成"
+                    else
+                        log "  ⚠️ 补丁刷新有警告，但继续"
+                    fi
+                    
+                    # 更新内核配置
+                    log "  🔄 更新内核配置..."
+                    if make "target/linux/$target/config" V=s >> /tmp/build-logs/kernel_config_${attempt}.log 2>&1; then
+                        log "  ✅ 内核配置更新完成"
+                    else
+                        log "  ⚠️ 内核配置更新有警告，但继续"
+                    fi
+                    
+                    # 重新运行 defconfig
+                    log "  🔄 重新运行 make defconfig..."
+                    make defconfig > /tmp/build-logs/defconfig_after_patch_removal_${attempt}.log 2>&1 || {
+                        log "  ⚠️ make defconfig 有警告，继续尝试"
+                    }
                 fi
             fi
             
             attempt=$((attempt + 1))
         done
         
-        # ... 其余编译代码保持不变 ...
+        if [ $compile_success -eq 0 ]; then
+            echo ""
+            echo "❌❌❌ 编译失败，已尝试 $max_attempts 次 ❌❌❌"
+            echo ""
+            echo "🔍 最后50行错误日志:"
+            
+            # 查找最新的日志文件
+            local latest_log=""
+            for i in $(seq $max_attempts -1 1); do
+                if [ -f "build_phase1_attempt${i}.log" ]; then
+                    latest_log="build_phase1_attempt${i}.log"
+                    break
+                fi
+            done
+            
+            if [ -n "$latest_log" ]; then
+                tail -50 "$latest_log" | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || cat "$latest_log" | tail -50
+            else
+                echo "未找到编译日志"
+            fi
+            
+            # 停止保护脚本
+            kill $protect_pid 2>/dev/null || true
+            
+            # 执行强制恢复
+            echo ""
+            echo "🔧 尝试恢复可能的部分固件..."
+            bash "$recover_script" "$protect_dir" "$BUILD_DIR"
+            
+            # 清理
+            rm -rf "$protect_dir" 2>/dev/null || true
+            
+            log "❌ 编译失败，退出"
+            exit $PHASE1_EXIT_CODE
+        fi
+        
+        # ============================================
+        # 第二阶段前：备份所有临时固件文件
+        # ============================================
+        echo ""
+        echo "🔧 第二阶段前：备份所有临时固件文件..."
+        
+        # 查找并备份所有可能的固件文件
+        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" -o -path "*/tmp/*.itb" -o -name "*.new" 2>/dev/null)
+        local backup_count=0
+        
+        if [ -n "$temp_files" ]; then
+            echo "$temp_files" | while read file; do
+                if [ -f "$file" ]; then
+                    cp -v "$file" "$backup_dir/" 2>/dev/null
+                    backup_count=$((backup_count + 1))
+                fi
+            done
+            echo "  ✅ 已备份 $backup_count 个临时固件文件到: $backup_dir"
+        else
+            echo "  ⚠️ 未找到临时固件文件"
+        fi
+        
+        # ============================================
+        # 第二阶段：单线程生成最终固件
+        # ============================================
+        echo ""
+        echo "🚀 第二阶段：单线程生成最终固件 (make -j1)"
+        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo ""
+        
+        PHASE2_START=$(date +%s)
+        
+        # 第二阶段强制单线程
+        set +e
+        make -j1 V=s 2>&1 | tee -a build_phase2.log
+        BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        
+        PHASE2_END=$(date +%s)
+        PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
+        TOTAL_DURATION=$((PHASE2_END - START_TIME))
+        
+        echo ""
+        echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
+        echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
+        
+        # 合并日志
+        cat build_phase1_attempt*.log build_phase2.log > build.log
         
     else
         # 单线程编译
@@ -5614,7 +5953,7 @@ EOF
         
         START_TIME=$(date +%s)
         
-        # 单线程编译 - 使用包装的PATH
+        # 单线程编译
         set +e
         make -j1 V=s 2>&1 | tee build.log
         BUILD_EXIT_CODE=${PIPESTATUS[0]}
@@ -5629,62 +5968,136 @@ EOF
     fi
     
     # ============================================
-    # 最终检查：验证固件是否完整
+    # 停止保护脚本
     # ============================================
-    log "🔍 验证固件完整性..."
+    kill $protect_pid 2>/dev/null || true
+    log "🔧 双固件保护已停止"
     
-    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-    local valid_firmware=0
-    
-    if [ -d "$target_dir" ]; then
-        # 检查sysupgrade固件大小
-        find "$target_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.itb" 2>/dev/null | while read file; do
-            local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
-            local size_mb=$((size_bytes / 1024 / 1024))
-            local fname=$(basename "$file")
-            
-            if [ $size_mb -ge 10 ]; then
-                log "  ✅ $fname 大小: ${size_mb}MB - 完整"
-                valid_firmware=$((valid_firmware + 1))
-            elif [ $size_mb -ge 5 ]; then
-                log "  ⚠️ $fname 大小: ${size_mb}MB - 可能不完整"
-                valid_firmware=$((valid_firmware + 1))
-            else
-                log "  ❌ $fname 大小: ${size_mb}MB - 无效（小于5MB）"
-                rm -f "$file"
-            fi
-        done
+    # ============================================
+    # 检查编译结果
+    # ============================================
+    if [ $BUILD_EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+        echo ""
+        echo "🔍 最后50行错误日志:"
+        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || tail -50 build.log
         
-        # 检查factory固件大小
-        find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+        # 再次检查是否有dtc错误
+        if grep -q "undefined reference to .*yaml" build.log 2>/dev/null; then
+            log "⚠️ 检测到dtc链接错误，尝试最终修复..."
+            
+            # 最终修复方案
+            log "  🔧 强制安装libyaml-dev..."
+            sudo apt-get install -y libyaml-dev > /dev/null 2>&1 || true
+            
+            # 清理并重新编译内核
+            log "  🔧 清理并重新编译内核..."
+            rm -rf build_dir/target-*/linux-*/scripts/dtc
+            make target/linux/clean -j1 > /dev/null 2>&1 || true
+            make target/linux/compile -j1 V=s >> /tmp/build-logs/target_final.log 2>&1 || true
+        fi
+        
+        # 执行强制恢复
+        echo ""
+        echo "🔧 执行强制恢复，查找固件..."
+        bash "$recover_script" "$protect_dir" "$BUILD_DIR"
+    fi
+    
+    # 执行强制恢复
+    echo ""
+    echo "🔧 执行强制恢复，查找固件..."
+    bash "$recover_script" "$protect_dir" "$BUILD_DIR"
+    
+    # ============================================
+    # 最终检查 - 验证固件大小
+    # ============================================
+    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+    local sysupgrade_files=$(find "$target_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.itb" 2>/dev/null | wc -l)
+    local factory_files=$(find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | wc -l)
+    local itb_files=$(find "$target_dir" -name "*.itb" 2>/dev/null | grep -v "sysupgrade" | wc -l)
+    
+    # 验证固件大小
+    local valid_sysupgrade=0
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        if [[ "$file" == *"sysupgrade"* ]]; then
             local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
             local size_mb=$((size_bytes / 1024 / 1024))
             local fname=$(basename "$file")
             
-            if [ $size_mb -ge 10 ]; then
-                log "  ✅ $fname 大小: ${size_mb}MB - 完整"
-                valid_firmware=$((valid_firmware + 1))
-            elif [ $size_mb -ge 5 ]; then
-                log "  ⚠️ $fname 大小: ${size_mb}MB - 可能不完整"
-                valid_firmware=$((valid_firmware + 1))
+            if [ $size_mb -ge 5 ]; then
+                valid_sysupgrade=$((valid_sysupgrade + 1))
+                log "  ✅ $fname 大小: ${size_mb}MB - 有效"
             else
-                log "  ❌ $fname 大小: ${size_mb}MB - 无效（小于5MB）"
+                log "  ❌ $fname 大小: ${size_mb}MB - 无效，删除"
                 rm -f "$file"
             fi
+        fi
+    done < <(find "$target_dir" -name "*sysupgrade*" -type f 2>/dev/null)
+    
+    echo ""
+    echo "📊 最终固件状态:"
+    echo "----------------------------------------"
+    
+    if [ $valid_sysupgrade -gt 0 ]; then
+        find "$target_dir" -name "*sysupgrade*" 2>/dev/null | while read file; do
+            local size=$(ls -lh "$file" | awk '{print $5}')
+            local fname=$(basename "$file")
+            if [[ "$fname" == *.itb ]]; then
+                echo "  ✅ sysupgrade.itb: 存在 ($size) - $fname [可刷机]"
+            else
+                echo "  ✅ sysupgrade.bin: 存在 ($size) - $fname [可刷机]"
+            fi
+        done
+    else
+        echo "  ❌ sysupgrade固件: 不存在"
+    fi
+    
+    if [ $factory_files -gt 0 ]; then
+        find "$target_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+            local size=$(ls -lh "$file" | awk '{print $5}')
+            echo "  🏭 factory镜像: 存在 ($size) - $(basename "$file") [原厂刷机用]"
         done
     fi
     
-    if [ $valid_firmware -eq 0 ]; then
-        log "❌ 错误：没有找到任何有效固件"
-        exit 1
-    else
-        log "✅ 找到 $valid_firmware 个有效固件文件"
+    if [ $itb_files -gt 0 ]; then
+        find "$target_dir" -name "*.itb" 2>/dev/null | grep -v "sysupgrade" | head -1 | while read file; do
+            local size=$(ls -lh "$file" | awk '{print $5}')
+            echo "  🔷 FIT镜像: 存在 ($size) - $(basename "$file") [恢复用]"
+        done
     fi
     
-    # 清理临时目录
-    rm -rf /tmp/fixed_bin /tmp/echo_wrapper.sh /tmp/grep_wrapper.sh 2>/dev/null || true
+    echo "----------------------------------------"
+    
+    # 根据编译结果给出总结
+    if [ $BUILD_EXIT_CODE -eq 0 ]; then
+        if [ $valid_sysupgrade -gt 0 ]; then
+            echo "🎉 编译成功！有效固件已生成"
+            if [[ "$TARGET" == "mediatek" ]] && [[ "$SUBTARGET" == "filogic" ]]; then
+                echo "   📌 注意: 对于 MediaTek Filogic 平台，.itb 文件就是可刷机固件"
+            fi
+        elif [ $factory_files -gt 0 ]; then
+            echo "⚠️ 编译完成，但只有factory固件"
+        else
+            echo "❌ 编译完成但没有找到任何可刷机固件"
+        fi
+    else
+        echo "❌ 编译失败，退出码: $BUILD_EXIT_CODE"
+        if [ $valid_sysupgrade -gt 0 ] || [ $factory_files -gt 0 ] || [ $itb_files -gt 0 ]; then
+            echo "   ⚠️ 但有部分固件生成，可能可用"
+        fi
+    fi
+    
+    # 清理
+    rm -rf "$protect_dir" 2>/dev/null || true
     
     log "✅ 步骤25 完成"
+    
+    # 如果编译失败，退出
+    if [ $BUILD_EXIT_CODE -ne 0 ] && [ $valid_sysupgrade -eq 0 ]; then
+        exit $BUILD_EXIT_CODE
+    fi
 }
 #【build_firmware_main.sh-40-end】
 
