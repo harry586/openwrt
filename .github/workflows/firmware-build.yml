@@ -224,14 +224,18 @@ jobs:
           echo "✅ 修复所有脚本权限完成"
       #【firmware-build.yml-04-end】
 
-      #【firmware-build.yml-05】
-      - name: "05. 安装基础工具（优化版）"
+#【firmware-build.yml-05】
+      - name: "05. 安装基础工具（优化版 - 包含libyaml）"
         run: |
-          echo "=== 步骤05: 安装基础工具（优化版） ==="
+          echo "=== 步骤05: 安装基础工具（优化版 - 包含libyaml） ==="
+          
+          # 先安装libyaml-dev，确保dtc编译需要
+          sudo apt-get update
+          sudo apt-get install -y libyaml-dev libyaml-cpp-dev || true
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step05_install_basic_tools
-      #【firmware-build.yml-05-end】
+#【firmware-build.yml-05-end】
 
       #【firmware-build.yml-06】
       - name: "06. 初始空间检查"
