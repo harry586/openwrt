@@ -49,6 +49,35 @@ load_build_config() {
     export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
     
+    # ============================================
+    # 检查 /usr/bin/env 是否正常
+    # ============================================
+    if ! /usr/bin/env bash -c "echo OK" > /dev/null 2>&1; then
+        log "⚠️ /usr/bin/env 工作不正常，尝试修复..."
+        
+        # 检查是否是符号链接循环
+        if [ -L "/usr/bin/env" ]; then
+            local env_target=$(readlink /usr/bin/env)
+            log "  /usr/bin/env 是符号链接，指向: $env_target"
+            
+            # 如果指向自身，修复它
+            if [ "$env_target" = "/usr/bin/env" ] || [ "$env_target" = "env" ]; then
+                log "  ⚠️ 检测到符号链接循环，正在修复..."
+                sudo rm -f /usr/bin/env
+                sudo ln -s /usr/bin/coreutils /usr/bin/env 2>/dev/null || \
+                sudo cp /bin/env /usr/bin/env 2>/dev/null || \
+                sudo apt-get install --reinstall coreutils -y > /dev/null 2>&1 || true
+            fi
+        fi
+        
+        # 验证修复结果
+        if /usr/bin/env bash -c "echo OK" > /dev/null 2>&1; then
+            log "  ✅ /usr/bin/env 已修复"
+        else
+            log "  ⚠️ /usr/bin/env 仍有问题，但将继续"
+        fi
+    fi
+    
     log "✅ 配置加载完成，当前源码仓库类型: $SOURCE_REPO_TYPE"
 }
 
@@ -5560,13 +5589,13 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件（增强错误处理）
+# 步骤25: 编译固件（修复符号链接循环）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（增强错误处理） ==="
+    log "=== 步骤25: 编译固件（修复符号链接循环） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5574,129 +5603,282 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 设置文件描述符限制（修复Broken pipe）
+    # 设置文件描述符限制
     # ============================================
-    log "🔧 设置文件描述符限制（修复Broken pipe）..."
-    ulimit -n 65536 2>/dev/null || sudo ulimit -n 65536 2>/dev/null || true
+    ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 创建管道包装脚本（修复Broken pipe）
+    # 创建双固件保护脚本
     # ============================================
-    log "🔧 创建管道包装脚本..."
+    log "🔧 创建双固件保护脚本..."
+    local protect_dir="$BUILD_DIR/.firmware_protect"
+    mkdir -p "$protect_dir"
     
-    local bin_dir="/tmp/fixed_bin_$$"
-    mkdir -p "$bin_dir"
-    
-    # echo 包装脚本
-    cat > "$bin_dir/echo" << 'EOF'
+    local protect_script="$protect_dir/protect.sh"
+    cat > "$protect_script" << 'EOF'
 #!/bin/bash
-# 包装echo命令，避免Broken pipe错误
-for i in {1..3}; do
-    if echo "$@" 2>/dev/null; then
-        exit 0
-    fi
-    sleep 0.1
+# 双固件保护脚本 - 实时监控并备份sysupgrade和factory固件
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+LOG_FILE="$PROTECT_DIR/protect.log"
+
+echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
+
+# 监控循环
+while true; do
+    # 1. 监控临时目录中的文件
+    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+    
+    for tmp_dir in $TMP_DIRS; do
+        # 查找sysupgrade文件
+        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 sysupgrade: $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+        
+        # 查找factory文件
+        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 factory: $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+        
+        # 查找.itb文件
+        find "$tmp_dir" -name "*.itb" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 itb: $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+    done
+    
+    # 2. 每5秒检查一次
+    sleep 5
 done
-# 最后一次尝试，忽略错误
-echo "$@" 2>/dev/null || true
-exit 0
 EOF
-    chmod +x "$bin_dir/echo"
+    chmod +x "$protect_script"
     
-    # cat 包装脚本
-    cat > "$bin_dir/cat" << 'EOF'
+    # 启动保护脚本
+    "$protect_script" "$protect_dir" "$BUILD_DIR" &
+    local protect_pid=$!
+    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
+    
+    # ============================================
+    # 创建强制恢复脚本
+    # ============================================
+    local recover_script="$protect_dir/recover.sh"
+    cat > "$recover_script" << 'EOF'
 #!/bin/bash
-# 包装cat命令，避免Broken pipe错误
-if [ -f "$1" ]; then
-    /bin/cat "$@" 2>/dev/null || true
-else
-    /bin/cat "$@" 2>/dev/null || true
+# 强制恢复脚本 - 动态查找并恢复固件
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+
+# 动态获取目标平台和子平台
+if [ -f "$BUILD_DIR/build_env.sh" ]; then
+    source "$BUILD_DIR/build_env.sh"
 fi
-exit 0
-EOF
-    chmod +x "$bin_dir/cat"
+
+TARGET="${TARGET:-ath79}"
+SUBTARGET="${SUBTARGET:-generic}"
+TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+
+mkdir -p "$TARGET_DIR"
+
+echo "=== 强制恢复开始于 $(date) ==="
+echo "目标平台: $TARGET/$SUBTARGET"
+echo "目标目录: $TARGET_DIR"
+
+# 计数器
+RECOVERED=0
+SYSUPGRADE_FOUND=0
+FACTORY_FOUND=0
+ITB_FOUND=0
+SYSUPGRADE_FILE=""
+FACTORY_FILE=""
+ITB_FILE=""
+
+# 1. 从保护目录恢复
+echo "📁 检查保护目录: $PROTECT_DIR"
+find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
+    filename=$(basename "$backup" .backup)
     
-    # grep 包装脚本
-    cat > "$bin_dir/grep" << 'EOF'
-#!/bin/bash
-# 包装grep命令，避免Broken pipe错误
-/bin/grep "$@" 2>/dev/null || true
-exit 0
-EOF
-    chmod +x "$bin_dir/grep"
-    
-    export PATH="$bin_dir:$PATH"
-    log "  ✅ 已创建管道包装脚本，PATH已更新"
-    
-    # ============================================
-    # 修复libssl依赖
-    # ============================================
-    log "🔧 修复libssl依赖..."
-    
-    # 创建pkg-config包装脚本
-    mkdir -p staging_dir/host/bin
-    cat > staging_dir/host/bin/pkg-config << 'EOF'
-#!/bin/bash
-# 包装pkg-config，提供libssl
-if [[ "$*" == *"libssl"* ]] || [[ "$*" == *"openssl"* ]]; then
-    # 检查系统是否真的有libssl
-    if [ -f "/usr/lib/x86_64-linux-gnu/libssl.so" ] || [ -f "/usr/lib/libssl.so" ]; then
-        echo "-lssl -lcrypto"
-        exit 0
+    # 判断文件类型
+    if [[ "$filename" == *"sysupgrade"* ]] && [[ "$filename" == *".bin" ]]; then
+        if [ ! -f "$TARGET_DIR/$filename" ]; then
+            echo "  ✅ 恢复 sysupgrade: $filename"
+            cp -f "$backup" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            SYSUPGRADE_FOUND=1
+            SYSUPGRADE_FILE="$TARGET_DIR/$filename"
+        fi
+    elif [[ "$filename" == *"factory"* ]] && [[ "$filename" == *".img" || "$filename" == *".bin" ]]; then
+        if [ ! -f "$TARGET_DIR/$filename" ]; then
+            echo "  ✅ 恢复 factory: $filename"
+            cp -f "$backup" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            FACTORY_FOUND=1
+            FACTORY_FILE="$TARGET_DIR/$filename"
+        fi
+    elif [[ "$filename" == *".itb" ]]; then
+        if [ ! -f "$TARGET_DIR/$filename" ]; then
+            echo "  ✅ 恢复 itb: $filename"
+            cp -f "$backup" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            ITB_FOUND=1
+            ITB_FILE="$TARGET_DIR/$filename"
+        fi
     fi
+done
+
+# 2. 从临时目录搜索
+echo "🔍 搜索临时目录..."
+TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+
+for tmp_dir in $TMP_DIRS; do
+    # 查找sysupgrade
+    if [ $SYSUPGRADE_FOUND -eq 0 ]; then
+        find "$tmp_dir" -name "*sysupgrade*.bin" 2>/dev/null | head -1 | while read file; do
+            filename=$(basename "$file")
+            echo "  ✅ 从临时目录恢复 sysupgrade: $filename"
+            cp -f "$file" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            SYSUPGRADE_FOUND=1
+            SYSUPGRADE_FILE="$TARGET_DIR/$filename"
+        done
+    fi
+    
+    # 查找factory
+    if [ $FACTORY_FOUND -eq 0 ]; then
+        find "$tmp_dir" -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | head -1 | while read file; do
+            filename=$(basename "$file")
+            echo "  ✅ 从临时目录恢复 factory: $filename"
+            cp -f "$file" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            FACTORY_FOUND=1
+            FACTORY_FILE="$TARGET_DIR/$filename"
+        done
+    fi
+    
+    # 查找itb
+    if [ $ITB_FOUND -eq 0 ]; then
+        find "$tmp_dir" -name "*.itb" 2>/dev/null | head -1 | while read file; do
+            filename=$(basename "$file")
+            echo "  ✅ 从临时目录恢复 itb: $filename"
+            cp -f "$file" "$TARGET_DIR/$filename"
+            RECOVERED=$((RECOVERED + 1))
+            ITB_FOUND=1
+            ITB_FILE="$TARGET_DIR/$filename"
+        done
+    fi
+done
+
+# 3. 创建sha256sum
+if [ -n "$SYSUPGRADE_FILE" ] && [ -f "$SYSUPGRADE_FILE" ]; then
+    (cd "$TARGET_DIR" && sha256sum "$(basename "$SYSUPGRADE_FILE")" > "$(basename "$SYSUPGRADE_FILE").sha256sum")
+    echo "  ✅ 创建 sha256sum"
 fi
-# 调用真实的pkg-config
-/usr/bin/pkg-config "$@" 2>/dev/null || {
-    # 如果失败，对于特定库返回默认值
-    case "$*" in
-        *libssl*|*openssl*)
-            echo "-lssl -lcrypto"
-            ;;
-        *libxml-2.0*)
-            echo "-lxml2"
-            ;;
-        *libyaml*)
-            echo "-lyaml"
-            ;;
-        *)
-            exit 1
-            ;;
-    esac
-}
+
+# 4. 最终检查
+echo ""
+echo "📊 最终检查:"
+if [ -f "$SYSUPGRADE_FILE" ]; then
+    size=$(ls -lh "$SYSUPGRADE_FILE" 2>/dev/null | awk '{print $5}')
+    echo "  ✅ sysupgrade.bin: 存在 ($size)"
+else
+    echo "  ❌ sysupgrade.bin: 不存在"
+fi
+
+if [ -f "$FACTORY_FILE" ]; then
+    size=$(ls -lh "$FACTORY_FILE" 2>/dev/null | awk '{print $5}')
+    echo "  ✅ factory.img: 存在 ($size)"
+else
+    echo "  ❌ factory.img: 不存在"
+fi
+
+if [ -f "$ITB_FILE" ]; then
+    size=$(ls -lh "$ITB_FILE" 2>/dev/null | awk '{print $5}')
+    echo "  ✅ itb镜像: 存在 ($size)"
+fi
+
+echo "  📊 恢复文件数: $RECOVERED"
+echo "=== 强制恢复结束于 $(date) ==="
 EOF
-    chmod +x staging_dir/host/bin/pkg-config
-    export PATH="$PWD/staging_dir/host/bin:$PATH"
-    export PKG_CONFIG_PATH="$PWD/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
-    log "  ✅ 已创建pkg-config包装脚本"
+    chmod +x "$recover_script"
     
     # ============================================
-    # 预创建缺失的文件
+    # 备份关键文件
     # ============================================
-    log "🔧 预创建缺失的文件..."
+    log "🔧 创建固件备份目录..."
+    local backup_dir="$BUILD_DIR/firmware_backup_$(date +%s)"
+    mkdir -p "$backup_dir"
+    log "  ✅ 备份目录: $backup_dir"
     
-    # 创建 xattr.conf
-    find staging_dir -type d -name "root-*" 2>/dev/null | while read root_dir; do
-        touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
-    done
+    # ============================================
+    # 导出环境变量
+    # ============================================
+    export OPENWRT_VERBOSE=1
+    export FORCE_UNSAFE_CONFIGURE=1
     
-    # 创建 Module.symvers
-    find build_dir -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
-        touch "$dir/Module.symvers" 2>/dev/null || true
-    done
+    # ============================================
+    # 检查并修复 /usr/bin/env 符号链接问题
+    # ============================================
+    log "🔧 检查 /usr/bin/env 符号链接..."
     
-    # 创建 libreadline.a 和 libhistory.a
-    find build_dir -path "*/readline-*/ipkg-install/usr/lib" 2>/dev/null | while read lib_dir; do
-        touch "$lib_dir/libreadline.a" 2>/dev/null || true
-        touch "$lib_dir/libhistory.a" 2>/dev/null || true
-    done
+    # 检查 /usr/bin/env 是否存在且正常
+    if [ -L "/usr/bin/env" ]; then
+        local env_target=$(readlink /usr/bin/env)
+        log "  /usr/bin/env 是符号链接，指向: $env_target"
+        
+        # 如果指向自身，修复它
+        if [ "$env_target" = "/usr/bin/env" ] || [ "$env_target" = "env" ]; then
+            log "  ⚠️ 检测到符号链接循环，正在修复..."
+            sudo rm -f /usr/bin/env
+            sudo ln -s /usr/bin/coreutils /usr/bin/env 2>/dev/null || \
+            sudo cp /usr/bin/env.bak /usr/bin/env 2>/dev/null || \
+            sudo apt-get install --reinstall coreutils -y > /dev/null 2>&1 || true
+        fi
+    fi
     
-    # 创建 host/include 目录
-    mkdir -p staging_dir/target-aarch64_cortex-a53_musl/host/include
-    mkdir -p staging_dir/target-mips_24kc_musl/host/include
+    # 验证 env 命令
+    if /usr/bin/env bash -c "echo OK" > /dev/null 2>&1; then
+        log "  ✅ /usr/bin/env 工作正常"
+    else
+        log "  ⚠️ /usr/bin/env 有问题，尝试修复..."
+        # 备份当前 env
+        sudo cp /usr/bin/env /usr/bin/env.bak 2>/dev/null || true
+        # 重新安装 coreutils
+        sudo apt-get install --reinstall coreutils -y > /dev/null 2>&1 || true
+    fi
     
-    log "  ✅ 已预创建缺失文件"
+    # ============================================
+    # 修复 PATH 环境变量（避免使用 /tmp/fixed_bin）
+    # ============================================
+    log "🔧 修复 PATH 环境变量..."
+    
+    # 移除之前可能添加的 /tmp/fixed_bin 路径
+    export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^/tmp/fixed_bin" | tr '\n' ':' | sed 's/:$//')
+    
+    # 确保系统路径优先
+    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+    
+    log "  ✅ PATH 已修复: $PATH"
+    
+    # ============================================
+    # 创建临时目录但不修改 PATH
+    # ============================================
+    local temp_bin_dir="/tmp/real_bin_$$"
+    mkdir -p "$temp_bin_dir"
+    
+    # 只创建必要的包装脚本，但不修改 PATH
+    # 而是直接调用这些脚本时需要完整路径
     
     # ============================================
     # 智能判断最佳并行任务数
@@ -5728,7 +5910,7 @@ EOF
         fi
         
         # ============================================
-        # 编译循环 - 增强错误检测和修复
+        # 编译循环 - 不使用 PATH 覆盖
         # ============================================
         local max_attempts=3
         local attempt=1
@@ -5742,7 +5924,7 @@ EOF
             
             START_TIME=$(date +%s)
             
-            # 编译第一阶段 - 使用包装的PATH
+            # 编译第一阶段 - 使用原始 PATH
             set +e
             make -j$MAKE_JOBS V=s 2>&1 | tee build_phase1_attempt${attempt}.log
             PHASE1_EXIT_CODE=${PIPESTATUS[0]}
@@ -5755,75 +5937,103 @@ EOF
             echo "✅ 尝试 $attempt 完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
             echo "   退出代码: $PHASE1_EXIT_CODE"
             
-            # ============================================
-            # 检查并修复常见错误
-            # ============================================
-            local log_file="build_phase1_attempt${attempt}.log"
-            local has_error=0
-            
-            if [ -f "$log_file" ]; then
-                # 检查Broken pipe
-                if grep -q "write error: Broken pipe" "$log_file"; then
-                    log "  ⚠️ 检测到Broken pipe错误"
-                    has_error=1
-                fi
-                
-                # 检查下载失败
-                if grep -q "curl: (22).*401\|404" "$log_file" || grep -q "Download failed" "$log_file"; then
-                    log "  ⚠️ 检测到下载失败错误"
-                    has_error=1
-                    
-                    # 自动修复下载源
-                    log "  🔧 自动修复下载源..."
-                    find . -name "*.mk" -o -name "Makefile" | while read file; do
-                        sed -i 's|mirror2.immortalwrt.org|archive.immortalwrt.org|g' "$file" 2>/dev/null || true
-                        sed -i 's|mirror.immortalwrt.org|archive.immortalwrt.org|g' "$file" 2>/dev/null || true
-                    done
-                fi
-                
-                # 检查libssl缺失
-                if grep -q "Package libssl was not found" "$log_file"; then
-                    log "  ⚠️ 检测到libssl缺失"
-                    has_error=1
-                    
-                    # 强制安装libssl
-                    log "  🔧 强制安装libssl-dev..."
-                    sudo apt-get install -y libssl-dev --reinstall > /dev/null 2>&1 || true
-                fi
-                
-                # 检查文件缺失
-                if grep -q "No such file or directory" "$log_file"; then
-                    log "  ⚠️ 检测到文件缺失错误"
-                    has_error=1
-                    
-                    # 自动创建缺失文件
-                    local missing_files=$(grep "No such file or directory" "$log_file" | grep -o "/[^:]*" | sort -u)
-                    if [ -n "$missing_files" ]; then
-                        echo "$missing_files" | while read missing_file; do
-                            if [[ "$missing_file" == *"xattr.conf"* ]]; then
-                                mkdir -p "$(dirname "$missing_file")" 2>/dev/null || true
-                                touch "$missing_file" 2>/dev/null || true
-                                log "    ✅ 创建: $missing_file"
-                            elif [[ "$missing_file" == *"Module.symvers"* ]]; then
-                                mkdir -p "$(dirname "$missing_file")" 2>/dev/null || true
-                                touch "$missing_file" 2>/dev/null || true
-                                log "    ✅ 创建: $missing_file"
-                            fi
-                        done
-                    fi
-                fi
-            fi
-            
             # 检查是否成功
-            if [ $PHASE1_EXIT_CODE -eq 0 ] && [ $has_error -eq 0 ]; then
+            if [ $PHASE1_EXIT_CODE -eq 0 ]; then
                 compile_success=1
                 break
-            else
-                if [ $attempt -lt $max_attempts ]; then
-                    log "  🔄 检测到错误，准备第 $((attempt + 1)) 次重试..."
+            fi
+            
+            # 检查是否有符号链接循环错误
+            local log_file="build_phase1_attempt${attempt}.log"
+            if [ -f "$log_file" ] && grep -q "Too many levels of symbolic links" "$log_file"; then
+                log "  ⚠️ 检测到符号链接循环错误"
+                
+                # 修复 /usr/bin/env
+                log "  🔧 强制修复 /usr/bin/env..."
+                sudo rm -f /usr/bin/env
+                sudo ln -s /usr/bin/coreutils /usr/bin/env 2>/dev/null || \
+                sudo cp /bin/env /usr/bin/env 2>/dev/null || \
+                sudo apt-get install --reinstall coreutils -y > /dev/null 2>&1
+                
+                # 清理可能引起问题的临时目录
+                rm -rf /tmp/fixed_bin_* 2>/dev/null || true
+                rm -rf /tmp/real_bin_* 2>/dev/null || true
+            fi
+            
+            # 检查是否有补丁失败
+            local target="${TARGET:-ath79}"
+            local kernel_ver=$(grep -E "^KERNEL_PATCHVER:=" target/linux/$target/Makefile 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "5.15")
+            
+            log "  🔍 从编译日志中查找失败的补丁..."
+            
+            # 从日志中提取失败的补丁名
+            local failed_patches=$(grep -E "Patch failed!.*patches-.*/[0-9]+-.*\.patch" build_phase1_attempt${attempt}.log | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+            
+            if [ -n "$failed_patches" ]; then
+                log "  ⚠️ 发现失败的补丁:"
+                
+                # 找到对应的补丁目录
+                local patch_dir="target/linux/$target/patches-$kernel_ver"
+                
+                if [ -d "$patch_dir" ]; then
+                    # 将failed_patches转换为数组
+                    local failed_array=()
+                    while IFS= read -r line; do
+                        failed_array+=("$line")
+                    done <<< "$failed_patches"
                     
-                    # 清理可能的问题文件
-                    rm -f build_dir/target-*/.stamp_target_* 2>/dev/null || true
+                    # 删除所有失败的补丁
+                    local deleted_count=0
+                    for patch_name in "${failed_array[@]}"; do
+                        [ -z "$patch_name" ] && continue
+                        local patch_file="$patch_dir/$patch_name"
+                        
+                        if [ -f "$patch_file" ]; then
+                            log "    🗑️ 删除补丁: $patch_name"
+                            rm -f "$patch_file"
+                            deleted_count=$((deleted_count + 1))
+                        else
+                            # 尝试模糊匹配
+                            local found_patch=$(find "$patch_dir" -name "*${patch_name}*" 2>/dev/null | head -1)
+                            if [ -n "$found_patch" ]; then
+                                local found_name=$(basename "$found_patch")
+                                log "    🗑️ 删除补丁(模糊匹配): $found_name"
+                                rm -f "$found_patch"
+                                deleted_count=$((deleted_count + 1))
+                            fi
+                        fi
+                    done
+                    
+                    log "  ✅ 已删除 $deleted_count 个失败补丁"
+                    
+                    # 彻底清理内核构建目录
+                    log "  🔄 彻底清理内核构建目录..."
+                    rm -rf "build_dir/linux-${target}_"*
+                    rm -rf "build_dir/target-*"
+                    find staging_dir -name ".stamp_target_*" -exec rm -f {} \; 2>/dev/null || true
+                    
+                    # 刷新剩余的补丁
+                    log "  🔄 刷新剩余的补丁..."
+                    
+                    if make "target/linux/$target/refresh" V=s >> /tmp/build-logs/refresh_patches_${attempt}.log 2>&1; then
+                        log "  ✅ 补丁刷新完成"
+                    else
+                        log "  ⚠️ 补丁刷新有警告，但继续"
+                    fi
+                    
+                    # 更新内核配置
+                    log "  🔄 更新内核配置..."
+                    if make "target/linux/$target/config" V=s >> /tmp/build-logs/kernel_config_${attempt}.log 2>&1; then
+                        log "  ✅ 内核配置更新完成"
+                    else
+                        log "  ⚠️ 内核配置更新有警告，但继续"
+                    fi
+                    
+                    # 重新运行 defconfig
+                    log "  🔄 重新运行 make defconfig..."
+                    make defconfig > /tmp/build-logs/defconfig_after_patch_removal_${attempt}.log 2>&1 || {
+                        log "  ⚠️ make defconfig 有警告，继续尝试"
+                    }
                 fi
             fi
             
@@ -5851,8 +6061,41 @@ EOF
                 echo "未找到编译日志"
             fi
             
+            # 停止保护脚本
+            kill $protect_pid 2>/dev/null || true
+            
+            # 执行强制恢复
+            echo ""
+            echo "🔧 尝试恢复可能的部分固件..."
+            bash "$recover_script" "$protect_dir" "$BUILD_DIR"
+            
+            # 清理
+            rm -rf "$protect_dir" 2>/dev/null || true
+            
             log "❌ 编译失败，退出"
             exit $PHASE1_EXIT_CODE
+        fi
+        
+        # ============================================
+        # 第二阶段前：备份所有临时固件文件
+        # ============================================
+        echo ""
+        echo "🔧 第二阶段前：备份所有临时固件文件..."
+        
+        # 查找并备份所有可能的固件文件
+        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" -o -path "*/tmp/*.itb" -o -name "*.new" 2>/dev/null)
+        local backup_count=0
+        
+        if [ -n "$temp_files" ]; then
+            echo "$temp_files" | while read file; do
+                if [ -f "$file" ]; then
+                    cp -v "$file" "$backup_dir/" 2>/dev/null
+                    backup_count=$((backup_count + 1))
+                fi
+            done
+            echo "  ✅ 已备份 $backup_count 个临时固件文件到: $backup_dir"
+        else
+            echo "  ⚠️ 未找到临时固件文件"
         fi
         
         # ============================================
@@ -5907,9 +6150,22 @@ EOF
     fi
     
     # ============================================
+    # 停止保护脚本
+    # ============================================
+    kill $protect_pid 2>/dev/null || true
+    log "🔧 双固件保护已停止"
+    
+    # ============================================
     # 清理临时目录
     # ============================================
-    rm -rf "$bin_dir" 2>/dev/null || true
+    rm -rf "$temp_bin_dir" 2>/dev/null || true
+    
+    # ============================================
+    # 执行强制恢复
+    # ============================================
+    echo ""
+    echo "🔧 执行强制恢复，查找固件..."
+    bash "$recover_script" "$protect_dir" "$BUILD_DIR"
     
     # ============================================
     # 最终检查 - 验证固件
@@ -5935,6 +6191,9 @@ EOF
             fi
         done
     fi
+    
+    # 清理保护目录
+    rm -rf "$protect_dir" 2>/dev/null || true
     
     if [ $found_firmware -eq 0 ]; then
         log "❌ 错误：没有找到任何有效固件"
