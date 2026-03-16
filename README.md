@@ -5,6 +5,7 @@
 
 
 
+
 ## 📁 项目结构
 
 ```
@@ -43,12 +44,11 @@
 │       └── custom-files-install.sh
 ├── README.md
 ├── build-config.conf
-├── fix.txt
 └── support.sh
 
-7 directories, 29 files
+7 directories, 28 files
 ```
 
 注意，自定义文件名是英文的，方便复制、运行
 
-> 最后更新时间: 2026-03-09 09:43:29
+> 最后更新时间: 2026-03-16 09:55:00
