@@ -5786,6 +5786,11 @@ EOF
                 cat "$patch_blacklist"
             fi
             
+            # MODIFIED: 添加快速错误检查
+            echo ""
+            echo "🔧 正在运行快速错误检查..."
+            quick_error_check "$BUILD_DIR" "$TARGET" "$latest_log"
+            
             # 停止保护脚本
             kill $protect_pid 2>/dev/null || true
             
@@ -5910,6 +5915,11 @@ EOF
                 BUILD_EXIT_CODE=0
             fi
         fi
+        
+        # MODIFIED: 编译失败时也调用快速错误检查
+        echo ""
+        echo "🔧 正在运行快速错误检查..."
+        quick_error_check "$BUILD_DIR" "$TARGET" "build.log"
     fi
     
     # 执行强制恢复
@@ -6344,14 +6354,107 @@ workflow_step30_build_summary() {
 # ============================================================================
 
 #【build_firmware_main.sh-44】
-# 以下函数已废弃，不再使用
-# - download_openwrt_sdk (原 #07)
-# - verify_sdk_files (原 #07)
-# - verify_sdk_directory (原 #22)
-# - 公共函数库中的设备定义查找函数 (原 #23)
-# - universal_compiler_search (原 #43)
-# - search_compiler_files_simple (原 #44)
-# - intelligent_platform_aware_compiler_search (原 #45)
+# ============================================
+# 快速错误检查函数 - 在编译失败后自动调用
+# ============================================
+quick_error_check() {
+    local build_dir="$1"
+    local target_platform="$2"
+    local log_file="${3:-build.log}"
+
+    cd "$build_dir" 2>/dev/null || {
+        echo "❌ 无法进入构建目录: $build_dir"
+        return 1
+    }
+
+    echo ""
+    echo "================================================================="
+    echo "🔍 快速错误检查 - 正在扫描日志中的常见错误..."
+    echo "================================================================="
+
+    # 查找可用的日志文件（优先使用最新的尝试日志）
+    local latest_log=""
+    if [ -f "$log_file" ]; then
+        latest_log="$log_file"
+    else
+        # 查找 build_phase* 文件并按时间排序取最新的
+        latest_log=$(ls -t build_phase*.log 2>/dev/null | head -1)
+    fi
+
+    if [ -z "$latest_log" ] || [ ! -f "$latest_log" ]; then
+        echo "⚠️ 未找到任何日志文件，无法进行错误检查。"
+        return 1
+    fi
+
+    echo "📄 分析日志: $latest_log"
+    echo ""
+
+    # 定义错误模式
+    declare -A error_patterns=(
+        ["补丁失败"]="Patch failed"
+        ["文件丢失"]="cannot stat|No such file"
+        ["编译错误"]="error: |make.*Error [0-9]|undefined reference"
+        ["依赖缺失"]="missing dependency|package.*not found"
+        ["配置错误"]="invalid option|unrecognized option"
+        ["链接错误"]="undefined reference|ld returned"
+        ["内核错误"]="Kernel panic|Oops"
+        ["权限问题"]="Permission denied"
+        ["磁盘空间"]="No space left"
+        ["超时"]="Timeout was reached"
+    )
+
+    local found=0
+    for err_type in "${!error_patterns[@]}"; do
+        local pattern="${error_patterns[$err_type]}"
+        # 使用 grep 提取匹配行及其前后各3行上下文，去重，限制输出
+        local matches=$(grep -E -i -B 3 -A 3 "$pattern" "$latest_log" 2>/dev/null | grep -v "^--$" | head -20)
+        if [ -n "$matches" ]; then
+            echo "❌ $err_type 检测到："
+            echo "$matches" | while IFS= read -r line; do
+                echo "   $line"
+            done
+            echo ""
+            found=$((found + 1))
+        fi
+    done
+
+    if [ $found -eq 0 ]; then
+        echo "✅ 未检测到常见错误模式（但编译失败，请查看日志末尾）"
+    fi
+
+    # 额外检查：查看最后30行日志
+    echo ""
+    echo "📋 最后30行日志摘要:"
+    tail -30 "$latest_log" | sed 's/^/   /'
+
+    # 检查目标固件是否生成
+    echo ""
+    echo "📦 固件生成情况检查:"
+    local target_dir="bin/targets/$target_platform"
+    if [ -d "$target_dir" ]; then
+        local sysupgrade=$(find "$target_dir" -name "*sysupgrade*" -type f 2>/dev/null | head -1)
+        if [ -n "$sysupgrade" ]; then
+            echo "   ✅ sysupgrade 固件已生成: $(basename "$sysupgrade")"
+        else
+            echo "   ❌ sysupgrade 固件未生成"
+        fi
+        local factory=$(find "$target_dir" -name "*factory*" -type f 2>/dev/null | head -1)
+        if [ -n "$factory" ]; then
+            echo "   🏭 factory 镜像已生成: $(basename "$factory")"
+        fi
+        local itb=$(find "$target_dir" -name "*.itb" -type f 2>/dev/null | head -1)
+        if [ -n "$itb" ]; then
+            echo "   🔷 FIT 镜像已生成: $(basename "$itb") (可刷机)"
+        fi
+    else
+        echo "   ❌ 目标目录不存在: $target_dir"
+    fi
+
+    echo "================================================================="
+    echo "💡 提示：如果上述信息不足以定位问题，请检查完整日志或运行："
+    echo "   grep -i error $latest_log | head -20"
+    echo "================================================================="
+}
 #【build_firmware_main.sh-44-end】
 
 # ============================================
