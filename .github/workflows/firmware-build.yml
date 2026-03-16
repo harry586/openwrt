@@ -225,13 +225,26 @@ jobs:
       #【firmware-build.yml-04-end】
 
 #【firmware-build.yml-05】
-      - name: "05. 安装基础工具（优化版 - 包含libyaml）"
+      - name: "05. 安装基础工具（优化版 - 包含所有关键依赖）"
         run: |
-          echo "=== 步骤05: 安装基础工具（优化版 - 包含libyaml） ==="
+          echo "=== 步骤05: 安装基础工具（优化版 - 包含所有关键依赖） ==="
           
-          # 先安装libyaml-dev，确保dtc编译需要
+          # 更新软件源
           sudo apt-get update
-          sudo apt-get install -y libyaml-dev libyaml-cpp-dev || true
+          
+          # 安装所有关键依赖
+          sudo apt-get install -y \
+            libyaml-dev \
+            libyaml-cpp-dev \
+            libssl-dev \
+            libxml2-dev \
+            libxslt1-dev \
+            libuv1-dev \
+            libidn11-dev \
+            libidn2-dev \
+            libpsl-dev \
+            libnghttp2-dev \
+            || true
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step05_install_basic_tools
