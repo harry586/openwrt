@@ -6882,16 +6882,47 @@ workflow_step30_build_summary() {
     echo "配置来源: ${CONFIG_FILE:-使用脚本内默认值}"
     echo ""
     
+    # ============================================
+    # 修正：正确统计固件数量
+    # ============================================
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f -name "*.bin" -o -name "*.img" 2>/dev/null | wc -l)
+        # 统计所有 .bin 和 .img 文件（包括 .itb）
+        FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | wc -l)
+        
+        # 统计可刷机固件（排除 initramfs 等）
+        local flashable_count=0
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            local fname=$(basename "$file")
+            # 排除 initramfs 文件
+            if [[ "$fname" != *"initramfs"* ]] && [[ "$fname" != *"kernel"* ]] && [[ "$fname" != *"rootfs"* ]]; then
+                flashable_count=$((flashable_count + 1))
+            fi
+        done < <(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null)
         
         echo "📦 构建产物:"
-        echo "  固件数量: $FIRMWARE_COUNT 个 (.bin/.img)"
+        echo "  固件总数: $FIRMWARE_COUNT 个 (.bin/.img/.itb)"
+        echo "  可刷机固件: $flashable_count 个"
         
         if [ $FIRMWARE_COUNT -gt 0 ]; then
             echo "  产物位置: $BUILD_DIR/bin/targets/"
             echo "  下载名称: firmware-$timestamp_sec"
+            
+            # 列出所有可刷机固件
+            echo ""
+            echo "📋 可刷机固件列表:"
+            while IFS= read -r file; do
+                [ -z "$file" ] && continue
+                local fname=$(basename "$file")
+                if [[ "$fname" != *"initramfs"* ]] && [[ "$fname" != *"kernel"* ]] && [[ "$fname" != *"rootfs"* ]]; then
+                    local fsize=$(ls -lh "$file" | awk '{print $5}')
+                    echo "  📌 $fname ($fsize)"
+                fi
+            done < <(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | sort)
         fi
+    else
+        echo "📦 构建产物:"
+        echo "  固件数量: 0 个"
     fi
     
     echo ""
@@ -6903,10 +6934,10 @@ workflow_step30_build_summary() {
             SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
             MAJOR_VERSION=$(echo "$SDK_VERSION" | awk '{match($0, /[0-9]+/); print substr($0, RSTART, RLENGTH)}')
             
-            if [ "$MAJOR_VERSION" = "12" ]; then
-                echo "  🎯 SDK GCC: 12.3.0 (OpenWrt 23.05 SDK)"
-            elif [ "$MAJOR_VERSION" = "8" ]; then
-                echo "  🎯 SDK GCC: 8.4.0 (OpenWrt 21.02 SDK)"
+            if [ -n "$MAJOR_VERSION" ]; then
+                echo "  🎯 SDK GCC: $MAJOR_VERSION.x ($SDK_VERSION)"
+            else
+                echo "  🎯 SDK GCC: $SDK_VERSION"
             fi
         fi
     fi
@@ -6939,15 +6970,26 @@ workflow_step30_build_summary() {
     # 确保 TARGET 变量可用
     local target_for_check="${TARGET:-$([ -f "$BUILD_DIR/build_env.sh" ] && source "$BUILD_DIR/build_env.sh" && echo "$TARGET")}"
     local report_file="/tmp/quick-error-check-$timestamp_sec.txt"
+    
+    # 调用快速错误检查，但不让它导致脚本退出
+    set +e
     quick_error_check "$BUILD_DIR" "$target_for_check" "build.log" "$report_file"
+    local check_result=$?
+    set -e
     
     # 复制报告到工作区，便于上传
-    mkdir -p "$GITHUB_WORKSPACE/error-reports"
-    cp "$report_file" "$GITHUB_WORKSPACE/error-reports/" 2>/dev/null || true
-    echo "ERROR_REPORT_PATH=$GITHUB_WORKSPACE/error-reports/quick-error-check-$timestamp_sec.txt" >> $GITHUB_ENV
-    # =============================================
+    mkdir -p "$GITHUB_WORKSPACE/error-reports" 2>/dev/null || true
+    if [ -f "$report_file" ]; then
+        cp "$report_file" "$GITHUB_WORKSPACE/error-reports/" 2>/dev/null || true
+        echo "ERROR_REPORT_PATH=$GITHUB_WORKSPACE/error-reports/quick-error-check-$timestamp_sec.txt" >> $GITHUB_ENV
+    fi
+    
+    # ============================================
     
     log "✅ 步骤30 完成"
+    
+    # 返回成功，即使快速错误检查返回非0
+    return 0
 }
 #【build_firmware_main.sh-44-end】
 
