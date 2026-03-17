@@ -817,24 +817,14 @@ add_turboacc_support() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
-    # 修复 trusted-firmware-a 下载源
+    # 彻底修复所有下载源
     # ============================================
-    log "🔧 修复 trusted-firmware-a 下载源..."
-    
-    # 查找并修复 trusted-firmware-a 的 Makefile
-    find package/firmware -name "trusted-firmware-a" -type d 2>/dev/null | while read dir; do
-        if [ -f "$dir/Makefile" ]; then
-            log "  🔧 修复: $dir/Makefile"
-            # 备份原文件
-            cp "$dir/Makefile" "$dir/Makefile.bak"
-            # 替换下载源为 GitHub
-            sed -i 's|https\?://[^/]*/sources/trusted-firmware-a-|https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v|g' "$dir/Makefile"
-            sed -i 's|\.tar\.gz|.tar.gz|g' "$dir/Makefile"
-        fi
-    done
+    log "🔧 彻底修复所有下载源..."
     
     # 创建补丁目录
     mkdir -p package/firmware/trusted-firmware-a/patches
+    
+    # 创建补丁文件，替换所有失效的下载源
     cat > package/firmware/trusted-firmware-a/patches/001-fix-download-url.patch << 'EOF'
 --- a/package/firmware/trusted-firmware-a/Makefile
 +++ b/package/firmware/trusted-firmware-a/Makefile
@@ -845,24 +835,32 @@ add_turboacc_support() {
 -PKG_SOURCE_URL:=https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
 -PKG_SOURCE_URL+=https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
 +PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz
-+PKG_SOURCE_URL+=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz
++PKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v$(PKG_VERSION).tar.gz
  PKG_HASH:=skip
  
  PKG_LICENSE:=BSD-3-Clause
 EOF
     log "  ✅ 创建 trusted-firmware-a 下载源修复补丁"
     
-    # ============================================
     # 修复 libxml2 下载源
-    # ============================================
-    log "🔧 修复 libxml2 下载源..."
     find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
         if [ -f "$dir/Makefile" ]; then
-            log "  🔧 修复: $dir/Makefile"
             cp "$dir/Makefile" "$dir/Makefile.bak"
-            # 替换为 GitHub 源
+            # 替换为可用的下载源
             sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
             sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
+            log "  ✅ 修复 libxml2 下载源"
+        fi
+    done
+    
+    # 修复所有 mirror.immortalwrt.org 源
+    find . -name "*.mk" -o -name "Makefile" | while read file; do
+        if grep -q "mirror2.immortalwrt.org\|mirror.immortalwrt.org\|sources-cdn.immortalwrt.org" "$file" 2>/dev/null; then
+            cp "$file" "$file.bak"
+            sed -i 's|mirror2.immortalwrt.org|github.com|g' "$file"
+            sed -i 's|mirror.immortalwrt.org|github.com|g' "$file"
+            sed -i 's|sources-cdn.immortalwrt.org|github.com|g' "$file"
+            log "  ✅ 修复: $file"
         fi
     done
     
@@ -870,23 +868,15 @@ EOF
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         log "🔧 为正常模式添加 TurboACC 支持"
         
-        # 检查feeds.conf.default是否存在
         if [ ! -f "feeds.conf.default" ]; then
             touch feeds.conf.default
         fi
         
-        # 检查是否已经添加了turboacc feed
         if ! grep -q "turboacc" feeds.conf.default; then
             echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
             log "✅ TurboACC feed 添加完成"
         else
             log "ℹ️ TurboACC feed 已存在"
-        fi
-    else
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            log "ℹ️ TurboACC 已被配置禁用"
-        else
-            log "ℹ️ 基础模式不添加 TurboACC 支持"
         fi
     fi
 }
@@ -5580,13 +5570,13 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件（修复符号链接循环）
+# 步骤25: 编译固件（修复固件验证逻辑）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（修复符号链接循环） ==="
+    log "=== 步骤25: 编译固件（修复固件验证逻辑） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
@@ -5819,59 +5809,6 @@ EOF
     export FORCE_UNSAFE_CONFIGURE=1
     
     # ============================================
-    # 检查并修复 /usr/bin/env 符号链接问题
-    # ============================================
-    log "🔧 检查 /usr/bin/env 符号链接..."
-    
-    # 检查 /usr/bin/env 是否存在且正常
-    if [ -L "/usr/bin/env" ]; then
-        local env_target=$(readlink /usr/bin/env)
-        log "  /usr/bin/env 是符号链接，指向: $env_target"
-        
-        # 如果指向自身，修复它
-        if [ "$env_target" = "/usr/bin/env" ] || [ "$env_target" = "env" ]; then
-            log "  ⚠️ 检测到符号链接循环，正在修复..."
-            sudo rm -f /usr/bin/env
-            sudo ln -s /usr/bin/coreutils /usr/bin/env 2>/dev/null || \
-            sudo cp /usr/bin/env.bak /usr/bin/env 2>/dev/null || \
-            sudo apt-get install --reinstall coreutils -y > /dev/null 2>&1 || true
-        fi
-    fi
-    
-    # 验证 env 命令
-    if /usr/bin/env bash -c "echo OK" > /dev/null 2>&1; then
-        log "  ✅ /usr/bin/env 工作正常"
-    else
-        log "  ⚠️ /usr/bin/env 有问题，尝试修复..."
-        # 备份当前 env
-        sudo cp /usr/bin/env /usr/bin/env.bak 2>/dev/null || true
-        # 重新安装 coreutils
-        sudo apt-get install --reinstall coreutils -y > /dev/null 2>&1 || true
-    fi
-    
-    # ============================================
-    # 修复 PATH 环境变量（避免使用 /tmp/fixed_bin）
-    # ============================================
-    log "🔧 修复 PATH 环境变量..."
-    
-    # 移除之前可能添加的 /tmp/fixed_bin 路径
-    export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "^/tmp/fixed_bin" | tr '\n' ':' | sed 's/:$//')
-    
-    # 确保系统路径优先
-    export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-    
-    log "  ✅ PATH 已修复: $PATH"
-    
-    # ============================================
-    # 创建临时目录但不修改 PATH
-    # ============================================
-    local temp_bin_dir="/tmp/real_bin_$$"
-    mkdir -p "$temp_bin_dir"
-    
-    # 只创建必要的包装脚本，但不修改 PATH
-    # 而是直接调用这些脚本时需要完整路径
-    
-    # ============================================
     # 智能判断最佳并行任务数
     # ============================================
     CPU_CORES=$(nproc)
@@ -5901,7 +5838,7 @@ EOF
         fi
         
         # ============================================
-        # 编译循环 - 不使用 PATH 覆盖
+        # 编译循环 - 检测并修复dtc链接错误
         # ============================================
         local max_attempts=3
         local attempt=1
@@ -5915,7 +5852,7 @@ EOF
             
             START_TIME=$(date +%s)
             
-            # 编译第一阶段 - 使用原始 PATH
+            # 编译第一阶段
             set +e
             make -j$MAKE_JOBS V=s 2>&1 | tee build_phase1_attempt${attempt}.log
             PHASE1_EXIT_CODE=${PIPESTATUS[0]}
@@ -5928,27 +5865,58 @@ EOF
             echo "✅ 尝试 $attempt 完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
             echo "   退出代码: $PHASE1_EXIT_CODE"
             
+            # ============================================
+            # 检查dtc链接错误
+            # ============================================
+            local log_file="build_phase1_attempt${attempt}.log"
+            local has_dtc_error=0
+            
+            if [ -f "$log_file" ] && grep -q "undefined reference to .*yaml" "$log_file"; then
+                has_dtc_error=1
+                log "  ⚠️ 检测到dtc链接错误（缺少libyaml）"
+                
+                # 修复方案：安装libyaml并重新编译dtc
+                log "  🔧 安装libyaml-dev..."
+                sudo apt-get update > /dev/null 2>&1 || true
+                sudo apt-get install -y libyaml-dev > /dev/null 2>&1 || {
+                    log "  ⚠️ 自动安装失败，尝试手动编译..."
+                    
+                    # 下载并编译libyaml
+                    mkdir -p dl
+                    if [ ! -f "dl/yaml-0.2.5.tar.gz" ]; then
+                        wget -O dl/yaml-0.2.5.tar.gz https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz || true
+                    fi
+                    
+                    if [ -f "dl/yaml-0.2.5.tar.gz" ]; then
+                        mkdir -p build_dir/host/libyaml-0.2.5
+                        tar -xzf dl/yaml-0.2.5.tar.gz -C build_dir/host/libyaml-0.2.5 --strip-components=1
+                        cd build_dir/host/libyaml-0.2.5
+                        ./configure --prefix="$BUILD_DIR/staging_dir/host"
+                        make -j1
+                        make install
+                        cd "$BUILD_DIR"
+                        
+                        # 更新pkg-config路径
+                        export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
+                        log "  ✅ libyaml手动编译完成"
+                    fi
+                }
+                
+                # 清理并重新编译dtc
+                log "  🔧 清理并重新编译dtc..."
+                rm -f build_dir/target-*/linux-*/scripts/dtc/dtc
+                rm -f build_dir/target-*/.stamp_target_*
+                
+                # 重新运行dtc编译
+                if [ -d "build_dir/target-*/linux-*/scripts/dtc" ]; then
+                    make target/linux/clean -j1 > /dev/null 2>&1 || true
+                fi
+            fi
+            
             # 检查是否成功
             if [ $PHASE1_EXIT_CODE -eq 0 ]; then
                 compile_success=1
                 break
-            fi
-            
-            # 检查是否有符号链接循环错误
-            local log_file="build_phase1_attempt${attempt}.log"
-            if [ -f "$log_file" ] && grep -q "Too many levels of symbolic links" "$log_file"; then
-                log "  ⚠️ 检测到符号链接循环错误"
-                
-                # 修复 /usr/bin/env
-                log "  🔧 强制修复 /usr/bin/env..."
-                sudo rm -f /usr/bin/env
-                sudo ln -s /usr/bin/coreutils /usr/bin/env 2>/dev/null || \
-                sudo cp /bin/env /usr/bin/env 2>/dev/null || \
-                sudo apt-get install --reinstall coreutils -y > /dev/null 2>&1
-                
-                # 清理可能引起问题的临时目录
-                rm -rf /tmp/fixed_bin_* 2>/dev/null || true
-                rm -rf /tmp/real_bin_* 2>/dev/null || true
             fi
             
             # 检查是否有补丁失败
@@ -6147,9 +6115,35 @@ EOF
     log "🔧 双固件保护已停止"
     
     # ============================================
-    # 清理临时目录
+    # 检查编译结果
     # ============================================
-    rm -rf "$temp_bin_dir" 2>/dev/null || true
+    if [ $BUILD_EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+        echo ""
+        echo "🔍 最后50行错误日志:"
+        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || tail -50 build.log
+        
+        # 再次检查是否有dtc错误
+        if grep -q "undefined reference to .*yaml" build.log 2>/dev/null; then
+            log "⚠️ 检测到dtc链接错误，尝试最终修复..."
+            
+            # 最终修复方案
+            log "  🔧 强制安装libyaml-dev..."
+            sudo apt-get install -y libyaml-dev > /dev/null 2>&1 || true
+            
+            # 清理并重新编译内核
+            log "  🔧 清理并重新编译内核..."
+            rm -rf build_dir/target-*/linux-*/scripts/dtc
+            make target/linux/clean -j1 > /dev/null 2>&1 || true
+            make target/linux/compile -j1 V=s >> /tmp/build-logs/target_final.log 2>&1 || true
+        fi
+        
+        # 执行强制恢复
+        echo ""
+        echo "🔧 执行强制恢复，查找固件..."
+        bash "$recover_script" "$protect_dir" "$BUILD_DIR"
+    fi
     
     # ============================================
     # 执行强制恢复
@@ -6159,41 +6153,68 @@ EOF
     bash "$recover_script" "$protect_dir" "$BUILD_DIR"
     
     # ============================================
-    # 最终检查 - 验证固件
+    # 最终检查 - 验证固件（修复版）
     # ============================================
     log "🔍 验证固件..."
     
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local found_firmware=0
+    local valid_firmware=0
     
     if [ -d "$target_dir" ]; then
-        # 查找所有固件
-        find "$target_dir" -name "*.bin" -o -name "*.img" -o -name "*.itb" 2>/dev/null | while read file; do
+        # 使用数组存储文件列表，避免子shell问题
+        local firmware_files=()
+        while IFS= read -r file; do
+            [ -n "$file" ] && firmware_files+=("$file")
+        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | grep -v "sha256sums")
+        
+        for file in "${firmware_files[@]}"; do
+            local fname=$(basename "$file")
             local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
             local size_mb=$((size_bytes / 1024 / 1024))
-            local fname=$(basename "$file")
+            
+            found_firmware=$((found_firmware + 1))
+            
+            # 判断是否是可刷机固件
+            local is_flashable=0
+            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]] || [[ "$fname" == *".itb" && "$fname" != *"initramfs"* ]]; then
+                is_flashable=1
+            fi
             
             if [ $size_mb -ge 5 ]; then
-                log "  ✅ $fname 大小: ${size_mb}MB - 有效"
-                found_firmware=$((found_firmware + 1))
+                if [ $is_flashable -eq 1 ]; then
+                    log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
+                    valid_firmware=$((valid_firmware + 1))
+                else
+                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
+                fi
             else
-                log "  ❌ $fname 大小: ${size_mb}MB - 无效"
+                log "  ❌ $fname 大小: ${size_mb}MB - 无效（小于5MB）"
                 rm -f "$file"
             fi
         done
     fi
     
-    # 清理保护目录
-    rm -rf "$protect_dir" 2>/dev/null || true
-    
-    if [ $found_firmware -eq 0 ]; then
-        log "❌ 错误：没有找到任何有效固件"
+    # 最终判定
+    if [ $valid_firmware -eq 0 ]; then
+        log "❌ 错误：没有找到任何有效可刷机固件"
+        log "   找到的文件总数: $found_firmware"
         exit 1
     else
-        log "✅ 找到 $found_firmware 个有效固件"
+        log "✅ 找到 $valid_firmware 个有效可刷机固件"
     fi
     
+    # 清理
+    rm -rf "$protect_dir" 2>/dev/null || true
+    
     log "✅ 步骤25 完成"
+    
+    # 如果编译失败但固件存在，不退出
+    if [ $BUILD_EXIT_CODE -ne 0 ] && [ $valid_firmware -gt 0 ]; then
+        log "⚠️ 编译有错误，但固件已生成，继续执行"
+    elif [ $BUILD_EXIT_CODE -ne 0 ]; then
+        exit $BUILD_EXIT_CODE
+    fi
 }
 #【build_firmware_main.sh-40-end】
 
