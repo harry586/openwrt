@@ -321,6 +321,12 @@ setup_environment() {
         libidn2-dev
         libpsl-dev
         libnghttp2-dev
+        libcap-dev
+        libcap-ng-dev
+        libmnl-dev
+        libnftnl-dev
+        libuuid1
+        uuid-dev
     )
     
     log "安装基础编译工具..."
@@ -826,9 +832,9 @@ add_turboacc_support() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
-    # 修复下载源 - 替换失效的镜像源
+    # 修复所有下载源（替换失效的镜像源）
     # ============================================
-    log "🔧 修复下载源（替换失效的镜像源）..."
+    log "🔧 修复所有下载源（替换失效的镜像源）..."
     
     # 备份原文件
     if [ -f "feeds.conf.default" ]; then
@@ -838,51 +844,85 @@ add_turboacc_support() {
     
     # 创建全局下载源修复脚本
     mkdir -p scripts
-    cat > scripts/fix-download-sources.sh << 'EOF'
+    cat > scripts/fix-all-download-sources.sh << 'EOF'
 #!/bin/bash
 # 修复所有失效的下载源
 # 替换 immortalwrt.org 镜像源为可用镜像源
 
 FIND_DIR="${1:-.}"
+LOG_FILE="${2:-/tmp/download-fix.log}"
 
-echo "修复下载源 - 替换 immortalwrt.org 镜像源..."
+echo "修复下载源 - 替换 immortalwrt.org 镜像源..." | tee -a "$LOG_FILE"
 
 # 替换 feeds 中的镜像源
 find "$FIND_DIR" -name "*.mk" -o -name "Makefile" -o -name "feeds.conf*" | while read file; do
+    changed=0
+    
     # 替换 mirror2.immortalwrt.org
     if grep -q "mirror2.immortalwrt.org" "$file" 2>/dev/null; then
-        echo "  🔧 修复: $file"
-        sed -i 's|mirror2.immortalwrt.org|archive.immortalwrt.org|g' "$file"
+        echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
+        sed -i 's|mirror2.immortalwrt.org|github.com|g' "$file"
+        sed -i 's|mirror2.immortalwrt.org/|github.com/|g' "$file"
+        changed=1
     fi
     
     # 替换 mirror.immortalwrt.org
     if grep -q "mirror.immortalwrt.org" "$file" 2>/dev/null; then
-        echo "  🔧 修复: $file"
-        sed -i 's|mirror.immortalwrt.org|archive.immortalwrt.org|g' "$file"
+        if [ $changed -eq 0 ]; then
+            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
+        fi
+        sed -i 's|mirror.immortalwrt.org|github.com|g' "$file"
+        sed -i 's|mirror.immortalwrt.org/|github.com/|g' "$file"
+        changed=1
     fi
     
     # 替换 downloads.immortalwrt.org
     if grep -q "downloads.immortalwrt.org" "$file" 2>/dev/null; then
-        echo "  🔧 修复: $file"
-        sed -i 's|downloads.immortalwrt.org|archive.immortalwrt.org|g' "$file"
+        if [ $changed -eq 0 ]; then
+            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
+        fi
+        sed -i 's|downloads.immortalwrt.org|github.com|g' "$file"
+        sed -i 's|downloads.immortalwrt.org/|github.com/|g' "$file"
+        changed=1
+    fi
+    
+    # 替换 gnome.org 下载源（libxml2）
+    if grep -q "download.gnome.org/sources/libxml2" "$file" 2>/dev/null; then
+        if [ $changed -eq 0 ]; then
+            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
+        fi
+        # 替换为 GitHub 镜像
+        sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$file"
+        sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$file"
+        changed=1
+    fi
+    
+    # 替换 trusted-firmware-a 下载源
+    if grep -q "trusted-firmware-a.*mirror" "$file" 2>/dev/null || grep -q "trusted-firmware-a.*sources" "$file" 2>/dev/null; then
+        if [ $changed -eq 0 ]; then
+            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
+        fi
+        # 替换为 ARM 官方 GitHub 源
+        sed -i 's|https\?://[^/]*/sources/trusted-firmware-a-\([0-9.]*\)\.tar\.gz|https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v\1.tar.gz|g' "$file"
+        changed=1
     fi
     
     # 添加备用镜像源（如果不存在）
     if grep -q "github.com/immortalwrt" "$file" 2>/dev/null; then
         if ! grep -q "mirrors.tuna.tsinghua.edu.cn" "$file" 2>/dev/null; then
-            echo "  ℹ️ 添加清华镜像源注释"
-            sed -i '/github.com\/immortalwrt/a # 备用镜像: https://mirrors.tuna.tsinghua.edu.cn/immortalwrt' "$file"
+            echo "# 备用镜像: https://mirrors.tuna.tsinghua.edu.cn/immortalwrt" >> "$file"
+            echo "  ℹ️ 添加清华镜像源注释" | tee -a "$LOG_FILE"
         fi
     fi
 done
 
-echo "下载源修复完成"
+echo "下载源修复完成" | tee -a "$LOG_FILE"
 EOF
-    chmod +x scripts/fix-download-sources.sh
+    chmod +x scripts/fix-all-download-sources.sh
     log "  ✅ 创建下载源修复脚本"
     
     # 执行修复
-    ./scripts/fix-download-sources.sh "$BUILD_DIR"
+    ./scripts/fix-all-download-sources.sh "$BUILD_DIR" "/tmp/download-fix.log"
     
     # 使用配置文件中的开关
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
@@ -919,9 +959,9 @@ configure_feeds() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
-    # 预创建可能缺失的文件（修复文件丢失错误）
+    # 预创建所有可能缺失的文件（修复文件丢失错误）
     # ============================================
-    log "🔧 预创建可能缺失的文件..."
+    log "🔧 预创建所有可能缺失的文件..."
     
     # 创建 xattr.conf
     mkdir -p staging_dir/target-*/root-*/etc 2>/dev/null || true
@@ -929,8 +969,9 @@ configure_feeds() {
         if [ -d "$target_dir" ]; then
             for root_dir in "$target_dir"/root-*; do
                 if [ -d "$root_dir" ]; then
+                    mkdir -p "$root_dir/etc"
                     touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
-                    log "  ✅ 创建: $root_dir/etc/xattr.conf"
+                    [ -f "$root_dir/etc/xattr.conf" ] && log "  ✅ 创建: $root_dir/etc/xattr.conf"
                 fi
             done
         fi
@@ -941,8 +982,9 @@ configure_feeds() {
     for build_dir in build_dir/target-*; do
         if [ -d "$build_dir" ]; then
             find "$build_dir" -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
+                mkdir -p "$dir"
                 touch "$dir/Module.symvers" 2>/dev/null || true
-                log "  ✅ 创建: $dir/Module.symvers"
+                [ -f "$dir/Module.symvers" ] && log "  ✅ 创建: $dir/Module.symvers"
             done
         fi
     done
@@ -960,6 +1002,15 @@ configure_feeds() {
     mkdir -p staging_dir/target-aarch64_cortex-a53_musl/host/include 2>/dev/null || true
     mkdir -p staging_dir/target-mips_24kc_musl/host/include 2>/dev/null || true
     log "  ✅ 创建 host/include 目录"
+    
+    # 创建 build 目录（修复 python find 错误）
+    mkdir -p build_dir/target-*/build 2>/dev/null || true
+    for target_build in build_dir/target-*; do
+        if [ -d "$target_build" ]; then
+            mkdir -p "$target_build/build" 2>/dev/null || true
+        fi
+    done
+    log "  ✅ 创建 build 目录"
     
     # ============================================
     # 获取需要禁用的插件列表
