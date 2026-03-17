@@ -50,32 +50,17 @@ load_build_config() {
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
     
     # ============================================
-    # 检查 /usr/bin/env 是否正常
+    # 检查文件描述符限制（修复Broken pipe）
     # ============================================
-    if ! /usr/bin/env bash -c "echo OK" > /dev/null 2>&1; then
-        log "⚠️ /usr/bin/env 工作不正常，尝试修复..."
-        
-        # 检查是否是符号链接循环
-        if [ -L "/usr/bin/env" ]; then
-            local env_target=$(readlink /usr/bin/env)
-            log "  /usr/bin/env 是符号链接，指向: $env_target"
-            
-            # 如果指向自身，修复它
-            if [ "$env_target" = "/usr/bin/env" ] || [ "$env_target" = "env" ]; then
-                log "  ⚠️ 检测到符号链接循环，正在修复..."
-                sudo rm -f /usr/bin/env
-                sudo ln -s /usr/bin/coreutils /usr/bin/env 2>/dev/null || \
-                sudo cp /bin/env /usr/bin/env 2>/dev/null || \
-                sudo apt-get install --reinstall coreutils -y > /dev/null 2>&1 || true
-            fi
-        fi
-        
-        # 验证修复结果
-        if /usr/bin/env bash -c "echo OK" > /dev/null 2>&1; then
-            log "  ✅ /usr/bin/env 已修复"
-        else
-            log "  ⚠️ /usr/bin/env 仍有问题，但将继续"
-        fi
+    log "🔧 检查文件描述符限制..."
+    local current_limit=$(ulimit -n)
+    log "  当前文件描述符限制: $current_limit"
+    
+    if [ $current_limit -lt 65536 ]; then
+        log "  文件描述符限制过低，尝试提高到65536..."
+        ulimit -n 65536 2>/dev/null || sudo ulimit -n 65536 2>/dev/null || true
+        local new_limit=$(ulimit -n)
+        log "  新的文件描述符限制: $new_limit"
     fi
     
     log "✅ 配置加载完成，当前源码仓库类型: $SOURCE_REPO_TYPE"
@@ -832,104 +817,54 @@ add_turboacc_support() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
-    # 修复所有下载源（替换失效的镜像源）
+    # 修复 trusted-firmware-a 下载源
     # ============================================
-    log "🔧 修复所有下载源（替换失效的镜像源）..."
+    log "🔧 修复 trusted-firmware-a 下载源..."
     
-    # 备份原文件
-    if [ -f "feeds.conf.default" ]; then
-        cp "feeds.conf.default" "feeds.conf.default.bak"
-        log "  ✅ 备份 feeds.conf.default"
-    fi
-    
-    # 创建全局下载源修复脚本
-    mkdir -p scripts
-    cat > scripts/fix-all-download-sources.sh << 'EOF'
-#!/bin/bash
-# 修复所有失效的下载源
-# 替换 immortalwrt.org 镜像源为 GitHub 源
-
-FIND_DIR="${1:-.}"
-LOG_FILE="${2:-/tmp/download-fix.log}"
-
-echo "修复下载源 - 替换 immortalwrt.org 镜像源..." | tee -a "$LOG_FILE"
-
-# 替换 feeds 中的镜像源
-find "$FIND_DIR" -name "*.mk" -o -name "Makefile" -o -name "feeds.conf*" | while read file; do
-    changed=0
-    
-    # 替换 mirror2.immortalwrt.org
-    if grep -q "mirror2.immortalwrt.org" "$file" 2>/dev/null; then
-        echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
-        sed -i 's|mirror2.immortalwrt.org|raw.githubusercontent.com|g' "$file"
-        changed=1
-    fi
-    
-    # 替换 mirror.immortalwrt.org
-    if grep -q "mirror.immortalwrt.org" "$file" 2>/dev/null; then
-        if [ $changed -eq 0 ]; then
-            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
+    # 查找并修复 trusted-firmware-a 的 Makefile
+    find package/firmware -name "trusted-firmware-a" -type d 2>/dev/null | while read dir; do
+        if [ -f "$dir/Makefile" ]; then
+            log "  🔧 修复: $dir/Makefile"
+            # 备份原文件
+            cp "$dir/Makefile" "$dir/Makefile.bak"
+            # 替换下载源为 GitHub
+            sed -i 's|https\?://[^/]*/sources/trusted-firmware-a-|https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v|g' "$dir/Makefile"
+            sed -i 's|\.tar\.gz|.tar.gz|g' "$dir/Makefile"
         fi
-        sed -i 's|mirror.immortalwrt.org|raw.githubusercontent.com|g' "$file"
-        changed=1
-    fi
+    done
     
-    # 替换 downloads.immortalwrt.org
-    if grep -q "downloads.immortalwrt.org" "$file" 2>/dev/null; then
-        if [ $changed -eq 0 ]; then
-            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
-        fi
-        sed -i 's|downloads.immortalwrt.org|raw.githubusercontent.com|g' "$file"
-        changed=1
-    fi
-    
-    # 替换 sources-cdn.immortalwrt.org
-    if grep -q "sources-cdn.immortalwrt.org" "$file" 2>/dev/null; then
-        if [ $changed -eq 0 ]; then
-            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
-        fi
-        sed -i 's|sources-cdn.immortalwrt.org|raw.githubusercontent.com|g' "$file"
-        changed=1
-    fi
-    
-    # 替换 gnome.org 下载源（libxml2）- 使用 GitHub 镜像
-    if grep -q "download.gnome.org/sources/libxml2" "$file" 2>/dev/null; then
-        if [ $changed -eq 0 ]; then
-            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
-        fi
-        # 替换为 GitHub 镜像
-        sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$file"
-        sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$file"
-        changed=1
-    fi
-    
-    # 替换 mirror.nju.edu.cn 下载源（如果失效）
-    if grep -q "mirror.nju.edu.cn.*404" "$file" 2>/dev/null; then
-        if [ $changed -eq 0 ]; then
-            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
-        fi
-        sed -i 's|mirror.nju.edu.cn|raw.githubusercontent.com|g' "$file"
-        changed=1
-    fi
-    
-    # 替换 trusted-firmware-a 下载源
-    if grep -q "trusted-firmware-a" "$file" 2>/dev/null && grep -q "mirror\|sources" "$file" 2>/dev/null; then
-        if [ $changed -eq 0 ]; then
-            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
-        fi
-        # 替换为 ARM 官方 GitHub 源
-        sed -i 's|https\?://[^/]*/sources/trusted-firmware-a-\([0-9.]*\)\.tar\.gz|https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v\1.tar.gz|g' "$file"
-        changed=1
-    fi
-done
-
-echo "下载源修复完成" | tee -a "$LOG_FILE"
+    # 创建补丁目录
+    mkdir -p package/firmware/trusted-firmware-a/patches
+    cat > package/firmware/trusted-firmware-a/patches/001-fix-download-url.patch << 'EOF'
+--- a/package/firmware/trusted-firmware-a/Makefile
++++ b/package/firmware/trusted-firmware-a/Makefile
+@@ -5,8 +5,8 @@
+ PKG_NAME:=trusted-firmware-a
+ PKG_RELEASE:=1
+ 
+-PKG_SOURCE_URL:=https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
+-PKG_SOURCE_URL+=https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
++PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz
++PKG_SOURCE_URL+=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz
+ PKG_HASH:=skip
+ 
+ PKG_LICENSE:=BSD-3-Clause
 EOF
-    chmod +x scripts/fix-all-download-sources.sh
-    log "  ✅ 创建下载源修复脚本"
+    log "  ✅ 创建 trusted-firmware-a 下载源修复补丁"
     
-    # 执行修复
-    ./scripts/fix-all-download-sources.sh "$BUILD_DIR" "/tmp/download-fix.log"
+    # ============================================
+    # 修复 libxml2 下载源
+    # ============================================
+    log "🔧 修复 libxml2 下载源..."
+    find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
+        if [ -f "$dir/Makefile" ]; then
+            log "  🔧 修复: $dir/Makefile"
+            cp "$dir/Makefile" "$dir/Makefile.bak"
+            # 替换为 GitHub 源
+            sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
+            sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
+        fi
+    done
     
     # 使用配置文件中的开关
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
@@ -966,57 +901,53 @@ configure_feeds() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
-    # 预创建所有可能缺失的文件（修复文件丢失错误）
+    # 预创建所有可能缺失的文件（增强版）
     # ============================================
     log "🔧 预创建所有可能缺失的文件..."
     
-    # 创建 xattr.conf
-    mkdir -p staging_dir/target-*/root-*/etc 2>/dev/null || true
-    for target_dir in staging_dir/target-*; do
-        if [ -d "$target_dir" ]; then
-            for root_dir in "$target_dir"/root-*; do
-                if [ -d "$root_dir" ]; then
-                    mkdir -p "$root_dir/etc"
-                    touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
-                    [ -f "$root_dir/etc/xattr.conf" ] && log "  ✅ 创建: $root_dir/etc/xattr.conf"
-                fi
-            done
-        fi
+    # 创建 xattr.conf（修复attr包错误）
+    find staging_dir -type d -name "root-*" 2>/dev/null | while read root_dir; do
+        mkdir -p "$root_dir/etc"
+        touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
+        [ -f "$root_dir/etc/xattr.conf" ] && log "  ✅ 创建: $root_dir/etc/xattr.conf"
     done
     
-    # 创建 Module.symvers
-    mkdir -p build_dir/target-* 2>/dev/null || true
-    for build_dir in build_dir/target-*; do
-        if [ -d "$build_dir" ]; then
-            find "$build_dir" -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
-                mkdir -p "$dir"
-                touch "$dir/Module.symvers" 2>/dev/null || true
-                [ -f "$dir/Module.symvers" ] && log "  ✅ 创建: $dir/Module.symvers"
-            done
-        fi
+    # 创建 Module.symvers（修复fullconenat错误）
+    find build_dir -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
+        mkdir -p "$dir"
+        touch "$dir/Module.symvers" 2>/dev/null || true
+        [ -f "$dir/Module.symvers" ] && log "  ✅ 创建: $dir/Module.symvers"
     done
     
-    # 创建 libreadline.a 和 libhistory.a 的占位文件
-    for target_dir in build_dir/target-*/readline-*/ipkg-install/usr/lib; do
-        if [ -d "$target_dir" ]; then
-            touch "$target_dir/libreadline.a" 2>/dev/null || true
-            touch "$target_dir/libhistory.a" 2>/dev/null || true
-            log "  ✅ 创建: $target_dir/libreadline.a 和 libhistory.a"
-        fi
+    # 创建 libreadline.a 和 libhistory.a（修复readline错误）
+    find build_dir -path "*/readline-*/ipkg-install/usr/lib" 2>/dev/null | while read lib_dir; do
+        touch "$lib_dir/libreadline.a" 2>/dev/null || true
+        touch "$lib_dir/libhistory.a" 2>/dev/null || true
+        log "  ✅ 创建: $lib_dir/libreadline.a 和 libhistory.a"
     done
     
-    # 创建 staging_dir/host/include 目录
+    # 创建 build 目录（修复python find错误）
+    find build_dir -type d -name "target-*" 2>/dev/null | while read target_dir; do
+        mkdir -p "$target_dir/build" 2>/dev/null || true
+        [ -d "$target_dir/build" ] && log "  ✅ 创建: $target_dir/build"
+    done
+    
+    # 创建 host/include 目录（修复-Wmissing-include-dirs警告）
     mkdir -p staging_dir/target-aarch64_cortex-a53_musl/host/include 2>/dev/null || true
     mkdir -p staging_dir/target-mips_24kc_musl/host/include 2>/dev/null || true
     log "  ✅ 创建 host/include 目录"
     
-    # 创建 build 目录（修复 python find 错误）
-    for target_build in build_dir/target-*; do
-        if [ -d "$target_build" ]; then
-            mkdir -p "$target_build/build" 2>/dev/null || true
-            log "  ✅ 创建: $target_build/build"
-        fi
-    done
+    # ============================================
+    # 安装 libssl-dev（如果缺失）
+    # ============================================
+    log "🔧 检查 libssl-dev 安装状态..."
+    if ! dpkg -l | grep -q libssl-dev; then
+        log "  ⚠️ libssl-dev 未安装，尝试安装..."
+        sudo apt-get update > /dev/null 2>&1 || true
+        sudo apt-get install -y libssl-dev > /dev/null 2>&1 || true
+    else
+        log "  ✅ libssl-dev 已安装"
+    fi
     
     # ============================================
     # 获取需要禁用的插件列表
