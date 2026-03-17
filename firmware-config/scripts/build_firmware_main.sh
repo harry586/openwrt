@@ -421,7 +421,7 @@ initialize_build_env() {
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         SELECTED_REPO_URL="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
         SELECTED_BRANCH="master"
-        log "✅ LEDE源码选择: 固定使用master分支"
+        log "✅ LEDE源码选择: 固定使用master分支（忽略版本选择）"
     elif [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
         SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
         if [ "$version_selection" = "23.05" ]; then
@@ -847,7 +847,7 @@ add_turboacc_support() {
     cat > scripts/fix-all-download-sources.sh << 'EOF'
 #!/bin/bash
 # 修复所有失效的下载源
-# 替换 immortalwrt.org 镜像源为可用镜像源
+# 替换 immortalwrt.org 镜像源为 GitHub 源
 
 FIND_DIR="${1:-.}"
 LOG_FILE="${2:-/tmp/download-fix.log}"
@@ -861,8 +861,7 @@ find "$FIND_DIR" -name "*.mk" -o -name "Makefile" -o -name "feeds.conf*" | while
     # 替换 mirror2.immortalwrt.org
     if grep -q "mirror2.immortalwrt.org" "$file" 2>/dev/null; then
         echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
-        sed -i 's|mirror2.immortalwrt.org|github.com|g' "$file"
-        sed -i 's|mirror2.immortalwrt.org/|github.com/|g' "$file"
+        sed -i 's|mirror2.immortalwrt.org|raw.githubusercontent.com|g' "$file"
         changed=1
     fi
     
@@ -871,8 +870,7 @@ find "$FIND_DIR" -name "*.mk" -o -name "Makefile" -o -name "feeds.conf*" | while
         if [ $changed -eq 0 ]; then
             echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
         fi
-        sed -i 's|mirror.immortalwrt.org|github.com|g' "$file"
-        sed -i 's|mirror.immortalwrt.org/|github.com/|g' "$file"
+        sed -i 's|mirror.immortalwrt.org|raw.githubusercontent.com|g' "$file"
         changed=1
     fi
     
@@ -881,12 +879,20 @@ find "$FIND_DIR" -name "*.mk" -o -name "Makefile" -o -name "feeds.conf*" | while
         if [ $changed -eq 0 ]; then
             echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
         fi
-        sed -i 's|downloads.immortalwrt.org|github.com|g' "$file"
-        sed -i 's|downloads.immortalwrt.org/|github.com/|g' "$file"
+        sed -i 's|downloads.immortalwrt.org|raw.githubusercontent.com|g' "$file"
         changed=1
     fi
     
-    # 替换 gnome.org 下载源（libxml2）
+    # 替换 sources-cdn.immortalwrt.org
+    if grep -q "sources-cdn.immortalwrt.org" "$file" 2>/dev/null; then
+        if [ $changed -eq 0 ]; then
+            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
+        fi
+        sed -i 's|sources-cdn.immortalwrt.org|raw.githubusercontent.com|g' "$file"
+        changed=1
+    fi
+    
+    # 替换 gnome.org 下载源（libxml2）- 使用 GitHub 镜像
     if grep -q "download.gnome.org/sources/libxml2" "$file" 2>/dev/null; then
         if [ $changed -eq 0 ]; then
             echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
@@ -897,22 +903,23 @@ find "$FIND_DIR" -name "*.mk" -o -name "Makefile" -o -name "feeds.conf*" | while
         changed=1
     fi
     
+    # 替换 mirror.nju.edu.cn 下载源（如果失效）
+    if grep -q "mirror.nju.edu.cn.*404" "$file" 2>/dev/null; then
+        if [ $changed -eq 0 ]; then
+            echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
+        fi
+        sed -i 's|mirror.nju.edu.cn|raw.githubusercontent.com|g' "$file"
+        changed=1
+    fi
+    
     # 替换 trusted-firmware-a 下载源
-    if grep -q "trusted-firmware-a.*mirror" "$file" 2>/dev/null || grep -q "trusted-firmware-a.*sources" "$file" 2>/dev/null; then
+    if grep -q "trusted-firmware-a" "$file" 2>/dev/null && grep -q "mirror\|sources" "$file" 2>/dev/null; then
         if [ $changed -eq 0 ]; then
             echo "  🔧 修复: $file" | tee -a "$LOG_FILE"
         fi
         # 替换为 ARM 官方 GitHub 源
         sed -i 's|https\?://[^/]*/sources/trusted-firmware-a-\([0-9.]*\)\.tar\.gz|https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v\1.tar.gz|g' "$file"
         changed=1
-    fi
-    
-    # 添加备用镜像源（如果不存在）
-    if grep -q "github.com/immortalwrt" "$file" 2>/dev/null; then
-        if ! grep -q "mirrors.tuna.tsinghua.edu.cn" "$file" 2>/dev/null; then
-            echo "# 备用镜像: https://mirrors.tuna.tsinghua.edu.cn/immortalwrt" >> "$file"
-            echo "  ℹ️ 添加清华镜像源注释" | tee -a "$LOG_FILE"
-        fi
     fi
 done
 
@@ -1004,13 +1011,12 @@ configure_feeds() {
     log "  ✅ 创建 host/include 目录"
     
     # 创建 build 目录（修复 python find 错误）
-    mkdir -p build_dir/target-*/build 2>/dev/null || true
     for target_build in build_dir/target-*; do
         if [ -d "$target_build" ]; then
             mkdir -p "$target_build/build" 2>/dev/null || true
+            log "  ✅ 创建: $target_build/build"
         fi
     done
-    log "  ✅ 创建 build 目录"
     
     # ============================================
     # 获取需要禁用的插件列表
@@ -2009,35 +2015,45 @@ EOF
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
     
-    append_config "$CONFIG_DIR/$CONFIG_BASE"
-    
+    # ============================================
+    # 检查是否存在设备专用配置文件
+    # ============================================
     local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
     local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
-    local has_device_config=false
+    local base_config_file="$CONFIG_DIR/$CONFIG_BASE"
     
     if [ -f "$device_config_file" ]; then
-        has_device_config=true
+        # 存在设备专用配置文件 - 只使用设备配置
         log "📋 找到设备专用配置文件: $device_config_file"
-        log "📋 根据规则: 设备.config + usb-generic.config"
+        log "📋 根据规则: 完全只使用设备.config文件，不添加任何其他通用配置"
         
+        # 只添加设备专用配置
         append_config "$device_config_file"
         
-        if [ -f "$usb_generic_file" ]; then
-            log "📋 添加USB通用配置作为补充: $usb_generic_file"
-            append_config "$usb_generic_file"
-        fi
+        # 注意：不添加 base.config、usb-generic.config、normal.config 等任何通用配置
         
-        log "📋 有设备专用配置，跳过 normal.config 和 $TARGET.config 等通用配置"
+        log "📋 有设备专用配置，跳过所有通用配置 (base/usb-generic/normal)"
     else
+        # 不存在设备专用配置文件 - 使用通用配置组合
         log "📋 未找到设备专用配置文件，使用通用配置组合"
         
+        # 添加基础配置
+        if [ -f "$base_config_file" ]; then
+            append_config "$base_config_file"
+        fi
+        
+        # 添加USB通用配置
         if [ -f "$usb_generic_file" ]; then
             append_config "$usb_generic_file"
         fi
         
+        # 添加目标平台配置
         append_config "$CONFIG_DIR/$TARGET.config"
+        
+        # 添加版本分支配置
         append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
         
+        # 根据模式添加配置
         if [ "$CONFIG_MODE" = "normal" ]; then
             log "📋 normal模式: 添加 $CONFIG_NORMAL"
             append_config "$CONFIG_DIR/$CONFIG_NORMAL"
@@ -2096,12 +2112,6 @@ EOF
         log "  ✅ 强制启用 squashfs 格式"
     fi
     
-    # 确保启用factory镜像生成
-    if ! grep -q "CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config; then
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        log "  ✅ 强制启用 squashfs 格式"
-    fi
-    
     # 确保启用sysupgrade镜像生成（传统.bin格式）
     cat >> .config << 'EOF'
 # 强制生成传统格式固件
@@ -2136,7 +2146,6 @@ EOF
             cat >> .config << 'EOF'
 # ATH79平台 - 强制生成传统.bin格式
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
 CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
 CONFIG_TARGET_ROOTFS_INITRAMFS=y
 EOF
