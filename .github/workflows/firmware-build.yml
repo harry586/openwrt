@@ -234,6 +234,7 @@ jobs:
           
           # 安装所有关键依赖
           sudo apt-get install -y \
+            build-essential \
             libyaml-dev \
             libyaml-cpp-dev \
             libssl-dev \
@@ -244,6 +245,11 @@ jobs:
             libidn2-dev \
             libpsl-dev \
             libnghttp2-dev \
+            libcap-dev \
+            libcap-ng-dev \
+            libmnl-dev \
+            libnftnl-dev \
+            uuid-dev \
             || true
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
