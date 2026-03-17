@@ -6370,7 +6370,7 @@ workflow_step26_check_artifacts() {
         
         local valid_sysupgrade=0
         local valid_factory=0
-        local total_size_gb=0
+        local total_size_mb=0
         local firmware_list=()
         
         # 收集所有可刷机固件
@@ -6379,8 +6379,8 @@ workflow_step26_check_artifacts() {
             if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"sysupgrade.itb" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
                 local fname=$(basename "$file")
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
-                local fsize_human=$(ls -lh "$file" | awk '{print $5}')
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
+                local fsize_human=$(ls -lh "$file" | awk '{print $5}')
                 
                 # 检查文件类型
                 local ftype=""
@@ -6428,12 +6428,12 @@ workflow_step26_check_artifacts() {
                 fi
                 
                 # 累计总大小
-                total_size_gb=$((total_size_gb + fsize_mb))
+                total_size_mb=$((total_size_mb + fsize_mb))
                 echo ""
             fi
         done
         
-        total_size_gb=$((total_size_gb / 1024))
+        total_size_gb=$((total_size_mb / 1024))
         
         echo "----------------------------------------"
         echo "📊 固件大小验证统计:"
@@ -6490,6 +6490,9 @@ workflow_step26_check_artifacts() {
                 flashable_count=$((flashable_count + 1))
             fi
         done | head -20
+        
+        # 修复：这里不应该再打印"没有找到可刷机的固件文件"
+        # 因为上面已经显示了固件列表
         
         if [ $flashable_count -eq 0 ]; then
             echo "  ⚠️ 没有找到可刷机的固件文件"
