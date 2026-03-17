@@ -6566,7 +6566,7 @@ quick_error_check() {
     local build_dir="$1"
     local target_platform="$2"
     local log_file="${3:-build.log}"
-    local output_file="${4:-/tmp/quick-error-check.txt}"  # 新增输出文件参数
+    local output_file="${4:-/tmp/quick-error-check.txt}"
 
     cd "$build_dir" 2>/dev/null || {
         echo "❌ 无法进入构建目录: $build_dir"
@@ -6600,21 +6600,77 @@ quick_error_check() {
         echo "📄 分析日志: $latest_log"
         echo ""
 
-        # 定义错误模式
+        # ============================================
+        # 1. 检查编译退出代码
+        # ============================================
+        echo "🔍 1. 编译退出状态检查:"
+        echo "----------------------------------------"
+        
+        # 从日志中查找编译错误退出
+        local compile_errors=0
+        local fatal_errors=0
+        
+        # 检查 make 错误退出
+        if grep -q "make:.*Error [0-9]\+" "$latest_log" || grep -q "make\[[0-9]\].*Error [0-9]\+" "$latest_log"; then
+            echo "❌ 检测到 make 编译错误退出:"
+            grep -n "make:.*Error [0-9]\+" "$latest_log" | head -5 | while read line; do
+                echo "   $line"
+                fatal_errors=$((fatal_errors + 1))
+            done
+            grep -n "make\[[0-9]\].*Error [0-9]\+" "$latest_log" | head -5 | while read line; do
+                echo "   $line"
+                fatal_errors=$((fatal_errors + 1))
+            done
+            compile_errors=1
+        fi
+        
+        # 检查 collect2: error
+        if grep -q "collect2: error" "$latest_log"; then
+            echo "❌ 检测到链接器错误:"
+            grep -n "collect2: error" "$latest_log" | head -3 | while read line; do
+                echo "   $line"
+                fatal_errors=$((fatal_errors + 1))
+            done
+            compile_errors=1
+        fi
+        
+        # 检查 undefined reference
+        if grep -q "undefined reference to" "$latest_log"; then
+            echo "❌ 检测到未定义引用错误:"
+            grep -n "undefined reference to" "$latest_log" | head -5 | while read line; do
+                echo "   $line"
+                compile_errors=$((compile_errors + 1))
+            done
+        fi
+        
+        if [ $fatal_errors -eq 0 ] && [ $compile_errors -eq 0 ]; then
+            echo "✅ 未检测到编译错误退出"
+        fi
+        echo ""
+
+        # ============================================
+        # 2. 定义错误模式
+        # ============================================
         declare -A error_patterns=(
-            ["补丁失败"]="Patch failed"
-            ["文件丢失"]="cannot stat|No such file"
-            ["编译错误"]="error: |make.*Error [0-9]|undefined reference"
-            ["依赖缺失"]="missing dependency|package.*not found"
-            ["配置错误"]="invalid option|unrecognized option"
-            ["链接错误"]="undefined reference|ld returned"
-            ["内核错误"]="Kernel panic|Oops"
-            ["权限问题"]="Permission denied"
-            ["磁盘空间"]="No space left"
-            ["超时"]="Timeout was reached"
+            ["内核错误"]="Kernel panic|Oops|Unable to handle kernel"
+            ["补丁失败"]="Patch failed|hunk FAILED|patch .* failed"
+            ["文件丢失"]="cannot stat|No such file|No such file or directory"
+            ["编译错误"]="error: |make.*Error [0-9]|undefined reference|collect2: error"
+            ["依赖缺失"]="missing dependency|package.*not found|No package"
+            ["配置错误"]="invalid option|unrecognized option|unknown option"
+            ["链接错误"]="undefined reference|ld returned|relocation truncated"
+            ["权限问题"]="Permission denied|cannot create directory"
+            ["磁盘空间"]="No space left|disk full"
+            ["超时"]="Timeout was reached|timed out"
+            ["下载失败"]="curl:.* 401|curl:.* 404|Download failed|Connection failed"
+            ["Broken pipe"]="Broken pipe|write error"
+            ["符号链接循环"]="Too many levels of symbolic links"
         )
 
         local found=0
+        echo "🔍 2. 常见错误模式检查:"
+        echo "----------------------------------------"
+        
         for err_type in "${!error_patterns[@]}"; do
             local pattern="${error_patterns[$err_type]}"
             # 使用 grep 提取匹配行及其前后各3行上下文，去重，限制输出
@@ -6622,6 +6678,10 @@ quick_error_check() {
             if [ -n "$matches" ]; then
                 echo "❌ $err_type 检测到："
                 echo "$matches" | while IFS= read -r line; do
+                    # 限制每行长度
+                    if [ ${#line} -gt 120 ]; then
+                        line="${line:0:120}..."
+                    fi
                     echo "   $line"
                 done
                 echo ""
@@ -6630,45 +6690,165 @@ quick_error_check() {
         done
 
         if [ $found -eq 0 ]; then
-            echo "✅ 未检测到常见错误模式（但编译失败，请查看日志末尾）"
+            echo "✅ 未检测到常见错误模式"
         fi
-
-        # 额外检查：查看最后30行日志
         echo ""
-        echo "📋 最后30行日志摘要:"
-        tail -30 "$latest_log" | sed 's/^/   /'
 
-        # 检查目标固件是否生成
-        echo ""
-        echo "📦 固件生成情况检查:"
-        local target_dir="bin/targets/$target_platform"
-        if [ -d "$target_dir" ]; then
-            local sysupgrade=$(find "$target_dir" -name "*sysupgrade*" -type f 2>/dev/null | head -1)
-            if [ -n "$sysupgrade" ]; then
-                echo "   ✅ sysupgrade 固件已生成: $(basename "$sysupgrade")"
+        # ============================================
+        # 3. 检查关键组件状态
+        # ============================================
+        echo "🔍 3. 关键组件状态检查:"
+        echo "----------------------------------------"
+        
+        # 检查工具链状态
+        if [ -d "staging_dir" ]; then
+            echo "✅ staging_dir 存在"
+            
+            # 检查GCC编译器
+            local gcc_files=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -3)
+            if [ -n "$gcc_files" ]; then
+                echo "✅ GCC编译器存在"
             else
-                echo "   ❌ sysupgrade 固件未生成"
-            fi
-            local factory=$(find "$target_dir" -name "*factory*" -type f 2>/dev/null | head -1)
-            if [ -n "$factory" ]; then
-                echo "   🏭 factory 镜像已生成: $(basename "$factory")"
-            fi
-            local itb=$(find "$target_dir" -name "*.itb" -type f 2>/dev/null | head -1)
-            if [ -n "$itb" ]; then
-                echo "   🔷 FIT 镜像已生成: $(basename "$itb") (可刷机)"
+                echo "❌ GCC编译器缺失"
             fi
         else
-            echo "   ❌ 目标目录不存在: $target_dir"
+            echo "❌ staging_dir 不存在"
         fi
+        
+        # 检查feeds状态
+        if [ -d "feeds" ]; then
+            local feed_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
+            feed_count=$((feed_count - 1))
+            echo "✅ feeds 存在 ($feed_count 个feed)"
+        else
+            echo "❌ feeds 不存在"
+        fi
+        
+        # 检查.config文件
+        if [ -f ".config" ]; then
+            local config_size=$(ls -lh .config | awk '{print $5}')
+            echo "✅ .config 存在 ($config_size)"
+        else
+            echo "❌ .config 不存在"
+        fi
+        echo ""
 
+        # ============================================
+        # 4. 检查固件生成状态
+        # ============================================
+        echo "🔍 4. 固件生成状态检查:"
+        echo "----------------------------------------"
+        
+        local target_dir="bin/targets/$target_platform"
+        local found_firmware=0
+        local valid_firmware=0
+        
+        if [ -d "$target_dir" ]; then
+            while IFS= read -r file; do
+                [ -z "$file" ] && continue
+                local fname=$(basename "$file")
+                local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
+                local fsize_mb=$((fsize_bytes / 1024 / 1024))
+                local fsize_human=$(ls -lh "$file" | awk '{print $5}')
+                
+                found_firmware=$((found_firmware + 1))
+                
+                # 判断固件类型
+                local ftype=""
+                if [[ "$fname" == *"sysupgrade"* ]]; then
+                    ftype="sysupgrade"
+                elif [[ "$fname" == *"factory"* ]]; then
+                    ftype="factory"
+                elif [[ "$fname" == *"initramfs"* ]]; then
+                    ftype="initramfs"
+                elif [[ "$fname" == *".itb" ]]; then
+                    ftype="fit"
+                else
+                    ftype="other"
+                fi
+                
+                # 判断是否可刷机
+                local is_flashable=0
+                if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]] || [[ "$ftype" == "fit" ]]; then
+                    is_flashable=1
+                fi
+                
+                # 大小验证
+                if [ $fsize_mb -ge 5 ]; then
+                    if [ $is_flashable -eq 1 ]; then
+                        echo "✅ $fname - ${fsize_human} (${fsize_mb}MB) - 可刷机"
+                        valid_firmware=$((valid_firmware + 1))
+                    else
+                        echo "📄 $fname - ${fsize_human} (${fsize_mb}MB) - 其他文件"
+                    fi
+                else
+                    echo "❌ $fname - ${fsize_human} (${fsize_mb}MB) - 无效(小于5MB)"
+                fi
+            done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | grep -v "sha256sums" | sort)
+            
+            if [ $found_firmware -eq 0 ]; then
+                echo "❌ 未找到任何固件文件"
+            else
+                echo ""
+                echo "📊 固件统计:"
+                echo "  总文件数: $found_firmware"
+                echo "  有效可刷机固件: $valid_firmware"
+            fi
+        else
+            echo "❌ 目标目录不存在: $target_dir"
+        fi
+        echo ""
+
+        # ============================================
+        # 5. 额外检查：查看最后30行日志
+        # ============================================
+        echo "🔍 5. 最后30行日志摘要:"
+        echo "----------------------------------------"
+        tail -30 "$latest_log" | sed 's/^/   /'
+        echo ""
+
+        # ============================================
+        # 6. 错误统计和总结
+        # ============================================
         echo "================================================================="
-        echo "💡 提示：如果上述信息不足以定位问题，请检查完整日志或运行："
-        echo "   grep -i error $latest_log | head -20"
+        echo "📊 错误统计总结:"
+        
+        # 统计错误数量
+        local error_count=$(grep -i -c "error" "$latest_log" 2>/dev/null || echo "0")
+        local warning_count=$(grep -i -c "warning" "$latest_log" 2>/dev/null || echo "0")
+        local fail_count=$(grep -i -c "fail" "$latest_log" 2>/dev/null || echo "0")
+        
+        echo "  错误总数: $error_count"
+        echo "  警告总数: $warning_count"
+        echo "  失败总数: $fail_count"
+        
+        if [ $valid_firmware -gt 0 ]; then
+            echo ""
+            echo "🎉 成功生成 $valid_firmware 个有效固件！"
+        else
+            echo ""
+            echo "❌❌❌ 编译失败：没有生成任何有效固件 ❌❌❌"
+            echo "   退出代码检查:"
+            
+            # 查找最后的错误退出
+            tail -50 "$latest_log" | grep -E "make.*Error|exit status|ERROR:" | tail -5 | while read line; do
+                echo "   $line"
+            done
+        fi
+        
         echo "================================================================="
-    } | tee "$output_file"  # 同时输出到终端和文件
+        echo "💡 提示：如需完整日志，请查看: $latest_log"
+        echo "================================================================="
+    } | tee "$output_file"
 
     echo "✅ 错误检查报告已保存到: $output_file"
-    return 0
+    
+    # 如果有有效固件，返回0；否则返回1
+    if [ $valid_firmware -gt 0 ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 #【build_firmware_main.sh-43-end】
 
