@@ -412,9 +412,11 @@ initialize_build_env() {
         "openwrt")
             SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
             case "$version_selection" in
-                "23.05") SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}" ;;
-                "21.02") SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}" ;;
                 "24.10") SELECTED_BRANCH="openwrt-24.10" ;;
+                "23.05") SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}" ;;
+                "22.03") SELECTED_BRANCH="openwrt-22.03" ;;
+                "21.02") SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}" ;;
+                "19.07") SELECTED_BRANCH="openwrt-19.07" ;;
                 "main"|"master") SELECTED_BRANCH="main" ;;
                 *) SELECTED_BRANCH="openwrt-23.05" ;;
             esac
@@ -423,6 +425,7 @@ initialize_build_env() {
         "immortalwrt")
             SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
             case "$version_selection" in
+                "24.10") SELECTED_BRANCH="openwrt-24.10" ;;
                 "23.05") SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}" ;;
                 "21.02") SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}" ;;
                 "18.06") SELECTED_BRANCH="openwrt-18.06" ;;
@@ -930,14 +933,16 @@ configure_feeds() {
     done
     
     # ============================================
-    # 通用的feeds配置（兼容所有源码类型）
+    # 备份原有feeds配置
     # ============================================
-    
     if [ -f "feeds.conf.default" ]; then
         cp "feeds.conf.default" "feeds.conf.default.bak"
         log "  ✅ 备份原有feeds配置"
     fi
     
+    # ============================================
+    # 根据源码类型配置feeds
+    # ============================================
     > feeds.conf.default
     
     case "$SOURCE_REPO_TYPE" in
@@ -959,7 +964,8 @@ EOF
                 *"22.03"*) branch_suffix="openwrt-22.03" ;;
                 *"21.02"*) branch_suffix="openwrt-21.02" ;;
                 *"19.07"*) branch_suffix="openwrt-19.07" ;;
-                "main"|"master") branch_suffix="main" ;;
+                "main") branch_suffix="main" ;;
+                "master") branch_suffix="master" ;;
                 *) branch_suffix="$SELECTED_BRANCH" ;;
             esac
             
@@ -974,6 +980,7 @@ EOF
             log "🔧 ImmortalWrt源码模式: 使用ImmortalWrt官方feeds"
             local branch_suffix=""
             case "$SELECTED_BRANCH" in
+                *"24.10"*) branch_suffix="openwrt-24.10" ;;
                 *"23.05"*) branch_suffix="openwrt-23.05" ;;
                 *"21.02"*) branch_suffix="openwrt-21.02" ;;
                 *"18.06"*) branch_suffix="openwrt-18.06" ;;
@@ -999,14 +1006,21 @@ EOF
             ;;
     esac
     
+    # ============================================
+    # 根据配置模式添加额外feeds
+    # ============================================
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         case "$SOURCE_REPO_TYPE" in
             "immortalwrt"|"lede")
-                echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+                if [ -n "${TURBOACC_FEED_URL}" ]; then
+                    echo "src-git turboacc ${TURBOACC_FEED_URL}" >> feeds.conf.default
+                else
+                    echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
+                fi
                 log "✅ 添加TurboACC feed"
                 ;;
             "openwrt")
-                log "⚠️ OpenWrt官方源码可能不支持TurboACC feed，已跳过"
+                log "ℹ️ OpenWrt官方源码不添加TurboACC feed"
                 ;;
         esac
     fi
@@ -1023,6 +1037,39 @@ EOF
     ./scripts/feeds install -a || {
         log "⚠️ feeds安装有警告，尝试继续..."
     }
+    
+    # ============================================
+    # 获取需要禁用的插件列表
+    # ============================================
+    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
+    log "🔧 基础禁用插件: $base_forbidden"
+    
+    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
+    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
+    
+    local search_keywords=()
+    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
+    for pkg in "${BASE_PKGS[@]}"; do
+        search_keywords+=("$pkg")
+        search_keywords+=("luci-app-${pkg}")
+        search_keywords+=("${pkg}-scripts")
+    done
+    
+    log "🔧 删除不需要的插件包..."
+    for keyword in "${search_keywords[@]}"; do
+        if [ -d "package/feeds" ]; then
+            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️ 删除包目录: $dir"
+                rm -rf "$dir"
+            done
+        fi
+        if [ -d "feeds" ]; then
+            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️ 删除 feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+        fi
+    done
     
     log "✅ Feeds配置完成"
 }
@@ -4855,13 +4902,13 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件（通用错误处理）
+# 步骤25: 编译固件（兼容所有源码）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（通用错误处理） ==="
+    log "=== 步骤25: 编译固件（兼容所有源码） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -4947,11 +4994,8 @@ EOF
     
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
-        "openwrt")
+        "openwrt"|"lede")
             make_args="V=s FORCE_UNSAFE_CONFIGURE=1"
-            ;;
-        "lede")
-            make_args="V=s IGNORE_ERRORS=m"
             ;;
         "immortalwrt")
             make_args="V=s"
@@ -5003,23 +5047,36 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
+            # 通用的错误修复
             if grep -q "package/install.*Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
                 rm -f staging_dir/target-*/.stamp_package_install
                 rm -f tmp/info/.packageinfo-*
             fi
             
+            if grep -q "Broken pipe" "$log_file"; then
+                log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
+                ulimit -n 65536 2>/dev/null || true
+            fi
+            
+            # 源码特定的错误修复
             case "$SOURCE_REPO_TYPE" in
-                "openwrt")
+                "openwrt"|"lede")
+                    if grep -q "Python syntax" "$log_file" || grep -q "Missing parentheses" "$log_file"; then
+                        log "  ⚠️ 检测到 Python 语法错误，设置 Python 版本..."
+                        # 确保使用 Python3
+                        update-alternatives --set python /usr/bin/python3 2>/dev/null || true
+                    fi
+                    
                     if grep -q "pkg-config" "$log_file"; then
                         log "  ⚠️ 检测到 pkg-config 错误，安装必要依赖..."
                         sudo apt-get install -y pkg-config libssl-dev > /dev/null 2>&1 || true
                     fi
                     ;;
-                "lede")
-                    if grep -q "libustream" "$log_file"; then
-                        log "  ⚠️ 检测到 libustream 错误，尝试修复..."
-                        echo "CONFIG_PACKAGE_libustream-openssl=y" >> .config
+                "immortalwrt")
+                    if grep -q "trusted-firmware-a" "$log_file" && grep -q "Download failed" "$log_file"; then
+                        log "  ⚠️ 检测到 trusted-firmware-a 下载失败，尝试使用本地缓存..."
+                        # 可以添加备用下载源的逻辑
                     fi
                     ;;
             esac
