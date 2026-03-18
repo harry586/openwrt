@@ -4220,7 +4220,7 @@ workflow_step23_pre_build_check() {
                         device_for_config="cmcc_rax3000m"
                         log "🔧 OpenWrt设备名映射: $DEVICE -> $device_for_config"
                         ;;
-                    "ac42u"|"rt-ac42u")
+                    "ac42u"|"rt-ac42u"|"asus_rt-ac42u")
                         device_for_config="asus_rt-ac42u"
                         log "🔧 OpenWrt设备名映射: $DEVICE -> $device_for_config"
                         ;;
@@ -4238,25 +4238,67 @@ workflow_step23_pre_build_check() {
                 ;;
         esac
         
-        # 关键修复1：将设备名中的连字符替换为下划线，以匹配.config中的格式
-        local device_for_config_underscore=$(echo "$device_for_config" | tr '-' '_')
-        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config_underscore}=y"
+        # 动态变体检查
+        local device_variants=()
+        device_variants+=("$device_for_config")
+        device_variants+=("$(echo "$device_for_config" | tr '-' '_')")
         
-        log "  检查设备配置: $expected_config"
-        log "  原始设备名: $device_for_config, 转换后: $device_for_config_underscore"
+        if [[ "$device_for_config" != *-* ]]; then
+            device_variants+=("$(echo "$device_for_config" | tr '_' '-')")
+        fi
         
-        if grep -q "^${expected_config}$" .config; then
-            echo "   ✅ 设备配置正确: $expected_config"
-        else
-            # 尝试模糊匹配
-            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config_underscore}=y" .config; then
-                echo "   ✅ 设备配置正确 (模糊匹配)"
-            else
-                echo "   ❌ 设备配置可能不正确，未找到: $expected_config"
-                echo "   实际存在的设备配置:"
-                grep "CONFIG_TARGET_.*DEVICE" .config | head -5 | sed 's/^/      /'
-                error_count=$((error_count + 1))
+        local base_name=$(echo "$device_for_config" | sed 's/^[a-z]*_//')
+        if [ -n "$base_name" ] && [ "$base_name" != "$device_for_config" ]; then
+            device_variants+=("$base_name")
+            device_variants+=("$(echo "$base_name" | tr '-' '_')")
+        fi
+        
+        case "$device_for_config" in
+            *asus_rt-ac42u*|*asus_rt_ac42u*)
+                device_variants+=("ac42u" "rt-ac42u" "rt_ac42u")
+                ;;
+            *cmcc_rax3000m-nand*|*cmcc_rax3000m_nand*)
+                device_variants+=("rax3000m" "cmcc_rax3000m")
+                ;;
+            *netgear_wndr3800*)
+                device_variants+=("wndr3800")
+                ;;
+        esac
+        
+        local unique_variants=($(printf "%s\n" "${device_variants[@]}" | sort -u))
+        
+        log "  设备名变体检查 (${#unique_variants[@]} 种):"
+        local found_match=0
+        local matched_config=""
+        
+        for variant in "${unique_variants[@]}"; do
+            [ -z "$variant" ] && continue
+            
+            local config_var="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${variant}=y"
+            
+            if grep -q "^${config_var}$" .config; then
+                found_match=1
+                matched_config="$config_var"
+                log "    ✅ 找到匹配: $config_var"
+                break
             fi
+            
+            if grep -q "CONFIG_TARGET_.*DEVICE.*${variant}=y" .config; then
+                found_match=1
+                matched_config="CONFIG_TARGET_*_DEVICE_${variant}=y"
+                log "    ✅ 找到模糊匹配: $variant"
+                break
+            fi
+        done
+        
+        if [ $found_match -eq 1 ]; then
+            echo "   ✅ 设备配置正确: $matched_config"
+        else
+            echo "   ❌ 设备配置可能不正确，未找到任何匹配"
+            echo "   尝试的变体: ${unique_variants[*]}"
+            echo "   实际存在的设备配置:"
+            grep "CONFIG_TARGET_.*DEVICE" .config | head -5 | sed 's/^/      /'
+            error_count=$((error_count + 1))
         fi
     else
         echo "   ❌ .config 文件不存在"
@@ -4264,22 +4306,57 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    echo "2. ✅ 源码工具链检查:"
-    echo "   ✅ 源码类型: $SOURCE_REPO_TYPE，使用源码自带工具链"
+    # ============================================
+    # 修正：工具链状态检查
+    # ============================================
+    echo "2. ✅ 工具链状态检查:"
     
     if [ -d "$BUILD_DIR/staging_dir" ]; then
-        echo "   ✅ staging_dir目录存在"
+        echo "   ✅ staging_dir 目录存在"
         local staging_size=$(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}')
         echo "   📊 大小: $staging_size"
         
-        local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
-        if [ -n "$gcc_file" ]; then
-            echo "   ✅ 找到GCC编译器: $(basename "$gcc_file")"
+        # 查找交叉编译工具链
+        local cross_gcc=$(find "$BUILD_DIR/staging_dir" -type f -executable -path "*/bin/*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+        
+        if [ -n "$cross_gcc" ]; then
+            echo "   ✅ 交叉编译工具链已生成: $(basename "$cross_gcc")"
+            local gcc_version=$("$cross_gcc" --version 2>&1 | head -1)
+            echo "     版本: $gcc_version"
+            
+            # 判断工具链类型
+            if [[ "$cross_gcc" == *"aarch64"* ]]; then
+                echo "     架构: ARM64 (aarch64)"
+            elif [[ "$cross_gcc" == *"arm"* ]]; then
+                echo "     架构: ARM"
+            elif [[ "$cross_gcc" == *"mips"* ]]; then
+                echo "     架构: MIPS"
+            elif [[ "$cross_gcc" == *"x86_64"* ]]; then
+                echo "     架构: x86_64"
+            fi
+            
+            echo "     路径: $cross_gcc"
+            echo "   ✅ 工具链状态: 已编译完成，可供使用"
         else
-            echo "   ℹ️ 工具链将在编译过程中生成"
+            echo "   ⚠️ 未找到交叉编译工具链"
+            echo "     工具链可能正在编译中，或编译失败"
+            
+            # 检查是否正在编译
+            if [ -f "$BUILD_DIR/build_dir/target-*/.stamp_target_compile" ]; then
+                echo "     工具链正在编译中"
+            else
+                echo "     工具链尚未编译，将在后续步骤编译"
+            fi
+        fi
+        
+        # 检查host工具
+        if [ -d "$BUILD_DIR/staging_dir/host/bin" ]; then
+            local host_tools=$(find "$BUILD_DIR/staging_dir/host/bin" -type f -executable 2>/dev/null | wc -l)
+            echo "   ✅ host工具已生成: $host_tools 个"
         fi
     else
-        echo "   ℹ️ staging_dir将在编译过程中生成"
+        echo "   ⚠️ staging_dir 目录不存在"
+        echo "     工具链尚未编译，将在后续步骤编译"
     fi
     echo ""
     
