@@ -1439,10 +1439,12 @@ generate_config() {
             ;;
     esac
     
+    # 关键修复：在生成配置变量时，将设备名中的连字符替换为下划线
     local device_lower="$openwrt_device"
-    local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
+    local device_config_name=$(echo "$device_lower" | tr '-' '_')
+    local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}"
     
-    log "🔧 设备配置变量: $device_config=y"
+    log "🔧 设备配置变量: $device_config=y (原始设备名: $device_lower)"
     
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
@@ -1670,26 +1672,26 @@ EOF
     }
     log "✅ 第二次 make defconfig 完成"
     
-    log "🔍 验证设备 $openwrt_device 是否被选中..."
+    log "🔍 验证设备 $device_lower 是否被选中..."
     
-    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
-        log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
-    elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
+    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
+        log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y"
+    elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name} is not set" .config; then
         log "⚠️ 设备被禁用，尝试强制启用..."
-        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set/d" .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name} is not set/d" .config
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
         
-        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
             log "✅ 设备已强制启用"
         else
             log "❌ 无法启用设备"
         fi
     else
         log "⚠️ 设备配置行未找到，手动添加..."
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
@@ -4236,17 +4238,23 @@ workflow_step23_pre_build_check() {
                 ;;
         esac
         
-        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config}=y"
+        # 关键修复1：将设备名中的连字符替换为下划线，以匹配.config中的格式
+        local device_for_config_underscore=$(echo "$device_for_config" | tr '-' '_')
+        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config_underscore}=y"
+        
+        log "  检查设备配置: $expected_config"
+        log "  原始设备名: $device_for_config, 转换后: $device_for_config_underscore"
         
         if grep -q "^${expected_config}$" .config; then
             echo "   ✅ 设备配置正确: $expected_config"
         else
-            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config}=y" .config; then
+            # 尝试模糊匹配
+            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config_underscore}=y" .config; then
                 echo "   ✅ 设备配置正确 (模糊匹配)"
             else
                 echo "   ❌ 设备配置可能不正确，未找到: $expected_config"
                 echo "   实际存在的设备配置:"
-                grep "CONFIG_TARGET_.*DEVICE" .config | head -3 | sed 's/^/      /'
+                grep "CONFIG_TARGET_.*DEVICE" .config | head -5 | sed 's/^/      /'
                 error_count=$((error_count + 1))
             fi
         fi
