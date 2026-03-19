@@ -1446,6 +1446,7 @@ generate_config() {
     
     log "🔧 设备配置变量: $device_config=y (原始设备名: $device_lower)"
     
+    # 创建基础配置
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -1590,6 +1591,25 @@ EOF
     }
     log "✅ 第一次 make defconfig 成功"
     
+    # ============================================
+    # 关键修复：在第一次defconfig后验证设备配置
+    # ============================================
+    log "🔍 验证设备配置是否保留..."
+    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
+        log "✅ 设备配置已正确保留"
+    else
+        log "⚠️ 设备配置丢失，尝试重新添加..."
+        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" >> .config
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        make defconfig > /dev/null 2>&1
+        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
+            log "✅ 设备配置已恢复"
+        else
+            log "❌ 设备配置恢复失败"
+        fi
+    fi
+    
     make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
         log "⚠️ make defconfig 有警告，但继续"
     }
@@ -1695,6 +1715,12 @@ EOF
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         make defconfig > /dev/null 2>&1
+        
+        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
+            log "✅ 设备已手动添加成功"
+        else
+            log "❌ 设备手动添加失败"
+        fi
     fi
     
     local total_configs=$(wc -l < .config)
