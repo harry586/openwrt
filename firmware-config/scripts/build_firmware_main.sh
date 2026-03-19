@@ -1439,14 +1439,12 @@ generate_config() {
             ;;
     esac
     
-    # 关键修复：在生成配置变量时，将设备名中的连字符替换为下划线
     local device_lower="$openwrt_device"
     local device_config_name=$(echo "$device_lower" | tr '-' '_')
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}"
     
     log "🔧 设备配置变量: $device_config=y (原始设备名: $device_lower)"
     
-    # 创建基础配置
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -1592,21 +1590,37 @@ EOF
     log "✅ 第一次 make defconfig 成功"
     
     # ============================================
-    # 关键修复：在第一次defconfig后验证设备配置
+    # 关键修复：在第一次defconfig后验证并恢复设备配置
+    # 使用动态方式，不硬编码任何设备名
     # ============================================
     log "🔍 验证设备配置是否保留..."
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
         log "✅ 设备配置已正确保留"
     else
-        log "⚠️ 设备配置丢失，尝试重新添加..."
+        log "⚠️ 设备配置丢失，尝试恢复..."
+        
+        # 保存当前配置中所有设备相关的配置
+        local existing_devices=$(grep "CONFIG_TARGET_.*DEVICE" .config | grep -v "^#" | cut -d'=' -f1)
+        
+        # 方法1: 直接添加设备配置
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" >> .config
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        make defconfig > /dev/null 2>&1
+        
+        # 方法2: 尝试通过设置PROFILE
+        echo "CONFIG_TARGET_PROFILE=\"DEVICE_${device_config_name}\"" >> .config
+        
+        # 方法3: 使用olddefconfig而不是defconfig
+        make olddefconfig > /tmp/build-logs/olddefconfig.log 2>&1 || true
+        
+        # 最终验证
         if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
             log "✅ 设备配置已恢复"
+        elif grep -q "CONFIG_TARGET_PROFILE.*${device_config_name}" .config; then
+            log "✅ 通过PROFILE恢复"
         else
-            log "❌ 设备配置恢复失败"
+            log "⚠️ 设备配置未能完全恢复，但继续编译"
+            # 显示当前设备配置供调试
+            log "当前设备配置:"
+            grep "CONFIG_TARGET_.*DEVICE\|CONFIG_TARGET_PROFILE" .config | head -10 | sed 's/^/  /'
         fi
     fi
     
@@ -1614,20 +1628,51 @@ EOF
         log "⚠️ make defconfig 有警告，但继续"
     }
     
+    log "🔍 动态检测实际生效的USB内核配置..."
+    
+    local usb_components=(
+        "USB_SUPPORT"
+        "USB_COMMON"
+        "USB"
+        "USB_XHCI_HCD"
+        "USB_DWC3"
+        "PHY"
+    )
+    
+    for component in "${usb_components[@]}"; do
+        local matches=$(grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | wc -l)
+        if [ $matches -gt 0 ]; then
+            log "✅ $component 相关配置: 找到 $matches 个"
+        fi
+    done
+    
     log "📋 动态添加USB软件包..."
     
     local base_usb_packages=(
-        "kmod-usb-core" "kmod-usb-common" "kmod-usb2" "kmod-usb3"
-        "kmod-usb-storage" "kmod-scsi-core" "block-mount" "automount" "usbutils"
+        "kmod-usb-core"
+        "kmod-usb-common"
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+        "block-mount"
+        "automount"
+        "usbutils"
     )
     
     local extended_usb_packages=(
-        "kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-generic"
+        "kmod-usb-storage-uas"
+        "kmod-usb-storage-extras"
+        "kmod-scsi-generic"
     )
     
     local fs_support_packages=(
-        "kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3"
-        "kmod-nls-utf8" "kmod-nls-cp936"
+        "kmod-fs-ext4"
+        "kmod-fs-vfat"
+        "kmod-fs-exfat"
+        "kmod-fs-ntfs3"
+        "kmod-nls-utf8"
+        "kmod-nls-cp936"
     )
     
     if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
@@ -1646,22 +1691,29 @@ EOF
         ipq40xx|ipq806x|qcom)
             log "检测到高通平台，添加专用USB驱动..."
             local qcom_packages=(
-                "kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-usb-dwc3-of-simple"
-                "kmod-phy-qcom-ipq4019-usb" "kmod-usb-xhci-hcd" "kmod-usb-xhci-plat-hcd"
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-qcom"
+                "kmod-usb-dwc3-of-simple"
+                "kmod-phy-qcom-ipq4019-usb"
+                "kmod-usb-xhci-hcd"
+                "kmod-usb-xhci-plat-hcd"
             )
             base_usb_packages+=("${qcom_packages[@]}")
             ;;
         mediatek|ramips)
             log "检测到联发科平台，添加专用USB驱动..."
             local mtk_packages=(
-                "kmod-usb-xhci-mtk" "kmod-usb-dwc3" "kmod-usb-dwc3-mediatek"
+                "kmod-usb-xhci-mtk"
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-mediatek"
             )
             base_usb_packages+=("${mtk_packages[@]}")
             ;;
         ath79)
             log "检测到ATH79平台，添加专用USB驱动..."
             local ath79_packages=(
-                "kmod-usb2-ath79" "kmod-usb-ohci"
+                "kmod-usb2-ath79"
+                "kmod-usb-ohci"
             )
             base_usb_packages+=("${ath79_packages[@]}")
             ;;
@@ -1692,12 +1744,60 @@ EOF
     }
     log "✅ 第二次 make defconfig 完成"
     
-    log "🔍 验证设备 $device_lower 是否被选中..."
+    log "🔍 验证关键USB驱动状态..."
+    
+    local critical_usb_drivers=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
+    
+    if [ ${#CRITICAL_USB_DRIVERS[@]} -gt 0 ]; then
+        critical_usb_drivers=("${CRITICAL_USB_DRIVERS[@]}")
+    fi
+    
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom)
+            critical_usb_drivers+=(
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-qcom"
+            )
+            ;;
+        mediatek|ramips)
+            critical_usb_drivers+=(
+                "kmod-usb-xhci-mtk"
+            )
+            ;;
+    esac
+    
+    local missing_drivers=()
+    for driver in "${critical_usb_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "  ✅ $driver: 已启用"
+        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
+            log "  📦 $driver: 模块化"
+        else
+            log "  ❌ $driver: 未启用"
+            missing_drivers+=("$driver")
+        fi
+    done
+    
+    if [ ${#missing_drivers[@]} -gt 0 ] && [ "${AUTO_FIX_USB_DRIVERS:-true}" = "true" ]; then
+        log "🔧 自动修复缺失驱动..."
+        for driver in "${missing_drivers[@]}"; do
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log "  ✅ 已添加: $driver"
+        done
+        make defconfig > /dev/null 2>&1
+    fi
+    
+    log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
     if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
         log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y"
     elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name} is not set" .config; then
-        log "⚠️ 设备被禁用，尝试强制启用..."
+        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
         sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name} is not set/d" .config
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" >> .config
         sort .config | uniq > .config.tmp
@@ -1710,7 +1810,7 @@ EOF
             log "❌ 无法启用设备"
         fi
     else
-        log "⚠️ 设备配置行未找到，手动添加..."
+        log "⚠️ 警告: 设备配置行未找到，手动添加..."
         echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
@@ -1734,7 +1834,10 @@ EOF
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
     
-    log "🔧 全面禁用不需要的插件..."
+    # ============================================
+    # 全面禁用不需要的插件（多轮禁用）
+    # ============================================
+    log "🔧 ===== 全面禁用不需要的插件 ===== "
     
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     log "📋 基础禁用插件: $base_forbidden"
@@ -1750,28 +1853,32 @@ EOF
         search_keywords+=("${pkg}-scripts")
     done
     
-    log "🔧 删除源文件..."
+    # 第一轮：彻底删除源文件
+    log "🔧 第一轮：彻底删除源文件..."
     for keyword in "${search_keywords[@]}"; do
         if [ -d "package/feeds" ]; then
             find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除 package/feeds: $dir"
+                log "  🗑️  删除 package/feeds 源目录: $dir"
                 rm -rf "$dir"
             done
         fi
         if [ -d "feeds" ]; then
             find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除 feeds: $dir"
+                log "  🗑️  删除 feeds 源目录: $dir"
                 rm -rf "$dir"
             done
         fi
     done
     
-    log "📋 在 .config 中禁用所有相关包..."
+    # 第二轮：在 .config 中禁用所有相关包
+    log "📋 第二轮：在 .config 中禁用所有相关包..."
     
     local disable_temp=$(mktemp)
+    
     for plugin in "${full_forbidden_list[@]}"; do
         echo "$plugin" >> "$disable_temp"
     done
+    
     sort -u "$disable_temp" > "$disable_temp.sorted"
     
     while read plugin; do
@@ -1784,27 +1891,72 @@ EOF
     
     rm -f "$disable_temp" "$disable_temp.sorted"
     
+    # 第三轮：删除所有包含关键字的配置行
+    log "🔧 第三轮：删除所有包含关键字的配置行..."
     for keyword in "${search_keywords[@]}"; do
         sed -i "/${keyword}/d" .config
         local upper_keyword=$(echo "$keyword" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
         sed -i "/${upper_keyword}/d" .config
     done
     
+    # 特别处理 DDNS（无论是否在禁用列表中）
+    log "🔧 特别处理 DDNS 相关配置..."
     sed -i '/ddns/d' .config
     sed -i '/DDNS/d' .config
     
     log "✅ 禁用完成"
     
+    # 去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
+    # 运行 make defconfig 使禁用生效
     log "🔄 运行 make defconfig 使禁用生效..."
     make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
         log "⚠️ make defconfig 有警告，但继续..."
     }
     
+    # 第四轮：检查残留并再次禁用
+    log "🔍 第四轮：检查插件残留..."
+    
+    local remaining=()
+    local check_temp=$(mktemp)
+    
+    for plugin in "${full_forbidden_list[@]}"; do
+        echo "$plugin" >> "$check_temp"
+    done
+    
+    sort -u "$check_temp" > "$check_temp.sorted"
+    
+    while read plugin; do
+        [ -z "$plugin" ] && continue
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            remaining+=("$plugin")
+        fi
+    done < "$check_temp.sorted"
+    
+    rm -f "$check_temp" "$check_temp.sorted"
+    
+    if [ ${#remaining[@]} -gt 0 ]; then
+        log "⚠️ 发现 ${#remaining[@]} 个插件残留，第四轮禁用..."
+        
+        for plugin in "${remaining[@]}"; do
+            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+            log "  ✅ 再次禁用: $plugin"
+        done
+        
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        make defconfig > /dev/null 2>&1
+    fi
+    
+    # 最终验证
     log "📊 最终插件状态验证:"
     local still_enabled=0
+    
     for plugin in "${BASE_PKGS[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
             log "  ❌ $plugin 相关包仍被启用"
