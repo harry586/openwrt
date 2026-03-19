@@ -1445,11 +1445,36 @@ generate_config() {
     
     log "🔧 设备配置变量: $device_config=y (原始设备名: $device_lower)"
     
-    cat > .config << EOF
+    # ============================================
+    # 根据源码类型选择配置生成方式
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        # LEDE特殊处理：先设置目标平台
+        log "🔧 LEDE源码特殊处理：先设置目标平台"
+        cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+EOF
+        log "🔄 运行 make defconfig 生成基础配置..."
+        make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || {
+            log "❌ LEDE基础配置失败"
+            handle_error "LEDE基础配置失败"
+        }
+        
+        # 然后再添加设备配置
+        log "🔧 添加设备配置: $device_config=y"
+        echo "${device_config}=y" >> .config
+        
+        # 使用olddefconfig而不是defconfig，避免覆盖
+        make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || true
+    else
+        # 其他源码类型使用原来的方式
+        cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
 ${device_config}=y
 EOF
+    fi
     
     log "🔧 基础配置文件内容:"
     cat .config
@@ -1581,52 +1606,122 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    log "🔄 第一次运行 make defconfig..."
-    make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
-        log "❌ 第一次 make defconfig 失败"
-        tail -50 /tmp/build-logs/defconfig1.log
-        handle_error "第一次依赖解决失败"
-    }
-    log "✅ 第一次 make defconfig 成功"
+    local kernel_config_file=""
+    local kernel_version=""
+    local found_kernel=0
     
-    # ============================================
-    # 关键修复：在第一次defconfig后验证并恢复设备配置
-    # 使用动态方式，不硬编码任何设备名
-    # ============================================
-    log "🔍 验证设备配置是否保留..."
-    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
-        log "✅ 设备配置已正确保留"
-    else
-        log "⚠️ 设备配置丢失，尝试恢复..."
+    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
+        if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+            local device_def_file=""
+            while IFS= read -r mkfile; do
+                if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
+                    device_def_file="$mkfile"
+                    break
+                fi
+            done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+            
+            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
+                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
+                if [ -n "$kernel_version" ]; then
+                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
+                fi
+            fi
+        fi
         
-        # 保存当前配置中所有设备相关的配置
-        local existing_devices=$(grep "CONFIG_TARGET_.*DEVICE" .config | grep -v "^#" | cut -d'=' -f1)
-        
-        # 方法1: 直接添加设备配置
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" >> .config
-        
-        # 方法2: 尝试通过设置PROFILE
-        echo "CONFIG_TARGET_PROFILE=\"DEVICE_${device_config_name}\"" >> .config
-        
-        # 方法3: 使用olddefconfig而不是defconfig
-        make olddefconfig > /tmp/build-logs/olddefconfig.log 2>&1 || true
-        
-        # 最终验证
-        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
-            log "✅ 设备配置已恢复"
-        elif grep -q "CONFIG_TARGET_PROFILE.*${device_config_name}" .config; then
-            log "✅ 通过PROFILE恢复"
+        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
+            for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
+                kernel_config_file="target/linux/$TARGET/config-$ver"
+                if [ -f "$kernel_config_file" ]; then
+                    kernel_version="$ver"
+                    found_kernel=1
+                    break
+                fi
+            done
         else
-            log "⚠️ 设备配置未能完全恢复，但继续编译"
-            # 显示当前设备配置供调试
-            log "当前设备配置:"
-            grep "CONFIG_TARGET_.*DEVICE\|CONFIG_TARGET_PROFILE" .config | head -10 | sed 's/^/  /'
+            found_kernel=1
         fi
     fi
     
-    make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
-        log "⚠️ make defconfig 有警告，但继续"
-    }
+    if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
+        log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
+        
+        local kernel_patterns=(
+            "^CONFIG_USB"
+            "^CONFIG_PHY"
+            "^CONFIG_DWC"
+            "^CONFIG_XHCI"
+            "^CONFIG_EXTCON"
+            "^CONFIG_COMMON_CLK"
+            "^CONFIG_ARCH"
+        )
+        
+        if [ ${#KERNEL_EXTRACT_PATTERNS[@]} -gt 0 ]; then
+            kernel_patterns=("${KERNEL_EXTRACT_PATTERNS[@]}")
+        fi
+        
+        local usb_configs_file="/tmp/usb_configs_$$.txt"
+        
+        for pattern in "${kernel_patterns[@]}"; do
+            grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
+        done
+        
+        sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
+        
+        local config_count=$(wc -l < "$usb_configs_file.sorted")
+        log "找到 $config_count 个USB相关内核配置"
+        
+        local added_count=0
+        while read line; do
+            local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
+            
+            if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
+                if echo "$line" | grep -q "=y$"; then
+                    echo "$line" >> .config
+                    added_count=$((added_count + 1))
+                elif echo "$line" | grep -q "is not set"; then
+                    echo "$line" >> .config
+                    added_count=$((added_count + 1))
+                fi
+            fi
+        done < "$usb_configs_file.sorted"
+        
+        log "✅ 添加了 $added_count 个新的内核配置"
+        
+        rm -f "$usb_configs_file" "$usb_configs_file.sorted"
+    else
+        if [ "${DEBUG:-false}" = "true" ]; then
+            log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
+        fi
+    fi
+    
+    # ============================================
+    # 根据源码类型选择配置更新方式
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔄 LEDE使用 olddefconfig 更新配置..."
+        make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "⚠️ 第一次 olddefconfig 有警告，但继续"
+        }
+    else
+        log "🔄 第一次运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "❌ 第一次 make defconfig 失败"
+            tail -50 /tmp/build-logs/defconfig1.log
+            handle_error "第一次依赖解决失败"
+        }
+    fi
+    log "✅ 第一次配置更新成功"
+    
+    # 重新运行defconfig使格式配置生效
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+            log "⚠️ olddefconfig 有警告，但继续"
+        }
+    else
+        make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续"
+        }
+    fi
     
     log "🔍 动态检测实际生效的USB内核配置..."
     
@@ -1738,11 +1833,19 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    log "🔄 第二次运行 make defconfig..."
-    make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-        log "⚠️ 第二次 make defconfig 有警告，但继续..."
-    }
-    log "✅ 第二次 make defconfig 完成"
+    # 第二次配置更新
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔄 LEDE第二次使用 olddefconfig..."
+        make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+            log "⚠️ 第二次 olddefconfig 有警告，但继续..."
+        }
+    else
+        log "🔄 第二次运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+            log "⚠️ 第二次 make defconfig 有警告，但继续..."
+        }
+    fi
+    log "✅ 第二次配置更新完成"
     
     log "🔍 验证关键USB驱动状态..."
     
@@ -1789,34 +1892,46 @@ EOF
             echo "CONFIG_PACKAGE_${driver}=y" >> .config
             log "  ✅ 已添加: $driver"
         done
-        make defconfig > /dev/null 2>&1
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
     fi
     
-    log "🔍 正在验证设备 $openwrt_device 是否被选中..."
+    log "🔍 正在验证设备 $device_lower 是否被选中..."
     
-    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
-        log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y"
-    elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name} is not set" .config; then
+    if grep -q "^${device_config}=y" .config; then
+        log "✅ 目标设备已正确启用: ${device_config}=y"
+    elif grep -q "^# ${device_config} is not set" .config; then
         log "⚠️ 警告: 设备被禁用，尝试强制启用..."
-        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name} is not set/d" .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" >> .config
+        sed -i "/^# ${device_config} is not set/d" .config
+        echo "${device_config}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
-        make defconfig > /dev/null 2>&1
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
         
-        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
+        if grep -q "^${device_config}=y" .config; then
             log "✅ 设备已强制启用"
         else
             log "❌ 无法启用设备"
         fi
     else
         log "⚠️ 警告: 设备配置行未找到，手动添加..."
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" >> .config
+        echo "${device_config}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
-        make defconfig > /dev/null 2>&1
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
         
-        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y" .config; then
+        if grep -q "^${device_config}=y" .config; then
             log "✅ 设备已手动添加成功"
         else
             log "❌ 设备手动添加失败"
@@ -1853,7 +1968,6 @@ EOF
         search_keywords+=("${pkg}-scripts")
     done
     
-    # 第一轮：彻底删除源文件
     log "🔧 第一轮：彻底删除源文件..."
     for keyword in "${search_keywords[@]}"; do
         if [ -d "package/feeds" ]; then
@@ -1870,7 +1984,6 @@ EOF
         fi
     done
     
-    # 第二轮：在 .config 中禁用所有相关包
     log "📋 第二轮：在 .config 中禁用所有相关包..."
     
     local disable_temp=$(mktemp)
@@ -1891,7 +2004,6 @@ EOF
     
     rm -f "$disable_temp" "$disable_temp.sorted"
     
-    # 第三轮：删除所有包含关键字的配置行
     log "🔧 第三轮：删除所有包含关键字的配置行..."
     for keyword in "${search_keywords[@]}"; do
         sed -i "/${keyword}/d" .config
@@ -1899,24 +2011,26 @@ EOF
         sed -i "/${upper_keyword}/d" .config
     done
     
-    # 特别处理 DDNS（无论是否在禁用列表中）
     log "🔧 特别处理 DDNS 相关配置..."
     sed -i '/ddns/d' .config
     sed -i '/DDNS/d' .config
     
     log "✅ 禁用完成"
     
-    # 去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 运行 make defconfig 使禁用生效
     log "🔄 运行 make defconfig 使禁用生效..."
-    make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-        log "⚠️ make defconfig 有警告，但继续..."
-    }
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+            log "⚠️ olddefconfig 有警告，但继续..."
+        }
+    else
+        make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续..."
+        }
+    fi
     
-    # 第四轮：检查残留并再次禁用
     log "🔍 第四轮：检查插件残留..."
     
     local remaining=()
@@ -1950,10 +2064,13 @@ EOF
         
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
-        make defconfig > /dev/null 2>&1
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
     fi
     
-    # 最终验证
     log "📊 最终插件状态验证:"
     local still_enabled=0
     
