@@ -1938,23 +1938,29 @@ workflow_step15_generate_config() {
     
     # 根据不同源码类型处理设备名
     local device_for_config=""
+    local search_device=""
+    
     case "$SOURCE_REPO_TYPE" in
         "lede")
             case "$DEVICE" in
-                "cmcc_rax3000m-nand")
-                    device_for_config="cmcc_rax3000m"
+                "cmcc_rax3000m"|"cmcc_rax3000m-nand")
+                    device_for_config="cmcc_rax3000m-nand"
+                    search_device="rax3000m"
                     log "🔧 LEDE设备名转换: $DEVICE -> $device_for_config"
                     ;;
-                "ac42u"|"rt-ac42u")
+                "ac42u"|"rt-ac42u"|"asus_rt-ac42u")
                     device_for_config="asus_rt-ac42u"
+                    search_device="ac42u"
                     log "🔧 LEDE设备名转换: $DEVICE -> $device_for_config"
                     ;;
                 "netgear_wndr3800")
                     device_for_config="netgear_wndr3800"
+                    search_device="wndr3800"
                     log "🔧 LEDE设备名转换: $DEVICE -> $device_for_config"
                     ;;
                 *)
                     device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+                    search_device="$DEVICE"
                     ;;
             esac
             ;;
@@ -1962,23 +1968,28 @@ workflow_step15_generate_config() {
             case "$DEVICE" in
                 "cmcc_rax3000m-nand")
                     device_for_config="cmcc_rax3000m"
+                    search_device="rax3000m"
                     log "🔧 OpenWrt设备名转换: $DEVICE -> $device_for_config"
                     ;;
-                "ac42u"|"rt-ac42u")
+                "ac42u"|"rt-ac42u"|"asus_rt-ac42u")
                     device_for_config="asus_rt-ac42u"
+                    search_device="ac42u"
                     log "🔧 OpenWrt设备名转换: $DEVICE -> $device_for_config"
                     ;;
                 "netgear_wndr3800")
                     device_for_config="netgear_wndr3800"
+                    search_device="wndr3800"
                     log "🔧 OpenWrt设备名转换: $DEVICE -> $device_for_config"
                     ;;
                 *)
                     device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+                    search_device="$DEVICE"
                     ;;
             esac
             ;;
         *)
             device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            search_device="$DEVICE"
             ;;
     esac
     
@@ -1986,23 +1997,6 @@ workflow_step15_generate_config() {
     
     log ""
     log "=== 🔍 设备定义文件验证（前置检查） ==="
-    
-    local search_device=""
-    case "$DEVICE" in
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            search_device="ac42u"
-            ;;
-        cmcc_rax3000m-nand|cmcc_rax3000m)
-            search_device="rax3000m"
-            ;;
-        netgear_wndr3800)
-            search_device="wndr3800"
-            ;;
-        *)
-            search_device="$DEVICE"
-            ;;
-    esac
-    
     log "搜索设备名: $search_device"
     log "搜索路径: target/linux/$TARGET"
     
@@ -2055,8 +2049,25 @@ workflow_step15_generate_config() {
         log "⚠️ 警告：无法提取设备 $search_device 的配置块"
     fi
     
-    # 调用 generate_config 函数，传入处理后的设备名
+    # 关键修复：调用 generate_config 函数前，先确保 DEVICE 变量正确
+    export DEVICE="$device_for_config"
+    log "🔧 设置 DEVICE=$DEVICE 用于 generate_config"
+    
+    # 调用 generate_config 函数
     generate_config "$extra_packages" "$device_for_config"
+    
+    # 验证设备配置是否正确写入
+    local device_config_name=$(echo "$device_for_config" | tr '-' '_')
+    local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y"
+    
+    log "🔍 验证设备配置: $expected_config"
+    if grep -q "^${expected_config}$" .config; then
+        log "✅ 设备配置已正确写入"
+    else
+        log "⚠️ 设备配置未找到，尝试手动添加..."
+        echo "$expected_config" >> .config
+        sort -u .config -o .config
+    fi
     
     log ""
     log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
@@ -2177,6 +2188,21 @@ workflow_step15_generate_config() {
     log "  总配置行数: $(wc -l < .config)"
     log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
     log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
+    
+    # 最终验证设备配置
+    local final_check="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}=y"
+    if grep -q "^${final_check}$" .config; then
+        log "✅ 最终验证: 设备配置存在"
+    else
+        log "⚠️ 最终验证: 设备配置丢失，尝试最后添加"
+        echo "$final_check" >> .config
+        sort -u .config -o .config
+    fi
+    
+    # 自动调试：步骤15后保存配置快照
+    if command -v auto_debug_after_step15 >/dev/null 2>&1; then
+        auto_debug_after_step15
+    fi
     
     log "✅ 步骤15 完成"
 }
@@ -4158,6 +4184,11 @@ workflow_step22_integrate_custom_files() {
 workflow_step23_pre_build_check() {
     log "=== 步骤23: 前置错误检查（使用公共函数） ==="
     
+    # 自动调试：步骤23前检查配置
+    if command -v auto_debug_before_step23 >/dev/null 2>&1; then
+        auto_debug_before_step23
+    fi
+    
     set -e
     trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
     
@@ -4192,7 +4223,9 @@ workflow_step23_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        # 根据不同源码类型处理设备名
+        # ============================================
+        # 设备名映射
+        # ============================================
         local device_for_config=""
         case "$SOURCE_REPO_TYPE" in
             "lede")
@@ -4238,51 +4271,77 @@ workflow_step23_pre_build_check() {
                 ;;
         esac
         
-        # 动态变体检查
+        # ============================================
+        # 生成所有可能的设备名变体
+        # ============================================
         local device_variants=()
+        
+        # 变体1: 原始设备名
         device_variants+=("$device_for_config")
+        
+        # 变体2: 下划线格式
         device_variants+=("$(echo "$device_for_config" | tr '-' '_')")
         
-        if [[ "$device_for_config" != *-* ]]; then
+        # 变体3: 连字符格式
+        if [[ "$device_for_config" == *_* ]]; then
             device_variants+=("$(echo "$device_for_config" | tr '_' '-')")
         fi
         
-        local base_name=$(echo "$device_for_config" | sed 's/^[a-z]*_//')
+        # 变体4: 去掉前缀
+        local base_name=$(echo "$device_for_config" | sed 's/^[a-z]*[-_]//')
         if [ -n "$base_name" ] && [ "$base_name" != "$device_for_config" ]; then
             device_variants+=("$base_name")
             device_variants+=("$(echo "$base_name" | tr '-' '_')")
         fi
         
+        # 变体5: 常见别名
         case "$device_for_config" in
             *asus_rt-ac42u*|*asus_rt_ac42u*)
                 device_variants+=("ac42u" "rt-ac42u" "rt_ac42u")
                 ;;
             *cmcc_rax3000m-nand*|*cmcc_rax3000m_nand*)
-                device_variants+=("rax3000m" "cmcc_rax3000m")
+                device_variants+=("rax3000m" "rax3000m-nand" "rax3000m_nand" "cmcc_rax3000m")
                 ;;
             *netgear_wndr3800*)
                 device_variants+=("wndr3800")
                 ;;
         esac
         
+        # 去重
         local unique_variants=($(printf "%s\n" "${device_variants[@]}" | sort -u))
         
         log "  设备名变体检查 (${#unique_variants[@]} 种):"
+        
+        # 显示.config中实际存在的设备配置
+        log "  .config中存在的设备配置:"
+        local existing_configs=$(grep "CONFIG_TARGET_.*DEVICE" .config | grep -v "^#" | head -10)
+        if [ -n "$existing_configs" ]; then
+            while IFS= read -r line; do
+                log "    $line"
+            done <<< "$existing_configs"
+        else
+            log "    未找到任何设备配置"
+        fi
+        
+        # 检查所有变体
         local found_match=0
         local matched_config=""
         
         for variant in "${unique_variants[@]}"; do
             [ -z "$variant" ] && continue
             
+            # 生成完整的配置变量名
             local config_var="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${variant}=y"
             
+            # 精确匹配
             if grep -q "^${config_var}$" .config; then
                 found_match=1
                 matched_config="$config_var"
-                log "    ✅ 找到匹配: $config_var"
+                log "    ✅ 找到精确匹配: $config_var"
                 break
             fi
             
+            # 模糊匹配
             if grep -q "CONFIG_TARGET_.*DEVICE.*${variant}=y" .config; then
                 found_match=1
                 matched_config="CONFIG_TARGET_*_DEVICE_${variant}=y"
@@ -4297,7 +4356,7 @@ workflow_step23_pre_build_check() {
             echo "   ❌ 设备配置可能不正确，未找到任何匹配"
             echo "   尝试的变体: ${unique_variants[*]}"
             echo "   实际存在的设备配置:"
-            grep "CONFIG_TARGET_.*DEVICE" .config | head -5 | sed 's/^/      /'
+            grep "CONFIG_TARGET_.*DEVICE" .config | head -10 | sed 's/^/      /'
             error_count=$((error_count + 1))
         fi
     else
@@ -4307,7 +4366,7 @@ workflow_step23_pre_build_check() {
     echo ""
     
     # ============================================
-    # 修正：工具链状态检查
+    # 工具链状态检查
     # ============================================
     echo "2. ✅ 工具链状态检查:"
     
@@ -4324,42 +4383,31 @@ workflow_step23_pre_build_check() {
             local gcc_version=$("$cross_gcc" --version 2>&1 | head -1)
             echo "     版本: $gcc_version"
             
-            # 判断工具链类型
             if [[ "$cross_gcc" == *"aarch64"* ]]; then
                 echo "     架构: ARM64 (aarch64)"
             elif [[ "$cross_gcc" == *"arm"* ]]; then
                 echo "     架构: ARM"
             elif [[ "$cross_gcc" == *"mips"* ]]; then
                 echo "     架构: MIPS"
-            elif [[ "$cross_gcc" == *"x86_64"* ]]; then
-                echo "     架构: x86_64"
             fi
             
-            echo "     路径: $cross_gcc"
-            echo "   ✅ 工具链状态: 已编译完成，可供使用"
+            echo "   ✅ 工具链状态: 已编译完成"
         else
             echo "   ⚠️ 未找到交叉编译工具链"
-            echo "     工具链可能正在编译中，或编译失败"
-            
-            # 检查是否正在编译
             if [ -f "$BUILD_DIR/build_dir/target-*/.stamp_target_compile" ]; then
                 echo "     工具链正在编译中"
             else
-                echo "     工具链尚未编译，将在后续步骤编译"
+                echo "     工具链尚未编译"
             fi
-        fi
-        
-        # 检查host工具
-        if [ -d "$BUILD_DIR/staging_dir/host/bin" ]; then
-            local host_tools=$(find "$BUILD_DIR/staging_dir/host/bin" -type f -executable 2>/dev/null | wc -l)
-            echo "   ✅ host工具已生成: $host_tools 个"
         fi
     else
         echo "   ⚠️ staging_dir 目录不存在"
-        echo "     工具链尚未编译，将在后续步骤编译"
     fi
     echo ""
     
+    # ============================================
+    # Feeds检查
+    # ============================================
     echo "3. ✅ Feeds检查:"
     if [ -d "feeds" ]; then
         local feeds_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
@@ -4380,6 +4428,9 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
+    # ============================================
+    # 磁盘空间检查
+    # ============================================
     echo "4. ✅ 磁盘空间检查:"
     local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
     local available_gb=$((available_space / 1024 / 1024))
@@ -4399,6 +4450,9 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
+    # ============================================
+    # USB驱动检查
+    # ============================================
     echo "5. ✅ USB驱动检查:"
     local critical_drivers=(
         "kmod-usb-core"
@@ -4431,6 +4485,9 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
+    # ============================================
+    # 内存检查
+    # ============================================
     echo "6. ✅ 内存检查:"
     local mem_total=$(free -m | awk '/^Mem:/{print $2}')
     local mem_available=$(free -m | awk '/^Mem:/{print $7}')
@@ -4444,6 +4501,9 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
+    # ============================================
+    # CPU检查
+    # ============================================
     echo "7. ✅ CPU检查:"
     local cpu_cores=$(nproc)
     local cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)
@@ -6352,7 +6412,75 @@ apply_config() {
 #【build_firmware_main.sh-45-end】
 
 #【build_firmware_main.sh-46】
-#空
+# ============================================
+# 自动配置调试函数
+# 在步骤15和步骤23自动执行调试
+# ============================================
+
+# 配置调试函数
+debug_config() {
+    local debug_point="$1"
+    local config_file="$BUILD_DIR/.config"
+    
+    log "=== 配置调试 [$debug_point] ==="
+    
+    if [ ! -f "$config_file" ]; then
+        log "❌ .config 文件不存在"
+        return 1
+    fi
+    
+    # 保存配置快照
+    local snapshot="/tmp/config-${debug_point}-$$.txt"
+    cp "$config_file" "$snapshot"
+    log "✅ 配置已保存到 $snapshot"
+    
+    # 显示设备配置
+    log "当前设备配置:"
+    local device_configs=$(grep "CONFIG_TARGET_.*DEVICE" "$config_file" | grep -v "^#")
+    if [ -n "$device_configs" ]; then
+        while IFS= read -r line; do
+            log "  $line"
+        done <<< "$device_configs"
+    else
+        log "  ⚠️ 未找到任何设备配置"
+    fi
+    
+    # 如果存在前一个快照，进行对比
+    case "$debug_point" in
+        "step23_pre")
+            if [ -f "/tmp/config-step15-$$.txt" ]; then
+                log "配置差异对比 (step15 vs step23_pre):"
+                local diff_output=$(diff -u /tmp/config-step15-$$.txt "$snapshot" 2>&1 || true)
+                if [ -n "$diff_output" ]; then
+                    log "  有差异，设备配置可能被修改"
+                    log "  设备配置差异:"
+                    diff -u <(grep "CONFIG_TARGET_.*DEVICE" /tmp/config-step15-$$.txt 2>/dev/null) \
+                            <(grep "CONFIG_TARGET_.*DEVICE" "$snapshot" 2>/dev/null) || \
+                    log "    无设备配置差异"
+                else
+                    log "  ✅ 配置无变化"
+                fi
+            fi
+            ;;
+    esac
+    
+    # 显示关键配置统计
+    local total_lines=$(wc -l < "$config_file")
+    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" "$config_file")
+    log "配置统计: 总行数=$total_lines, 启用包=$enabled_packages"
+    
+    log "✅ 配置调试 [$debug_point] 完成"
+}
+
+# 步骤15后自动调试
+auto_debug_after_step15() {
+    debug_config "step15"
+}
+
+# 步骤23前自动调试
+auto_debug_before_step23() {
+    debug_config "step23_pre"
+}
 #【build_firmware_main.sh-46-end】
 
 #【build_firmware_main.sh-47】
