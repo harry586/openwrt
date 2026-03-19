@@ -4641,11 +4641,11 @@ workflow_step23_pre_build_check() {
         esac
         
         # ============================================
-        # 生成所有可能的设备名变体
+        # 生成所有可能的设备名变体（包括连字符和下划线两种格式）
         # ============================================
         local device_variants=()
         
-        # 变体1: 原始设备名
+        # 变体1: 原始设备名（可能带连字符）
         device_variants+=("$device_for_config")
         
         # 变体2: 下划线格式
@@ -4661,6 +4661,7 @@ workflow_step23_pre_build_check() {
         if [ -n "$base_name" ] && [ "$base_name" != "$device_for_config" ]; then
             device_variants+=("$base_name")
             device_variants+=("$(echo "$base_name" | tr '-' '_')")
+            device_variants+=("$(echo "$base_name" | tr '_' '-')")
         fi
         
         # 变体5: 常见别名
@@ -4683,7 +4684,7 @@ workflow_step23_pre_build_check() {
         
         # 显示.config中实际存在的设备配置
         log "  .config中存在的设备配置:"
-        local existing_configs=$(grep "CONFIG_TARGET_.*DEVICE" .config | grep -v "^#" | head -20)
+        local existing_configs=$(grep "CONFIG_TARGET_.*DEVICE" .config | head -20)
         if [ -n "$existing_configs" ]; then
             while IFS= read -r line; do
                 log "    $line"
@@ -4692,49 +4693,78 @@ workflow_step23_pre_build_check() {
             log "    未找到任何设备配置"
         fi
         
-        # 检查所有变体
+        # 检查所有变体（包括启用和禁用的）
         local found_match=0
         local matched_config=""
+        local matched_status=""
         
         for variant in "${unique_variants[@]}"; do
             [ -z "$variant" ] && continue
             
-            # 生成完整的配置变量名
-            local config_var="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${variant}=y"
+            # 生成完整的配置变量名（用于启用状态）
+            local config_var_enabled="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${variant}=y"
+            # 生成注释掉的配置变量名（用于禁用状态）
+            local config_var_disabled="# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${variant} is not set"
+            # 生成带连字符的版本（用于LEDE）
+            local config_var_hyphen="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${variant//_/-}=y"
+            local config_var_hyphen_disabled="# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${variant//_/-} is not set"
             
-            # 精确匹配
-            if grep -q "^${config_var}$" .config; then
+            # 检查启用状态
+            if grep -q "^${config_var_enabled}$" .config; then
                 found_match=1
-                matched_config="$config_var"
-                log "    ✅ 找到精确匹配: $config_var"
+                matched_config="$config_var_enabled"
+                matched_status="enabled"
+                log "    ✅ 找到启用匹配: $config_var_enabled"
+                break
+            fi
+            
+            # 检查禁用状态（注释掉的）
+            if grep -q "^${config_var_disabled}$" .config; then
+                found_match=1
+                matched_config="$config_var_disabled"
+                matched_status="disabled"
+                log "    ⚠️ 找到禁用匹配: $config_var_disabled"
+                break
+            fi
+            
+            # 检查带连字符的启用状态
+            if grep -q "^${config_var_hyphen}$" .config; then
+                found_match=1
+                matched_config="$config_var_hyphen"
+                matched_status="enabled"
+                log "    ✅ 找到连字符启用匹配: $config_var_hyphen"
+                break
+            fi
+            
+            # 检查带连字符的禁用状态
+            if grep -q "^${config_var_hyphen_disabled}$" .config; then
+                found_match=1
+                matched_config="$config_var_hyphen_disabled"
+                matched_status="disabled"
+                log "    ⚠️ 找到连字符禁用匹配: $config_var_hyphen_disabled"
                 break
             fi
             
             # 模糊匹配
-            if grep -q "CONFIG_TARGET_.*DEVICE.*${variant}=y" .config; then
+            if grep -q "CONFIG_TARGET_.*DEVICE.*${variant}" .config; then
                 found_match=1
-                matched_config="CONFIG_TARGET_*_DEVICE_${variant}=y"
+                matched_config="CONFIG_TARGET_*_DEVICE_*${variant}*"
+                matched_status="fuzzy"
                 log "    ✅ 找到模糊匹配: $variant"
                 break
             fi
         done
         
         if [ $found_match -eq 1 ]; then
-            echo "   ✅ 设备配置正确: $matched_config"
-        else
-            # 关键修复：如果没找到，但设备配置存在（可能是PROFILE形式）
-            local profile_config=$(grep "CONFIG_TARGET_PROFILE" .config | grep "$device_for_config" || true)
-            if [ -n "$profile_config" ]; then
-                echo "   ✅ 设备配置正确 (通过PROFILE): $profile_config"
-                found_match=1
+            if [ "$matched_status" = "disabled" ]; then
+                echo "   ⚠️ 设备配置存在但被禁用: $matched_config"
+                warning_count=$((warning_count + 1))
+            else
+                echo "   ✅ 设备配置正确: $matched_config"
             fi
-        fi
-        
-        if [ $found_match -eq 0 ]; then
+        else
             echo "   ❌ 设备配置可能不正确，未找到任何匹配"
             echo "   尝试的变体: ${unique_variants[*]}"
-            echo "   实际存在的设备配置:"
-            grep "CONFIG_TARGET_.*DEVICE\|CONFIG_TARGET_PROFILE" .config | head -20 | sed 's/^/      /'
             error_count=$((error_count + 1))
         fi
     else
@@ -4753,7 +4783,6 @@ workflow_step23_pre_build_check() {
         local staging_size=$(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}')
         echo "   📊 大小: $staging_size"
         
-        # 查找交叉编译工具链
         local cross_gcc=$(find "$BUILD_DIR/staging_dir" -type f -executable -path "*/bin/*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
         
         if [ -n "$cross_gcc" ]; then
@@ -4768,8 +4797,6 @@ workflow_step23_pre_build_check() {
             elif [[ "$cross_gcc" == *"mips"* ]]; then
                 echo "     架构: MIPS"
             fi
-            
-            echo "   ✅ 工具链状态: 已编译完成"
         else
             echo "   ⚠️ 未找到交叉编译工具链"
             if [ -f "$BUILD_DIR/build_dir/target-*/.stamp_target_compile" ]; then
