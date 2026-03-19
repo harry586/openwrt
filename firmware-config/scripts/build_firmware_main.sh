@@ -2225,6 +2225,42 @@ workflow_step15_generate_config() {
         sort -u .config -o .config
     fi
     
+    # ============================================
+    # 关键修复：在步骤15结束时强制保存配置快照
+    # ============================================
+    if [ -f ".config" ]; then
+        # 保存完整配置备份
+        cp .config /tmp/config-step15-final-$$.txt
+        log "✅ 步骤15最终配置已保存到 /tmp/config-step15-final-$$.txt"
+        
+        # 专门保存设备配置
+        grep "CONFIG_TARGET_.*DEVICE" .config > /tmp/device-config-step15-$$.txt 2>/dev/null || true
+        if [ -s "/tmp/device-config-step15-$$.txt" ]; then
+            log "✅ 设备配置已保存:"
+            cat /tmp/device-config-step15-$$.txt | while read line; do
+                log "    $line"
+            done
+        else
+            log "⚠️ 未找到设备配置"
+        fi
+        
+        # 创建恢复脚本
+        cat > /tmp/restore-config-step15-$$.sh << EOF
+#!/bin/bash
+# 步骤15配置恢复脚本
+echo "=== 恢复步骤15配置 ==="
+if [ -f "/tmp/config-step15-final-$$.txt" ]; then
+    cp /tmp/config-step15-final-$$.txt \$BUILD_DIR/.config
+    echo "✅ 配置已恢复"
+    grep "CONFIG_TARGET_.*DEVICE" \$BUILD_DIR/.config || echo "⚠️ 设备配置不存在"
+else
+    echo "❌ 配置备份不存在"
+fi
+EOF
+        chmod +x /tmp/restore-config-step15-$$.sh
+        log "✅ 恢复脚本已创建: /tmp/restore-config-step15-$$.sh"
+    fi
+    
     # 自动调试：步骤15后保存配置快照
     if command -v auto_debug_after_step15 >/dev/null 2>&1; then
         auto_debug_after_step15
@@ -3188,6 +3224,13 @@ workflow_step09_download_sdk() {
         cp .config .config.before-toolchain
         log "✅ 备份当前配置到 .config.before-toolchain"
         has_config=1
+        
+        # 保存设备配置信息，用于验证
+        local device_configs=$(grep "CONFIG_TARGET_.*DEVICE" .config | grep -v "^#")
+        if [ -n "$device_configs" ]; then
+            echo "$device_configs" > /tmp/device-configs-before.txt
+            log "✅ 保存设备配置到 /tmp/device-configs-before.txt"
+        fi
     fi
     
     # 加载环境变量
@@ -3196,7 +3239,7 @@ workflow_step09_download_sdk() {
         log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
     fi
     
-    # 检查 libyaml（所有源码类型都需要）
+    # 检查 libyaml
     log "🔧 检查libyaml库..."
     if ! pkg-config --libs yaml-0.1 > /dev/null 2>&1; then
         log "  ⚠️ libyaml未找到，尝试安装..."
@@ -3220,35 +3263,12 @@ workflow_step09_download_sdk() {
         return 0
     fi
     
-    # 步骤1: 更新feeds（根据不同源码类型）
+    # 步骤1: 更新feeds
     log ""
     log "🔄 步骤1: 更新feeds..."
-    
-    case "$SOURCE_REPO_TYPE" in
-        "lede")
-            # LEDE源码的feeds更新
-            ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
-                log "⚠️ LEDE feeds更新有警告，继续..."
-            }
-            ;;
-        "openwrt")
-            # OpenWrt源码的feeds更新
-            ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
-                log "⚠️ OpenWrt feeds更新有警告，继续..."
-            }
-            ;;
-        "immortalwrt")
-            # ImmortalWrt源码的feeds更新
-            ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
-                log "⚠️ ImmortalWrt feeds更新有警告，继续..."
-            }
-            ;;
-        *)
-            ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
-                log "⚠️ feeds更新有警告，继续..."
-            }
-            ;;
-    esac
+    ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
+        log "⚠️ feeds更新有警告，继续..."
+    }
     
     # 步骤2: 安装基础feed
     log ""
@@ -3262,49 +3282,14 @@ workflow_step09_download_sdk() {
     local target="${TARGET:-ipq40xx}"
     local subtarget="${SUBTARGET:-generic}"
     
-    # 关键修复：根据不同源码类型创建最小配置，同时保留现有配置
-    if [ $has_config -eq 1 ] && [ -f ".config" ]; then
-        log "  使用现有配置编译工具链（兼容所有源码类型）"
+    # 创建最小配置，但保存原始配置
+    if [ $has_config -eq 1 ]; then
+        log "  保存原始配置，创建临时工具链配置"
         
-        # 备份原始配置
+        # 保存原始配置
         cp .config .config.original
         
-        # 确保工具链相关选项开启（所有源码类型通用）
-        if ! grep -q "^CONFIG_DEVEL=y" .config; then
-            echo "CONFIG_DEVEL=y" >> .config
-        fi
-        
-        if ! grep -q "^CONFIG_TOOLCHAINOPTS=y" .config; then
-            echo "CONFIG_TOOLCHAINOPTS=y" >> .config
-        fi
-        
-        # 禁用固件编译（所有源码类型通用）
-        sed -i 's/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/# CONFIG_TARGET_ROOTFS_INITRAMFS is not set/' .config
-        sed -i 's/^CONFIG_TARGET_ROOTFS_SQUASHFS=y/# CONFIG_TARGET_ROOTFS_SQUASHFS is not set/' .config
-        sed -i 's/^CONFIG_TARGET_ROOTFS_EXT4FS=y/# CONFIG_TARGET_ROOTFS_EXT4FS is not set/' .config
-        sed -i 's/^CONFIG_TARGET_ROOTFS_JFFS2=y/# CONFIG_TARGET_ROOTFS_JFFS2 is not set/' .config
-        
-        # 根据不同源码类型添加特定配置
-        case "$SOURCE_REPO_TYPE" in
-            "lede")
-                # LEDE源码不需要额外配置
-                log "  ✅ LEDE工具链配置"
-                ;;
-            "openwrt")
-                # OpenWrt源码可能需要
-                echo "CONFIG_CCACHE=y" >> .config 2>/dev/null || true
-                log "  ✅ OpenWrt工具链配置"
-                ;;
-            "immortalwrt")
-                # ImmortalWrt源码配置
-                echo "CONFIG_CCACHE=y" >> .config 2>/dev/null || true
-                log "  ✅ ImmortalWrt工具链配置"
-                ;;
-        esac
-    else
-        log "  创建最小工具链配置（兼容所有源码类型）"
-        
-        # 基础配置（所有源码类型通用）
+        # 创建最小工具链配置
         cat > .config.toolchain << EOF
 CONFIG_TARGET_${target}=y
 CONFIG_TARGET_${target}_${subtarget}=y
@@ -3317,19 +3302,21 @@ CONFIG_TARGET_ROOTFS_JFFS2=n
 CONFIG_KERNEL_NONE=y
 EOF
         
-        # 根据不同源码类型添加特定配置
-        case "$SOURCE_REPO_TYPE" in
-            "lede")
-                # LEDE源码使用基础配置即可
-                ;;
-            "openwrt")
-                echo "CONFIG_CCACHE=y" >> .config.toolchain
-                ;;
-            "immortalwrt")
-                echo "CONFIG_CCACHE=y" >> .config.toolchain
-                ;;
-        esac
-        
+        # 使用工具链配置
+        cp .config.toolchain .config
+    else
+        log "  创建最小工具链配置"
+        cat > .config.toolchain << EOF
+CONFIG_TARGET_${target}=y
+CONFIG_TARGET_${target}_${subtarget}=y
+CONFIG_DEVEL=y
+CONFIG_TOOLCHAINOPTS=y
+CONFIG_TARGET_ROOTFS_INITRAMFS=n
+CONFIG_TARGET_ROOTFS_SQUASHFS=n
+CONFIG_TARGET_ROOTFS_EXT4FS=n
+CONFIG_TARGET_ROOTFS_JFFS2=n
+CONFIG_KERNEL_NONE=y
+EOF
         cp .config.toolchain .config
     fi
     
@@ -3344,7 +3331,6 @@ EOF
     
     START_TIME=$(date +%s)
     
-    # 编译 tools（基础工具）- 所有源码类型通用
     log "  编译 tools (基础工具)..."
     if make tools/compile -j$(nproc) V=s > /tmp/build-logs/tools_compile.log 2>&1; then
         log "  ✅ tools编译完成"
@@ -3353,7 +3339,6 @@ EOF
         tail -50 /tmp/build-logs/tools_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
     fi
     
-    # 编译 toolchain（交叉编译工具链）
     log "  编译 toolchain (交叉工具链)..."
     if make toolchain/compile -j$(nproc) V=s > /tmp/build-logs/toolchain_compile.log 2>&1; then
         log "  ✅ toolchain编译完成"
@@ -3375,24 +3360,12 @@ EOF
     if [ -d "staging_dir" ]; then
         log "  ✅ staging_dir目录存在"
         
-        # 查找GCC编译器（兼容所有架构）
         local gcc_file=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
         
         if [ -n "$gcc_file" ]; then
             log "  ✅ GCC编译器已生成: $(basename "$gcc_file")"
             local gcc_version=$("$gcc_file" --version 2>&1 | head -1)
             log "     版本: $gcc_version"
-            
-            # 判断架构
-            if [[ "$gcc_file" == *"aarch64"* ]]; then
-                log "     架构: ARM64"
-            elif [[ "$gcc_file" == *"arm"* ]]; then
-                log "     架构: ARM"
-            elif [[ "$gcc_file" == *"mips"* ]]; then
-                log "     架构: MIPS"
-            elif [[ "$gcc_file" == *"x86_64"* ]]; then
-                log "     架构: x86_64"
-            fi
         else
             log "  ⚠️ GCC编译器未找到，但可能正在生成中"
         fi
@@ -3404,17 +3377,62 @@ EOF
         exit 1
     fi
     
-    # 恢复原始配置（如果有）
-    if [ $has_config -eq 1 ] && [ -f ".config.original" ]; then
-        log "🔄 恢复原始配置..."
-        cp .config.original .config
-        rm -f .config.original
-        log "✅ 配置已恢复"
-    elif [ $has_config -eq 1 ] && [ -f ".config.before-toolchain" ]; then
-        log "🔄 从备份恢复配置..."
-        cp .config.before-toolchain .config
-        log "✅ 配置已恢复"
+    # ============================================
+    # 关键修复：恢复原始配置
+    # ============================================
+    log ""
+    log "🔄 恢复原始配置..."
+    
+    local restored=0
+    
+    # 方法1: 从步骤15的备份恢复
+    local step15_backup=$(ls -t /tmp/config-step15-final-*.txt 2>/dev/null | head -1)
+    if [ -n "$step15_backup" ] && [ -f "$step15_backup" ]; then
+        log "  找到步骤15备份: $step15_backup"
+        cp "$step15_backup" .config
+        log "  ✅ 从步骤15备份恢复配置"
+        restored=1
     fi
+    
+    # 方法2: 从原始备份恢复
+    if [ $restored -eq 0 ] && [ $has_config -eq 1 ] && [ -f ".config.original" ]; then
+        log "  从 .config.original 恢复"
+        cp .config.original .config
+        restored=1
+    fi
+    
+    # 方法3: 从 .config.before-toolchain 恢复
+    if [ $restored -eq 0 ] && [ $has_config -eq 1 ] && [ -f ".config.before-toolchain" ]; then
+        log "  从 .config.before-toolchain 恢复"
+        cp .config.before-toolchain .config
+        restored=1
+    fi
+    
+    if [ $restored -eq 1 ]; then
+        # 重新运行 defconfig 使配置生效
+        log "  重新运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig_restore.log 2>&1 || {
+            log "  ⚠️ make defconfig 有警告，但继续"
+        }
+        
+        # 验证设备配置
+        log "  验证设备配置:"
+        local current_configs=$(grep "CONFIG_TARGET_.*DEVICE" .config | grep -v "^#")
+        if [ -n "$current_configs" ]; then
+            while IFS= read -r line; do
+                log "    $line"
+            done <<< "$current_configs"
+        else
+            log "    ⚠️ 未找到设备配置"
+        fi
+        
+        log "✅ 配置恢复完成"
+    else
+        log "⚠️ 无法恢复配置，使用当前配置"
+    fi
+    
+    # 清理备份文件
+    rm -f .config.original .config.toolchain 2>/dev/null || true
     
     COMPILER_DIR="$BUILD_DIR"
     save_env
