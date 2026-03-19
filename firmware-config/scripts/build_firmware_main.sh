@@ -3141,18 +3141,28 @@ workflow_step08_initialize_build_env_hybrid() {
 
 #【build_firmware_main.sh-27】
 # ============================================
-# 步骤09: 编译源码自带工具链（增强版 - 检查libyaml）
+# 步骤09: 编译源码自带工具链
 # 对应 firmware-build.yml 步骤09
 # ============================================
 workflow_step09_download_sdk() {
     local device_name="$1"
     
     log "=== 步骤09: 编译源码自带工具链 ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "📌 最终设备名称: $device_name"
     
     set -e
     trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
+    
+    # 保存当前配置（如果有）
+    local has_config=0
+    if [ -f ".config" ]; then
+        cp .config .config.before-toolchain
+        log "✅ 备份当前配置到 .config.before-toolchain"
+        has_config=1
+    fi
     
     # 加载环境变量
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -3160,68 +3170,20 @@ workflow_step09_download_sdk() {
         log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
     fi
     
-    # ============================================
-    # 检查libyaml是否安装（修复dtc链接错误）
-    # ============================================
-    log "🔧 检查libyaml库（修复dtc链接错误）..."
-    
+    # 检查 libyaml（所有源码类型都需要）
+    log "🔧 检查libyaml库..."
     if ! pkg-config --libs yaml-0.1 > /dev/null 2>&1; then
         log "  ⚠️ libyaml未找到，尝试安装..."
         sudo apt-get update > /dev/null 2>&1 || true
         sudo apt-get install -y libyaml-dev > /dev/null 2>&1 || {
-            log "  ⚠️ 自动安装失败，将使用备用方案"
-            
-            # 备用方案：创建pkg-config文件
-            mkdir -p staging_dir/host/lib/pkgconfig
-            cat > staging_dir/host/lib/pkgconfig/yaml-0.1.pc << 'EOF'
-prefix=/usr
-exec_prefix=${prefix}
-includedir=${prefix}/include
-libdir=${exec_prefix}/lib/x86_64-linux-gnu
-
-Name: LibYAML
-Description: Library for YAML 1.1
-Version: 0.2.5
-Cflags: -I${includedir}
-Libs: -L${libdir} -lyaml
-EOF
-            export PKG_CONFIG_PATH="$PWD/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
-            log "  ✅ 已创建libyaml pkg-config文件"
-            
-            # 检查库文件是否存在
-            if [ ! -f "/usr/lib/x86_64-linux-gnu/libyaml.so" ] && [ ! -f "/usr/lib/libyaml.so" ]; then
-                log "  ⚠️ libyaml库文件不存在，尝试下载源码编译..."
-                
-                # 下载并编译libyaml
-                mkdir -p dl
-                if [ ! -f "dl/yaml-0.2.5.tar.gz" ]; then
-                    wget -O dl/yaml-0.2.5.tar.gz https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz || true
-                fi
-                
-                if [ -f "dl/yaml-0.2.5.tar.gz" ]; then
-                    mkdir -p build_dir/host/libyaml-0.2.5
-                    tar -xzf dl/yaml-0.2.5.tar.gz -C build_dir/host/libyaml-0.2.5 --strip-components=1
-                    cd build_dir/host/libyaml-0.2.5
-                    ./configure --prefix="$BUILD_DIR/staging_dir/host"
-                    make -j1
-                    make install
-                    cd "$BUILD_DIR"
-                    
-                    # 更新pkg-config路径
-                    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
-                    log "  ✅ libyaml手动编译完成"
-                fi
-            fi
+            log "  ⚠️ 自动安装失败，将在编译时处理"
         }
     else
         log "  ✅ libyaml已安装"
-        pkg-config --libs --cflags yaml-0.1 | sed 's/^/      /'
     fi
     
     log "📌 开始编译工具链..."
-    log "   源码类型: $SOURCE_REPO_TYPE"
     log "   目标平台: $TARGET/$SUBTARGET"
-    log "   设备: $device_name"
     
     # 检查是否已经编译过工具链
     if [ -d "staging_dir" ] && [ -f "staging_dir/host/bin/gcc" ]; then
@@ -3232,12 +3194,35 @@ EOF
         return 0
     fi
     
-    # 步骤1: 更新feeds
+    # 步骤1: 更新feeds（根据不同源码类型）
     log ""
     log "🔄 步骤1: 更新feeds..."
-    ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
-        log "⚠️ feeds更新有警告，继续..."
-    }
+    
+    case "$SOURCE_REPO_TYPE" in
+        "lede")
+            # LEDE源码的feeds更新
+            ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
+                log "⚠️ LEDE feeds更新有警告，继续..."
+            }
+            ;;
+        "openwrt")
+            # OpenWrt源码的feeds更新
+            ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
+                log "⚠️ OpenWrt feeds更新有警告，继续..."
+            }
+            ;;
+        "immortalwrt")
+            # ImmortalWrt源码的feeds更新
+            ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
+                log "⚠️ ImmortalWrt feeds更新有警告，继续..."
+            }
+            ;;
+        *)
+            ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
+                log "⚠️ feeds更新有警告，继续..."
+            }
+            ;;
+    esac
     
     # 步骤2: 安装基础feed
     log ""
@@ -3248,30 +3233,80 @@ EOF
     log ""
     log "🔄 步骤3: 配置工具链..."
     
-    # 获取目标平台和子平台
     local target="${TARGET:-ipq40xx}"
     local subtarget="${SUBTARGET:-generic}"
     
-    # 创建最小配置（只编译工具链）
-    cat > .config.toolchain << EOF
+    # 关键修复：根据不同源码类型创建最小配置，同时保留现有配置
+    if [ $has_config -eq 1 ] && [ -f ".config" ]; then
+        log "  使用现有配置编译工具链（兼容所有源码类型）"
+        
+        # 备份原始配置
+        cp .config .config.original
+        
+        # 确保工具链相关选项开启（所有源码类型通用）
+        if ! grep -q "^CONFIG_DEVEL=y" .config; then
+            echo "CONFIG_DEVEL=y" >> .config
+        fi
+        
+        if ! grep -q "^CONFIG_TOOLCHAINOPTS=y" .config; then
+            echo "CONFIG_TOOLCHAINOPTS=y" >> .config
+        fi
+        
+        # 禁用固件编译（所有源码类型通用）
+        sed -i 's/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/# CONFIG_TARGET_ROOTFS_INITRAMFS is not set/' .config
+        sed -i 's/^CONFIG_TARGET_ROOTFS_SQUASHFS=y/# CONFIG_TARGET_ROOTFS_SQUASHFS is not set/' .config
+        sed -i 's/^CONFIG_TARGET_ROOTFS_EXT4FS=y/# CONFIG_TARGET_ROOTFS_EXT4FS is not set/' .config
+        sed -i 's/^CONFIG_TARGET_ROOTFS_JFFS2=y/# CONFIG_TARGET_ROOTFS_JFFS2 is not set/' .config
+        
+        # 根据不同源码类型添加特定配置
+        case "$SOURCE_REPO_TYPE" in
+            "lede")
+                # LEDE源码不需要额外配置
+                log "  ✅ LEDE工具链配置"
+                ;;
+            "openwrt")
+                # OpenWrt源码可能需要
+                echo "CONFIG_CCACHE=y" >> .config 2>/dev/null || true
+                log "  ✅ OpenWrt工具链配置"
+                ;;
+            "immortalwrt")
+                # ImmortalWrt源码配置
+                echo "CONFIG_CCACHE=y" >> .config 2>/dev/null || true
+                log "  ✅ ImmortalWrt工具链配置"
+                ;;
+        esac
+    else
+        log "  创建最小工具链配置（兼容所有源码类型）"
+        
+        # 基础配置（所有源码类型通用）
+        cat > .config.toolchain << EOF
 CONFIG_TARGET_${target}=y
 CONFIG_TARGET_${target}_${subtarget}=y
-# 只编译工具链，不编译固件
 CONFIG_DEVEL=y
 CONFIG_TOOLCHAINOPTS=y
-# 禁用所有固件相关的配置
 CONFIG_TARGET_ROOTFS_INITRAMFS=n
 CONFIG_TARGET_ROOTFS_SQUASHFS=n
 CONFIG_TARGET_ROOTFS_EXT4FS=n
 CONFIG_TARGET_ROOTFS_JFFS2=n
-# 禁用内核编译（只编译工具链）
 CONFIG_KERNEL_NONE=y
 EOF
+        
+        # 根据不同源码类型添加特定配置
+        case "$SOURCE_REPO_TYPE" in
+            "lede")
+                # LEDE源码使用基础配置即可
+                ;;
+            "openwrt")
+                echo "CONFIG_CCACHE=y" >> .config.toolchain
+                ;;
+            "immortalwrt")
+                echo "CONFIG_CCACHE=y" >> .config.toolchain
+                ;;
+        esac
+        
+        cp .config.toolchain .config
+    fi
     
-    # 使用最小配置
-    cp .config.toolchain .config
-    
-    # 运行defconfig
     log "  运行 make defconfig..."
     make defconfig > /tmp/build-logs/toolchain_defconfig.log 2>&1
     
@@ -3283,7 +3318,7 @@ EOF
     
     START_TIME=$(date +%s)
     
-    # 先编译tools（基础工具）
+    # 编译 tools（基础工具）- 所有源码类型通用
     log "  编译 tools (基础工具)..."
     if make tools/compile -j$(nproc) V=s > /tmp/build-logs/tools_compile.log 2>&1; then
         log "  ✅ tools编译完成"
@@ -3292,7 +3327,7 @@ EOF
         tail -50 /tmp/build-logs/tools_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
     fi
     
-    # 再编译toolchain（交叉编译工具链）
+    # 编译 toolchain（交叉编译工具链）
     log "  编译 toolchain (交叉工具链)..."
     if make toolchain/compile -j$(nproc) V=s > /tmp/build-logs/toolchain_compile.log 2>&1; then
         log "  ✅ toolchain编译完成"
@@ -3314,26 +3349,47 @@ EOF
     if [ -d "staging_dir" ]; then
         log "  ✅ staging_dir目录存在"
         
-        # 查找GCC编译器
-        GCC_FILE=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+        # 查找GCC编译器（兼容所有架构）
+        local gcc_file=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
         
-        if [ -n "$GCC_FILE" ]; then
-            log "  ✅ GCC编译器已生成: $(basename "$GCC_FILE")"
-            GCC_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            log "     版本: $GCC_VERSION"
+        if [ -n "$gcc_file" ]; then
+            log "  ✅ GCC编译器已生成: $(basename "$gcc_file")"
+            local gcc_version=$("$gcc_file" --version 2>&1 | head -1)
+            log "     版本: $gcc_version"
+            
+            # 判断架构
+            if [[ "$gcc_file" == *"aarch64"* ]]; then
+                log "     架构: ARM64"
+            elif [[ "$gcc_file" == *"arm"* ]]; then
+                log "     架构: ARM"
+            elif [[ "$gcc_file" == *"mips"* ]]; then
+                log "     架构: MIPS"
+            elif [[ "$gcc_file" == *"x86_64"* ]]; then
+                log "     架构: x86_64"
+            fi
         else
             log "  ⚠️ GCC编译器未找到，但可能正在生成中"
         fi
         
-        # 统计工具链大小
-        TOOLCHAIN_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-        log "  📊 工具链大小: $TOOLCHAIN_SIZE"
+        local toolchain_size=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
+        log "  📊 工具链大小: $toolchain_size"
     else
         log "  ❌ staging_dir目录不存在，工具链编译可能失败"
         exit 1
     fi
     
-    # 保存工具链信息到环境变量
+    # 恢复原始配置（如果有）
+    if [ $has_config -eq 1 ] && [ -f ".config.original" ]; then
+        log "🔄 恢复原始配置..."
+        cp .config.original .config
+        rm -f .config.original
+        log "✅ 配置已恢复"
+    elif [ $has_config -eq 1 ] && [ -f ".config.before-toolchain" ]; then
+        log "🔄 从备份恢复配置..."
+        cp .config.before-toolchain .config
+        log "✅ 配置已恢复"
+    fi
+    
     COMPILER_DIR="$BUILD_DIR"
     save_env
     
@@ -4314,7 +4370,7 @@ workflow_step23_pre_build_check() {
         
         # 显示.config中实际存在的设备配置
         log "  .config中存在的设备配置:"
-        local existing_configs=$(grep "CONFIG_TARGET_.*DEVICE" .config | grep -v "^#" | head -10)
+        local existing_configs=$(grep "CONFIG_TARGET_.*DEVICE" .config | grep -v "^#" | head -20)
         if [ -n "$existing_configs" ]; then
             while IFS= read -r line; do
                 log "    $line"
@@ -4353,10 +4409,19 @@ workflow_step23_pre_build_check() {
         if [ $found_match -eq 1 ]; then
             echo "   ✅ 设备配置正确: $matched_config"
         else
+            # 关键修复：如果没找到，但设备配置存在（可能是PROFILE形式）
+            local profile_config=$(grep "CONFIG_TARGET_PROFILE" .config | grep "$device_for_config" || true)
+            if [ -n "$profile_config" ]; then
+                echo "   ✅ 设备配置正确 (通过PROFILE): $profile_config"
+                found_match=1
+            fi
+        fi
+        
+        if [ $found_match -eq 0 ]; then
             echo "   ❌ 设备配置可能不正确，未找到任何匹配"
             echo "   尝试的变体: ${unique_variants[*]}"
             echo "   实际存在的设备配置:"
-            grep "CONFIG_TARGET_.*DEVICE" .config | head -10 | sed 's/^/      /'
+            grep "CONFIG_TARGET_.*DEVICE\|CONFIG_TARGET_PROFILE" .config | head -20 | sed 's/^/      /'
             error_count=$((error_count + 1))
         fi
     else
