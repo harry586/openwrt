@@ -1725,7 +1725,7 @@ workflow_step15_generate_config() {
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     # ============================================
-    # 从MK文件获取设备名
+    # 从MK文件获取设备名（保留原始格式，不转换）
     # ============================================
     local search_device=""
     case "$DEVICE" in
@@ -1772,7 +1772,7 @@ workflow_step15_generate_config() {
     for mkfile in "${mk_files[@]}"; do
         if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
-            # 提取define行中的设备名
+            # 提取define行中的设备名（保留原始格式，包括连字符）
             mk_device_name=$(grep -m1 "define Device.*$search_device" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
             log "✅ 找到设备定义: $mk_device_name (在 $device_file)"
             break
@@ -1785,7 +1785,7 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 使用MK文件中定义的设备名
+    # 使用MK文件中定义的设备名（保持原始格式，如 cmcc_rax3000m-nand）
     local device_for_config="$mk_device_name"
     log "🔧 使用MK文件设备名: $device_for_config"
     
@@ -1803,13 +1803,14 @@ workflow_step15_generate_config() {
         log "⚠️ 警告：无法提取设备 $search_device 的配置块"
     fi
     
-    # 调用 generate_config 函数，传入MK文件中的设备名
+    # 关键修复：使用MK文件中的设备名（原始格式），不要转换
     export DEVICE="$device_for_config"
     log "🔧 设置 DEVICE=$DEVICE 用于 generate_config"
     
+    # 调用 generate_config 函数，传入MK文件中的设备名（原始格式）
     generate_config "$extra_packages" "$device_for_config"
     
-    # 验证设备配置是否正确写入
+    # 验证设备配置是否正确写入（直接使用MK文件中的设备名）
     local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config}=y"
     
     log "🔍 验证设备配置: $expected_config"
@@ -1941,7 +1942,7 @@ workflow_step15_generate_config() {
     log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
     log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
     
-    # 最终验证设备配置
+    # 最终验证设备配置（使用MK文件中的原始设备名）
     local final_check="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config}=y"
     if grep -q "^${final_check}$" .config; then
         log "✅ 最终验证: 设备配置存在"
