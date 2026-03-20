@@ -1070,16 +1070,49 @@ configure_feeds() {
     done
     
     # ============================================
-    # 备份原有feeds配置
+    # 修复 smartdns 打包问题（针对 LEDE）
     # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE源码特殊处理：修复 smartdns 打包问题"
+        
+        # 查找 smartdns 的 Makefile
+        local smartdns_mk=$(find package -name "smartdns" -type d 2>/dev/null | head -1)
+        if [ -n "$smartdns_mk" ] && [ -f "$smartdns_mk/Makefile" ]; then
+            log "  找到 smartdns Makefile: $smartdns_mk/Makefile"
+            
+            # 备份原文件
+            cp "$smartdns_mk/Makefile" "$smartdns_mk/Makefile.bak"
+            
+            # 检查是否已有 CONFIG 目录的创建
+            if ! grep -q "mkdir.*etc/config" "$smartdns_mk/Makefile" 2>/dev/null; then
+                log "  添加配置文件创建逻辑..."
+                # 在 define Package/smartdns/install 中添加创建配置文件的代码
+                sed -i '/define Package\/smartdns\/install/a\\t$(INSTALL_DIR) $(1)/etc/config\n\t$(INSTALL_DATA) ./files/smartdns.conf $(1)/etc/config/smartdns 2>/dev/null || touch $(1)/etc/config/smartdns' "$smartdns_mk/Makefile"
+                log "  ✅ 已添加配置文件创建"
+            fi
+        fi
+        
+        # 创建 smartdns 配置文件模板
+        local smartdns_files_dir=$(find package -name "smartdns" -type d 2>/dev/null | head -1)
+        if [ -n "$smartdns_files_dir" ] && [ ! -f "$smartdns_files_dir/files/smartdns.conf" ]; then
+            mkdir -p "$smartdns_files_dir/files"
+            cat > "$smartdns_files_dir/files/smartdns.conf" << 'EOF'
+# SmartDNS configuration
+# This file is auto-generated
+EOF
+            log "  ✅ 创建 smartdns 配置文件模板"
+        fi
+    fi
+    
+    # ============================================
+    # 通用的feeds配置（兼容所有源码类型）
+    # ============================================
+    
     if [ -f "feeds.conf.default" ]; then
         cp "feeds.conf.default" "feeds.conf.default.bak"
         log "  ✅ 备份原有feeds配置"
     fi
     
-    # ============================================
-    # 根据源码类型配置feeds
-    # ============================================
     > feeds.conf.default
     
     case "$SOURCE_REPO_TYPE" in
@@ -1101,8 +1134,7 @@ EOF
                 *"22.03"*) branch_suffix="openwrt-22.03" ;;
                 *"21.02"*) branch_suffix="openwrt-21.02" ;;
                 *"19.07"*) branch_suffix="openwrt-19.07" ;;
-                "main") branch_suffix="main" ;;
-                "master") branch_suffix="master" ;;
+                "main"|"master") branch_suffix="main" ;;
                 *) branch_suffix="$SELECTED_BRANCH" ;;
             esac
             
@@ -1117,7 +1149,6 @@ EOF
             log "🔧 ImmortalWrt源码模式: 使用ImmortalWrt官方feeds"
             local branch_suffix=""
             case "$SELECTED_BRANCH" in
-                *"24.10"*) branch_suffix="openwrt-24.10" ;;
                 *"23.05"*) branch_suffix="openwrt-23.05" ;;
                 *"21.02"*) branch_suffix="openwrt-21.02" ;;
                 *"18.06"*) branch_suffix="openwrt-18.06" ;;
@@ -1143,21 +1174,15 @@ EOF
             ;;
     esac
     
-    # ============================================
     # 根据配置模式添加额外feeds
-    # ============================================
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         case "$SOURCE_REPO_TYPE" in
             "immortalwrt"|"lede")
-                if [ -n "${TURBOACC_FEED_URL}" ]; then
-                    echo "src-git turboacc ${TURBOACC_FEED_URL}" >> feeds.conf.default
-                else
-                    echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-                fi
+                echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
                 log "✅ 添加TurboACC feed"
                 ;;
             "openwrt")
-                log "ℹ️ OpenWrt官方源码不添加TurboACC feed"
+                log "⚠️ OpenWrt官方源码可能不支持TurboACC feed，已跳过"
                 ;;
         esac
     fi
@@ -1174,39 +1199,6 @@ EOF
     ./scripts/feeds install -a || {
         log "⚠️ feeds安装有警告，尝试继续..."
     }
-    
-    # ============================================
-    # 获取需要禁用的插件列表
-    # ============================================
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
-    log "🔧 基础禁用插件: $base_forbidden"
-    
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
-    
-    local search_keywords=()
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
-    for pkg in "${BASE_PKGS[@]}"; do
-        search_keywords+=("$pkg")
-        search_keywords+=("luci-app-${pkg}")
-        search_keywords+=("${pkg}-scripts")
-    done
-    
-    log "🔧 删除不需要的插件包..."
-    for keyword in "${search_keywords[@]}"; do
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除包目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-        if [ -d "feeds" ]; then
-            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除 feeds 目录: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
     
     log "✅ Feeds配置完成"
 }
@@ -1785,7 +1777,7 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 使用MK文件中定义的设备名（保持原始格式，如 cmcc_rax3000m-nand）
+    # 关键：使用MK文件中定义的设备名（保持原始格式，如 cmcc_rax3000m-nand）
     local device_for_config="$mk_device_name"
     log "🔧 使用MK文件设备名: $device_for_config"
     
@@ -4318,21 +4310,22 @@ workflow_step25_build_firmware() {
     
     # 通用预创建：为所有ipkg目录创建etc/config
     find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_base; do
-        local arch=$(basename "$ipkg_base" | sed 's/ipkg-//')
         find "$ipkg_base" -maxdepth 1 -type d | while read pkg_dir; do
             if [ -d "$pkg_dir" ] && [ "$pkg_dir" != "$ipkg_base" ]; then
                 local pkg_name=$(basename "$pkg_dir")
                 mkdir -p "$pkg_dir/etc/config"
                 touch "$pkg_dir/etc/config/$pkg_name" 2>/dev/null
-                log "  ✅ 创建: $pkg_dir/etc/config/$pkg_name"
             fi
         done
     done
     
+    # 设置文件描述符限制
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
+    # 创建双固件保护脚本
+    log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
     
@@ -4396,6 +4389,7 @@ echo "=== 强制恢复结束 ==="
 EOF
     chmod +x "$protect_dir/recover.sh"
     
+    # 系统信息
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
     
@@ -4405,6 +4399,7 @@ EOF
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     
+    # 根据不同源码类型设置编译参数
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
         "openwrt"|"lede")
@@ -4415,6 +4410,7 @@ EOF
             ;;
     esac
     
+    # 智能判断并行任务数
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
             MAKE_JOBS=4
@@ -4429,6 +4425,7 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
+    # 编译循环
     local max_attempts=3
     local attempt=1
     local compile_success=0
@@ -4460,7 +4457,7 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            # 通用的错误修复
+            # 检测并修复 package/install 错误
             if grep -q "package/install.*Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
                 rm -f staging_dir/target-*/.stamp_package_install
@@ -4469,21 +4466,33 @@ EOF
             
             # 修复smartdns打包错误
             if grep -q "smartdns.*No such file" "$log_file"; then
-                log "  ⚠️ 检测到 smartdns 打包错误，预创建配置文件..."
+                log "  ⚠️ 检测到 smartdns 打包错误，强制创建配置文件..."
                 find build_dir -type d -name "smartdns-*" 2>/dev/null | while read smartdns_dir; do
-                    local target_arch=$(basename "$smartdns_dir" | sed 's/smartdns-//' | cut -d'/' -f1)
-                    if [ -n "$target_arch" ]; then
-                        local ipkg_dir="$smartdns_dir/ipkg-$target_arch/smartdns"
-                        mkdir -p "$ipkg_dir/etc/config"
-                        touch "$ipkg_dir/etc/config/smartdns" 2>/dev/null
-                        log "    ✅ 创建: $ipkg_dir/etc/config/smartdns"
+                    # 找到 ipkg 目录
+                    local ipkg_dir=$(find "$smartdns_dir" -type d -name "ipkg-*" 2>/dev/null | head -1)
+                    if [ -n "$ipkg_dir" ]; then
+                        local pkg_dir=$(find "$ipkg_dir" -type d -name "smartdns" 2>/dev/null | head -1)
+                        if [ -n "$pkg_dir" ]; then
+                            mkdir -p "$pkg_dir/etc/config"
+                            touch "$pkg_dir/etc/config/smartdns"
+                            chmod 644 "$pkg_dir/etc/config/smartdns"
+                            log "    ✅ 强制创建: $pkg_dir/etc/config/smartdns"
+                        fi
                     fi
                 done
             fi
             
+            # 修复 Broken pipe 错误
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
+            fi
+            
+            # 修复 libssl 缺失问题
+            if grep -q "libssl was not found" "$log_file"; then
+                log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
+                sudo apt-get update > /dev/null 2>&1 || true
+                sudo apt-get install -y libssl-dev > /dev/null 2>&1 || true
             fi
         fi
         
@@ -4502,6 +4511,7 @@ EOF
         exit $PHASE1_EXIT_CODE
     fi
     
+    # 第二阶段：单线程生成最终固件
     echo ""
     echo "🚀 第二阶段：单线程生成最终固件"
     echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
@@ -4524,9 +4534,11 @@ EOF
     
     cat build_phase1_attempt*.log build_phase2.log > build.log
     
+    # 停止保护脚本
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
     
+    # 验证固件
     log "🔍 验证固件..."
     
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
