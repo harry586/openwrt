@@ -1803,7 +1803,8 @@ workflow_step15_generate_config() {
         log "⚠️ 警告：无法提取设备 $search_device 的配置块"
     fi
     
-    # 关键修复：使用MK文件中的设备名（原始格式），不要转换
+    # 关键修复：直接使用MK文件中的设备名（原始格式），不要做任何转换
+    # 这里将 DEVICE 设置为 MK文件中的原始设备名
     export DEVICE="$device_for_config"
     log "🔧 设置 DEVICE=$DEVICE 用于 generate_config"
     
@@ -4284,13 +4285,13 @@ workflow_step23_pre_build_check() {
 
 #【build_firmware_main.sh-40】
 # ============================================
-# 步骤25: 编译固件（修复编译错误，兼容所有源码）
+# 步骤25: 编译固件（修复smartdns打包错误）
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（修复编译错误，兼容所有源码） ==="
+    log "=== 步骤25: 编译固件（修复smartdns打包错误） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -4299,97 +4300,39 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 设置文件描述符限制
+    # 预创建smartdns配置文件（修复打包错误）
     # ============================================
+    log "🔧 预创建smartdns配置文件..."
+    
+    # 查找所有smartdns的构建目录并创建配置文件
+    find build_dir -type d -name "smartdns-*" 2>/dev/null | while read smartdns_dir; do
+        # 创建ipkg目录结构
+        local target_arch=$(basename "$smartdns_dir" | sed 's/smartdns-//' | cut -d'/' -f1)
+        if [ -n "$target_arch" ]; then
+            local ipkg_dir="$smartdns_dir/ipkg-$target_arch/smartdns"
+            mkdir -p "$ipkg_dir/etc/config"
+            touch "$ipkg_dir/etc/config/smartdns" 2>/dev/null
+            log "  ✅ 创建: $ipkg_dir/etc/config/smartdns"
+        fi
+    done
+    
+    # 通用预创建：为所有ipkg目录创建etc/config
+    find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_base; do
+        local arch=$(basename "$ipkg_base" | sed 's/ipkg-//')
+        find "$ipkg_base" -maxdepth 1 -type d | while read pkg_dir; do
+            if [ -d "$pkg_dir" ] && [ "$pkg_dir" != "$ipkg_base" ]; then
+                local pkg_name=$(basename "$pkg_dir")
+                mkdir -p "$pkg_dir/etc/config"
+                touch "$pkg_dir/etc/config/$pkg_name" 2>/dev/null
+                log "  ✅ 创建: $pkg_dir/etc/config/$pkg_name"
+            fi
+        done
+    done
+    
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # ============================================
-    # 根据源码类型修复编译错误
-    # ============================================
-    case "$SOURCE_REPO_TYPE" in
-        "lede")
-            log "🔧 LEDE源码特殊处理：修复编译错误"
-            
-            # 修复 ath10k-ct 编译错误（strlcpy 问题）
-            log "  🔍 检查并修复 ath10k-ct 驱动..."
-            local ath10k_ct_dirs=$(find build_dir -type d -path "*/ath10k-ct-*/ath10k-*" 2>/dev/null)
-            
-            for dir in $ath10k_ct_dirs; do
-                if [ -d "$dir" ]; then
-                    log "  ✅ 找到 ath10k-ct 源码: $dir"
-                    
-                    # 检查是否已经修复
-                    if ! grep -q "strscpy" "$dir/core.c" 2>/dev/null; then
-                        log "  🔧 应用 strlcpy -> strscpy 补丁"
-                        
-                        # 创建补丁文件
-                        local patch_file="$dir/0001-fix-strlcpy.patch"
-                        cat > "$patch_file" << 'EOF'
---- a/core.c
-+++ b/core.c
-@@ -1543,7 +1543,11 @@ static int ath10k_init_configure_target(struct ath10k *ar)
- 	if (ar->fwcfg.bname[0] != '\0') {
- 		char boardname[100];
- 
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,18,0)
-+		strscpy(boardname, ar->fwcfg.bname, sizeof(boardname));
-+#else
- 		strlcpy(boardname, ar->fwcfg.bname, sizeof(boardname));
-+#endif
- 		ath10k_dbg(ar, ATH10K_DBG_BOOT, "boot using board name %s\n",
- 			   boardname);
- 		return 0;
-@@ -1579,7 +1583,11 @@ static int ath10k_core_dump(struct ath10k *ar, u8 *buf, size_t buf_sz)
- 	if (!buf)
- 		return -ENOMEM;
- 
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,18,0)
-+	strscpy(dump_data->df_magic, "ATH10K-FW-DUMP",
-+#else
- 	strlcpy(dump_data->df_magic, "ATH10K-FW-DUMP",
-+#endif
- 		sizeof(dump_data->df_magic));
- 
- 	dump_data->df_version = ATH10K_FW_CRASH_DUMP_VERSION;
-EOF
-                        # 应用补丁
-                        (cd "$dir" && patch -p1 < "$patch_file" 2>/dev/null) || true
-                        log "  ✅ 补丁应用完成"
-                    else
-                        log "  ✅ ath10k-ct 已修复"
-                    fi
-                fi
-            done
-            
-            # 修复 toolchain 编译卡住的问题
-            log "  🔧 优化 toolchain 编译..."
-            if [ -d "toolchain" ]; then
-                # 增加编译超时设置
-                export BUILD_TIMEOUT=7200  # 2小时
-            fi
-            ;;
-            
-        "openwrt")
-            log "🔧 OpenWrt源码特殊处理"
-            # OpenWrt 可能需要其他修复
-            ;;
-            
-        "immortalwrt")
-            log "🔧 ImmortalWrt源码特殊处理"
-            # ImmortalWrt 可能需要其他修复
-            ;;
-            
-        *)
-            log "🔧 通用源码处理"
-            ;;
-    esac
-    
-    # ============================================
-    # 创建双固件保护脚本
-    # ============================================
-    log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
     
@@ -4462,31 +4405,13 @@ EOF
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     
-    # 根据不同源码类型设置编译参数
     local make_args="V=s"
-    local make_jobs_param=""
-    
     case "$SOURCE_REPO_TYPE" in
-        "lede")
-            make_args="V=s IGNORE_ERRORS=m"
-            # LEDE 可能需要更保守的编译参数
-            if [ $CPU_CORES -gt 4 ]; then
-                make_jobs_param="-j4"
-            else
-                make_jobs_param="-j$CPU_CORES"
-            fi
-            ;;
-        "openwrt")
+        "openwrt"|"lede")
             make_args="V=s FORCE_UNSAFE_CONFIGURE=1"
-            make_jobs_param="-j$CPU_CORES"
             ;;
         "immortalwrt")
             make_args="V=s"
-            make_jobs_param="-j$CPU_CORES"
-            ;;
-        *)
-            make_args="V=s"
-            make_jobs_param="-j$CPU_CORES"
             ;;
     esac
     
@@ -4504,7 +4429,6 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    # 编译循环
     local max_attempts=3
     local attempt=1
     local compile_success=0
@@ -4543,50 +4467,24 @@ EOF
                 rm -f tmp/info/.packageinfo-*
             fi
             
+            # 修复smartdns打包错误
+            if grep -q "smartdns.*No such file" "$log_file"; then
+                log "  ⚠️ 检测到 smartdns 打包错误，预创建配置文件..."
+                find build_dir -type d -name "smartdns-*" 2>/dev/null | while read smartdns_dir; do
+                    local target_arch=$(basename "$smartdns_dir" | sed 's/smartdns-//' | cut -d'/' -f1)
+                    if [ -n "$target_arch" ]; then
+                        local ipkg_dir="$smartdns_dir/ipkg-$target_arch/smartdns"
+                        mkdir -p "$ipkg_dir/etc/config"
+                        touch "$ipkg_dir/etc/config/smartdns" 2>/dev/null
+                        log "    ✅ 创建: $ipkg_dir/etc/config/smartdns"
+                    fi
+                done
+            fi
+            
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
             fi
-            
-            # 源码特定的错误修复
-            case "$SOURCE_REPO_TYPE" in
-                "lede")
-                    if grep -q "strlcpy" "$log_file" && grep -q "ath10k" "$log_file"; then
-                        log "  ⚠️ 检测到 ath10k-ct strlcpy 错误，尝试修复..."
-                        # 重新应用补丁
-                        local ath10k_dirs=$(find build_dir -type d -path "*/ath10k-ct-*/ath10k-*" 2>/dev/null)
-                        for dir in $ath10k_dirs; do
-                            if [ -d "$dir" ] && [ -f "$dir/core.c" ]; then
-                                sed -i 's/strlcpy/strscpy/g' "$dir/core.c"
-                                log "  ✅ 手动替换 strlcpy -> strscpy"
-                            fi
-                        done
-                    fi
-                    
-                    if grep -q "timed out" "$log_file"; then
-                        log "  ⚠️ 检测到编译超时，尝试增加超时设置..."
-                        export BUILD_TIMEOUT=10800  # 3小时
-                    fi
-                    ;;
-                    
-                "openwrt")
-                    if grep -q "Python syntax" "$log_file" || grep -q "Missing parentheses" "$log_file"; then
-                        log "  ⚠️ 检测到 Python 语法错误，设置 Python 版本..."
-                        update-alternatives --set python /usr/bin/python3 2>/dev/null || true
-                    fi
-                    
-                    if grep -q "pkg-config" "$log_file"; then
-                        log "  ⚠️ 检测到 pkg-config 错误，安装必要依赖..."
-                        sudo apt-get install -y pkg-config libssl-dev > /dev/null 2>&1 || true
-                    fi
-                    ;;
-                    
-                "immortalwrt")
-                    if grep -q "trusted-firmware-a" "$log_file" && grep -q "Download failed" "$log_file"; then
-                        log "  ⚠️ 检测到 trusted-firmware-a 下载失败，尝试使用本地缓存..."
-                    fi
-                    ;;
-            esac
         fi
         
         attempt=$((attempt + 1))
