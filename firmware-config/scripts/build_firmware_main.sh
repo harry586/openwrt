@@ -1382,6 +1382,7 @@ generate_config() {
     
     local openwrt_device=""
     local search_device=""
+    local device_config_name=""
     
     case "$SOURCE_REPO_TYPE" in
         "lede")
@@ -1402,11 +1403,13 @@ generate_config() {
                     log "🔧 LEDE设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
                     ;;
                 *)
-                    openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+                    openwrt_device="$DEVICE"
                     search_device="$DEVICE"
                     log "🔧 LEDE使用原始设备名: $openwrt_device"
                     ;;
             esac
+            # LEDE设备名保持连字符格式，不需要转换
+            device_config_name="$openwrt_device"
             ;;
         "openwrt"|"immortalwrt")
             case "$DEVICE" in
@@ -1426,24 +1429,25 @@ generate_config() {
                     log "🔧 OpenWrt设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
                     ;;
                 *)
-                    openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+                    openwrt_device="$DEVICE"
                     search_device="$DEVICE"
                     log "🔧 OpenWrt使用原始设备名: $openwrt_device"
                     ;;
             esac
+            # OpenWrt/ImmortalWrt需要将连字符转换为下划线
+            device_config_name=$(echo "$openwrt_device" | tr '-' '_')
             ;;
         *)
-            openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+            openwrt_device="$DEVICE"
             search_device="$DEVICE"
+            device_config_name=$(echo "$openwrt_device" | tr '-' '_')
             log "🔧 使用原始设备名: $openwrt_device"
             ;;
     esac
     
-    local device_lower="$openwrt_device"
-    local device_config_name=$(echo "$device_lower" | tr '-' '_')
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}"
     
-    log "🔧 设备配置变量: $device_config=y (原始设备名: $device_lower)"
+    log "🔧 设备配置变量: $device_config=y (原始设备名: $openwrt_device)"
     
     # ============================================
     # 根据源码类型选择配置生成方式
@@ -1461,14 +1465,14 @@ EOF
             handle_error "LEDE基础配置失败"
         }
         
-        # 然后再添加设备配置
+        # 然后再添加设备配置（使用连字符格式）
         log "🔧 添加设备配置: $device_config=y"
         echo "${device_config}=y" >> .config
         
         # 使用olddefconfig而不是defconfig，避免覆盖
         make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || true
     else
-        # 其他源码类型使用原来的方式
+        # 其他源码类型使用原来的方式（下划线格式）
         cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -1899,7 +1903,7 @@ EOF
         fi
     fi
     
-    log "🔍 正在验证设备 $device_lower 是否被选中..."
+    log "🔍 正在验证设备 $openwrt_device 是否被选中..."
     
     if grep -q "^${device_config}=y" .config; then
         log "✅ 目标设备已正确启用: ${device_config}=y"
