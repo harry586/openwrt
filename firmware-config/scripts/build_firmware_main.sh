@@ -1490,6 +1490,21 @@ EOF
         log "✅ ath10k-ct驱动已强制启用"
     fi
     
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ "$TARGET" = "mediatek" ]; then
+        log "🔧 LEDE + mediatek 平台特殊处理：禁用有问题的 ath10k-ct 驱动"
+        
+        sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct/d' .config
+        sed -i '/CONFIG_PACKAGE_ath10k-firmware/d' .config
+        sed -i '/CONFIG_PACKAGE_ath10k-board/d' .config
+        
+        echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
+        echo "# CONFIG_PACKAGE_ath10k-firmware-qca988x is not set" >> .config
+        echo "# CONFIG_PACKAGE_ath10k-firmware-qca9984 is not set" >> .config
+        echo "# CONFIG_PACKAGE_ath10k-firmware-qca4019 is not set" >> .config
+        
+        log "  ✅ 已禁用 ath10k-ct 驱动（避免 API 不匹配错误）"
+    fi
+    
     log "🔧 强制配置生成固件..."
     
     if grep -q "CONFIG_TARGET_IMAGES_FIT=y" .config; then
@@ -4902,6 +4917,41 @@ INNEREOF
                 done
             fi
             
+            if grep -q "samba4.*Error" "$log_file" || grep -q "samba.*configure.*error" "$log_file"; then
+                log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
+                
+                rm -f staging_dir/target-*/stamp/.samba4* 2>/dev/null
+                rm -f build_dir/target-*/samba-*/.built 2>/dev/null
+                
+                if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                    sudo apt-get install -y python3-distutils python3-dev libpython3-dev 2>/dev/null || true
+                    
+                    find build_dir -name "samba-*" -type d 2>/dev/null | while read samba_dir; do
+                        rm -f "$samba_dir/.configured" 2>/dev/null
+                        log "    清理 samba 配置缓存: $samba_dir"
+                    done
+                fi
+                
+                log "  ✅ samba4 错误修复完成"
+            fi
+            
+            if grep -q "ath10k.*Error" "$log_file" || grep -q "ath10k.*error:" "$log_file"; then
+                log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
+                
+                find build_dir -type d -name "ath10k-ct*" 2>/dev/null | while read ath10k_dir; do
+                    log "    清理 ath10k 目录: $ath10k_dir"
+                    rm -rf "$ath10k_dir"
+                done
+                
+                if [ -f ".config" ]; then
+                    sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
+                    echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
+                    log "    已在配置中禁用 kmod-ath10k-ct"
+                fi
+                
+                log "  ✅ ath10k-ct 错误修复完成"
+            fi
+            
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
                 if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
                     log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
@@ -5469,6 +5519,8 @@ quick_error_check() {
             ["Broken pipe"]="Broken pipe|write error"
             ["符号链接循环"]="Too many levels of symbolic links"
             ["package/install错误"]="package/install.*Error 255|package/install.*Error"
+            ["samba4错误"]="samba4.*Error|samba.*configure.*error"
+            ["ath10k错误"]="ath10k.*Error|ath10k.*error:"
         )
 
         local found=0
