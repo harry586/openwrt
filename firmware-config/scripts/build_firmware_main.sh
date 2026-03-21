@@ -1333,26 +1333,7 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # ============================================
-    # 直接从MK文件获取设备名（保留原始格式）
-    # ============================================
-    local search_device=""
-    case "$DEVICE" in
-        cmcc_rax3000m-nand|cmcc_rax3000m)
-            search_device="rax3000m"
-            ;;
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            search_device="ac42u"
-            ;;
-        netgear_wndr3800)
-            search_device="wndr3800"
-            ;;
-        *)
-            search_device="$DEVICE"
-            ;;
-    esac
-    
-    # 查找MK文件中的设备定义
+    local search_device="$DEVICE"
     local mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
     local mk_device_name=""
     local mk_file=""
@@ -1360,12 +1341,35 @@ generate_config() {
     for file in $mk_files; do
         if grep -q "define Device.*$search_device" "$file" 2>/dev/null; then
             mk_file="$file"
-            # 提取define行中的设备名（保留原始格式，如 cmcc_rax3000m-nand）
             mk_device_name=$(grep -m1 "define Device.*$search_device" "$file" | sed 's/define Device\///' | awk '{print $1}')
             log "✅ 找到设备定义: $mk_device_name (在 $file)"
             break
         fi
     done
+    
+    if [ -z "$mk_device_name" ] && [[ "$search_device" == *"_"* ]]; then
+        local alt_search="${search_device//_/-}"
+        for file in $mk_files; do
+            if grep -q "define Device.*$alt_search" "$file" 2>/dev/null; then
+                mk_file="$file"
+                mk_device_name=$(grep -m1 "define Device.*$alt_search" "$file" | sed 's/define Device\///' | awk '{print $1}')
+                log "✅ 通过连字符转换找到设备定义: $mk_device_name (在 $file)"
+                break
+            fi
+        done
+    fi
+    
+    if [ -z "$mk_device_name" ] && [[ "$search_device" == *"-"* ]]; then
+        local alt_search="${search_device//-/_}"
+        for file in $mk_files; do
+            if grep -q "define Device.*$alt_search" "$file" 2>/dev/null; then
+                mk_file="$file"
+                mk_device_name=$(grep -m1 "define Device.*$alt_search" "$file" | sed 's/define Device\///' | awk '{print $1}')
+                log "✅ 通过下划线转换找到设备定义: $mk_device_name (在 $file)"
+                break
+            fi
+        done
+    fi
     
     if [ -z "$mk_device_name" ]; then
         log "❌ 错误：未找到设备 $DEVICE 的定义文件"
@@ -1373,21 +1377,15 @@ generate_config() {
         exit 1
     fi
     
-    # 使用MK文件中定义的设备名（原始格式）
     local openwrt_device="$mk_device_name"
     log "🔧 使用MK文件设备名: $openwrt_device"
     
-    # 直接使用MK文件中的设备名，不做任何转换
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${openwrt_device}"
     
     log "🔧 设备配置变量: $device_config=y"
     log "🔧 MK文件设备名: $openwrt_device"
     
-    # ============================================
-    # 根据源码类型选择配置生成方式
-    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        # LEDE特殊处理：先设置目标平台
         log "🔧 LEDE源码特殊处理：先设置目标平台"
         cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
@@ -1399,14 +1397,11 @@ EOF
             handle_error "LEDE基础配置失败"
         }
         
-        # 然后再添加设备配置（使用原始设备名）
         log "🔧 添加设备配置: $device_config=y"
         echo "${device_config}=y" >> .config
         
-        # 使用olddefconfig而不是defconfig，避免覆盖
         make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || true
     else
-        # 其他源码类型使用原来的方式
         cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
@@ -1544,7 +1539,6 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 内核配置检测
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
@@ -1626,7 +1620,6 @@ EOF
         fi
     fi
     
-    # 根据源码类型选择配置更新方式
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔄 LEDE使用 olddefconfig 更新配置..."
         make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
@@ -1642,7 +1635,6 @@ EOF
     fi
     log "✅ 第一次配置更新成功"
     
-    # 重新运行defconfig使格式配置生效
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
             log "⚠️ olddefconfig 有警告，但继续"
@@ -1763,7 +1755,6 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 第二次配置更新
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔄 LEDE第二次使用 olddefconfig..."
         make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
@@ -3958,40 +3949,13 @@ workflow_step15_generate_config() {
         log "⚠️ DEVICE为空，使用参数: $DEVICE"
     fi
     
-    local device_for_config="$DEVICE"
-    case "$DEVICE" in
-        ac42u|rt-ac42u)
-            device_for_config="asus_rt-ac42u"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        acrh17|rt-acrh17)
-            device_for_config="asus_rt-acrh17"
-            log "🔧 设备名转换: $DEVICE -> $device_for_config"
-            ;;
-        *)
-            device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-            ;;
-    esac
-    
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     log ""
     log "=== 🔍 设备定义文件验证（前置检查） ==="
     
-    local search_device=""
-    case "$DEVICE" in
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            search_device="ac42u"
-            ;;
-        acrh17|rt-acrh17|asus_rt-acrh17)
-            search_device="acrh17"
-            ;;
-        *)
-            search_device="$DEVICE"
-            ;;
-    esac
-    
-    log "搜索设备名: $search_device"
+    local search_device="$DEVICE"
+    log "搜索设备名: $DEVICE (原始)"
     log "搜索路径: target/linux/$TARGET"
     
     echo ""
@@ -4014,15 +3978,43 @@ workflow_step15_generate_config() {
     echo ""
     
     local device_file=""
+    local mk_device_name=""
+    
     for mkfile in "${mk_files[@]}"; do
         if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
+            mk_device_name=$(grep -m1 "define Device.*$search_device" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
+            log "✅ 找到设备定义: $mk_device_name (在 $device_file)"
             break
         fi
     done
     
+    if [ -z "$device_file" ] && [[ "$search_device" == *"_"* ]]; then
+        local alt_search="${search_device//_/-}"
+        for mkfile in "${mk_files[@]}"; do
+            if grep -q "define Device.*$alt_search" "$mkfile" 2>/dev/null; then
+                device_file="$mkfile"
+                mk_device_name=$(grep -m1 "define Device.*$alt_search" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
+                log "✅ 通过连字符转换找到设备定义: $mk_device_name (在 $device_file)"
+                break
+            fi
+        done
+    fi
+    
+    if [ -z "$device_file" ] && [[ "$search_device" == *"-"* ]]; then
+        local alt_search="${search_device//-/_}"
+        for mkfile in "${mk_files[@]}"; do
+            if grep -q "define Device.*$alt_search" "$mkfile" 2>/dev/null; then
+                device_file="$mkfile"
+                mk_device_name=$(grep -m1 "define Device.*$alt_search" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
+                log "✅ 通过下划线转换找到设备定义: $mk_device_name (在 $device_file)"
+                break
+            fi
+        done
+    fi
+    
     if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
-        log "❌ 错误：未找到设备 $DEVICE (搜索名: $search_device) 的定义文件"
+        log "❌ 错误：未找到设备 $DEVICE 的定义文件"
         log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
         exit 1
     fi
@@ -4030,7 +4022,7 @@ workflow_step15_generate_config() {
     log "✅ 找到设备定义文件: $device_file"
     
     local device_block=""
-    device_block=$(awk "/define Device.*$search_device/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+    device_block=$(awk "/define Device.*$mk_device_name/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
     
     if [ -n "$device_block" ]; then
         echo ""
@@ -4040,27 +4032,26 @@ workflow_step15_generate_config() {
         echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
         echo "----------------------------------------"
     else
-        log "⚠️ 警告：无法提取设备 $search_device 的配置块"
+        log "⚠️ 警告：无法提取设备 $mk_device_name 的配置块"
     fi
     
-    # 调用 generate_config 函数
+    local device_for_config="$mk_device_name"
+    log "🔧 最终使用设备名: $device_for_config"
+    
     generate_config "$extra_packages" "$device_for_config"
     
     log ""
     log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
     
-    # 获取基础禁用列表
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
     IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
     
-    # 生成完整禁用列表
     local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
     
     log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
     
     cp .config .config.before_disable
     
-    # 第一轮：禁用所有主包和子包
     log "🔧 第一轮禁用..."
     for plugin in "${full_forbidden_list[@]}"; do
         [ -z "$plugin" ] && continue
@@ -4070,7 +4061,6 @@ workflow_step15_generate_config() {
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
     done
     
-    # 特别处理 nlbwmon 和 wol（确保彻底禁用）
     log "🔧 特别处理 nlbwmon 和 wol..."
     local special_plugins=(
         "nlbwmon"
@@ -4090,7 +4080,6 @@ workflow_step15_generate_config() {
         echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
     done
     
-    # 删除所有 INCLUDE 子选项
     sed -i '/CONFIG_PACKAGE_luci-app-.*_INCLUDE_/d' .config
     
     sort -u .config > .config.tmp && mv .config.tmp .config
@@ -4104,7 +4093,6 @@ workflow_step15_generate_config() {
         }
         
         local still_enabled=0
-        # 检查基础包
         for plugin in "${BASE_PKGS[@]}"; do
             if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
                 still_enabled=$((still_enabled + 1))
@@ -4136,7 +4124,6 @@ workflow_step15_generate_config() {
     log "📊 最终插件状态验证:"
     local still_enabled_final=0
     
-    # 检查所有需要禁用的插件
     for plugin in "${BASE_PKGS[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
             log "  ❌ $plugin 仍然被启用"
@@ -4160,7 +4147,6 @@ workflow_step15_generate_config() {
     else
         log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
         
-        # 最终强力禁用
         log "🔧 执行最终强力禁用..."
         for plugin in "${BASE_PKGS[@]}"; do
             sed -i "/${plugin}/d" .config
@@ -4712,12 +4698,10 @@ workflow_step25_build_firmware() {
     
     cd $BUILD_DIR
     
-    # 设置文件描述符限制
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # 创建双固件保护脚本
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -4846,31 +4830,38 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            # 通用的错误修复
-            if grep -q "package/install.*Error" "$log_file"; then
+            if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
-                rm -f staging_dir/target-*/.stamp_package_install
-                rm -f tmp/info/.packageinfo-*
+                
+                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
+                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
+                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
+                rm -f tmp/info/.packageinfo-* 2>/dev/null
+                
+                find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
+                    log "    清理 ipkg 目录: $ipkg_dir"
+                    rm -rf "$ipkg_dir"
+                done
+                
+                log "    重新安装 feeds..."
+                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+                
+                log "  ✅ package/install 错误修复完成"
             fi
             
-            # 修复smartdns打包错误
             if grep -q "smartdns.*No such file" "$log_file"; then
                 log "  ⚠️ 检测到 smartdns 打包错误，强制创建配置文件..."
                 
-                # 查找所有smartdns的构建目录
                 find build_dir -type d -name "smartdns-*" 2>/dev/null | while read smartdns_dir; do
                     log "    找到 smartdns 目录: $smartdns_dir"
                     
-                    # 找到 ipkg 目录
                     local ipkg_dir=$(find "$smartdns_dir" -type d -name "ipkg-*" 2>/dev/null | head -1)
                     if [ -n "$ipkg_dir" ]; then
-                        # 找到 smartdns 包目录
                         local pkg_dir=$(find "$ipkg_dir" -type d -name "smartdns" 2>/dev/null | head -1)
                         if [ -n "$pkg_dir" ]; then
                             mkdir -p "$pkg_dir/etc/config"
                             cat > "$pkg_dir/etc/config/smartdns" << 'INNEREOF'
 # SmartDNS configuration
-# This file is auto-generated to fix packaging error
 config smartdns
     option enabled '1'
     option port '6053'
@@ -4881,14 +4872,12 @@ INNEREOF
                         fi
                     fi
                     
-                    # 也尝试直接创建 ipkg 目录下的配置
                     local target_arch=$(basename "$smartdns_dir" | sed 's/smartdns-//' | cut -d'/' -f1)
                     if [ -n "$target_arch" ]; then
                         local alt_ipkg_dir="$smartdns_dir/ipkg-$target_arch/smartdns"
                         mkdir -p "$alt_ipkg_dir/etc/config"
                         cat > "$alt_ipkg_dir/etc/config/smartdns" << 'INNEREOF'
 # SmartDNS configuration
-# This file is auto-generated to fix packaging error
 config smartdns
     option enabled '1'
     option port '6053'
@@ -4899,12 +4888,10 @@ INNEREOF
                     fi
                 done
                 
-                # 额外处理：直接在所有 ipkg 目录中查找并创建
                 find build_dir -type d -path "*/ipkg-*/smartdns" 2>/dev/null | while read pkg_dir; do
                     mkdir -p "$pkg_dir/etc/config"
                     cat > "$pkg_dir/etc/config/smartdns" << 'INNEREOF'
 # SmartDNS configuration
-# This file is auto-generated to fix packaging error
 config smartdns
     option enabled '1'
     option port '6053'
@@ -4913,6 +4900,14 @@ INNEREOF
                     chmod 644 "$pkg_dir/etc/config/smartdns"
                     log "    ✅ 直接创建: $pkg_dir/etc/config/smartdns"
                 done
+            fi
+            
+            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
+                    log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
+                    make defconfig > /tmp/lede_defconfig_fix.log 2>&1 || true
+                    log "  ✅ kmod 依赖修复完成"
+                fi
             fi
             
             if grep -q "Broken pipe" "$log_file"; then
@@ -5394,7 +5389,6 @@ quick_error_check() {
         return 1
     }
 
-    # 创建输出文件并写入内容
     {
         echo ""
         echo "================================================================="
@@ -5404,12 +5398,10 @@ quick_error_check() {
         echo "目标平台: $target_platform"
         echo "================================================================="
 
-        # 查找可用的日志文件（优先使用最新的尝试日志）
         local latest_log=""
         if [ -f "$log_file" ]; then
             latest_log="$log_file"
         else
-            # 查找 build_phase* 文件并按时间排序取最新的
             latest_log=$(ls -t build_phase*.log 2>/dev/null | head -1)
         fi
 
@@ -5421,17 +5413,12 @@ quick_error_check() {
         echo "📄 分析日志: $latest_log"
         echo ""
 
-        # ============================================
-        # 1. 检查编译退出代码
-        # ============================================
         echo "🔍 1. 编译退出状态检查:"
         echo "----------------------------------------"
         
-        # 从日志中查找编译错误退出
         local compile_errors=0
         local fatal_errors=0
         
-        # 检查 make 错误退出
         if grep -q "make:.*Error [0-9]\+" "$latest_log" || grep -q "make\[[0-9]\].*Error [0-9]\+" "$latest_log"; then
             echo "❌ 检测到 make 编译错误退出:"
             grep -n "make:.*Error [0-9]\+" "$latest_log" | head -5 | while read line; do
@@ -5445,7 +5432,6 @@ quick_error_check() {
             compile_errors=1
         fi
         
-        # 检查 collect2: error
         if grep -q "collect2: error" "$latest_log"; then
             echo "❌ 检测到链接器错误:"
             grep -n "collect2: error" "$latest_log" | head -3 | while read line; do
@@ -5455,7 +5441,6 @@ quick_error_check() {
             compile_errors=1
         fi
         
-        # 检查 undefined reference
         if grep -q "undefined reference to" "$latest_log"; then
             echo "❌ 检测到未定义引用错误:"
             grep -n "undefined reference to" "$latest_log" | head -5 | while read line; do
@@ -5469,9 +5454,6 @@ quick_error_check() {
         fi
         echo ""
 
-        # ============================================
-        # 2. 定义错误模式
-        # ============================================
         declare -A error_patterns=(
             ["内核错误"]="Kernel panic|Oops|Unable to handle kernel"
             ["补丁失败"]="Patch failed|hunk FAILED|patch .* failed"
@@ -5486,6 +5468,7 @@ quick_error_check() {
             ["下载失败"]="curl:.* 401|curl:.* 404|Download failed|Connection failed"
             ["Broken pipe"]="Broken pipe|write error"
             ["符号链接循环"]="Too many levels of symbolic links"
+            ["package/install错误"]="package/install.*Error 255|package/install.*Error"
         )
 
         local found=0
@@ -5494,12 +5477,10 @@ quick_error_check() {
         
         for err_type in "${!error_patterns[@]}"; do
             local pattern="${error_patterns[$err_type]}"
-            # 使用 grep 提取匹配行及其前后各3行上下文，去重，限制输出
             local matches=$(grep -E -i -B 3 -A 3 "$pattern" "$latest_log" 2>/dev/null | grep -v "^--$" | head -20)
             if [ -n "$matches" ]; then
                 echo "❌ $err_type 检测到："
                 echo "$matches" | while IFS= read -r line; do
-                    # 限制每行长度
                     if [ ${#line} -gt 120 ]; then
                         line="${line:0:120}..."
                     fi
@@ -5515,17 +5496,12 @@ quick_error_check() {
         fi
         echo ""
 
-        # ============================================
-        # 3. 检查关键组件状态
-        # ============================================
         echo "🔍 3. 关键组件状态检查:"
         echo "----------------------------------------"
         
-        # 检查工具链状态
         if [ -d "staging_dir" ]; then
             echo "✅ staging_dir 存在"
             
-            # 检查GCC编译器
             local gcc_files=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -3)
             if [ -n "$gcc_files" ]; then
                 echo "✅ GCC编译器存在"
@@ -5536,7 +5512,6 @@ quick_error_check() {
             echo "❌ staging_dir 不存在"
         fi
         
-        # 检查feeds状态
         if [ -d "feeds" ]; then
             local feed_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
             feed_count=$((feed_count - 1))
@@ -5545,7 +5520,6 @@ quick_error_check() {
             echo "❌ feeds 不存在"
         fi
         
-        # 检查.config文件
         if [ -f ".config" ]; then
             local config_size=$(ls -lh .config | awk '{print $5}')
             echo "✅ .config 存在 ($config_size)"
@@ -5554,9 +5528,6 @@ quick_error_check() {
         fi
         echo ""
 
-        # ============================================
-        # 4. 检查固件生成状态
-        # ============================================
         echo "🔍 4. 固件生成状态检查:"
         echo "----------------------------------------"
         
@@ -5574,7 +5545,6 @@ quick_error_check() {
                 
                 found_firmware=$((found_firmware + 1))
                 
-                # 判断固件类型
                 local ftype=""
                 if [[ "$fname" == *"sysupgrade"* ]]; then
                     ftype="sysupgrade"
@@ -5588,13 +5558,11 @@ quick_error_check() {
                     ftype="other"
                 fi
                 
-                # 判断是否可刷机
                 local is_flashable=0
                 if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]] || [[ "$ftype" == "fit" ]]; then
                     is_flashable=1
                 fi
                 
-                # 大小验证
                 if [ $fsize_mb -ge 5 ]; then
                     if [ $is_flashable -eq 1 ]; then
                         echo "✅ $fname - ${fsize_human} (${fsize_mb}MB) - 可刷机"
@@ -5620,24 +5588,21 @@ quick_error_check() {
         fi
         echo ""
 
-        # ============================================
-        # 5. 额外检查：查看最后30行日志
-        # ============================================
         echo "🔍 5. 最后30行日志摘要:"
         echo "----------------------------------------"
         tail -30 "$latest_log" | sed 's/^/   /'
         echo ""
 
-        # ============================================
-        # 6. 错误统计和总结
-        # ============================================
         echo "================================================================="
         echo "📊 错误统计总结:"
         
-        # 统计错误数量
-        local error_count=$(grep -i -c "error" "$latest_log" 2>/dev/null || echo "0")
-        local warning_count=$(grep -i -c "warning" "$latest_log" 2>/dev/null || echo "0")
-        local fail_count=$(grep -i -c "fail" "$latest_log" 2>/dev/null || echo "0")
+        local error_count=$(grep -i -c "error" "$latest_log" 2>/dev/null)
+        local warning_count=$(grep -i -c "warning" "$latest_log" 2>/dev/null)
+        local fail_count=$(grep -i -c "fail" "$latest_log" 2>/dev/null)
+        
+        error_count=${error_count:-0}
+        warning_count=${warning_count:-0}
+        fail_count=${fail_count:-0}
         
         echo "  错误总数: $error_count"
         echo "  警告总数: $warning_count"
@@ -5651,7 +5616,6 @@ quick_error_check() {
             echo "❌❌❌ 编译失败：没有生成任何有效固件 ❌❌❌"
             echo "   退出代码检查:"
             
-            # 查找最后的错误退出
             tail -50 "$latest_log" | grep -E "make.*Error|exit status|ERROR:" | tail -5 | while read line; do
                 echo "   $line"
             done
@@ -5664,7 +5628,6 @@ quick_error_check() {
 
     echo "✅ 错误检查报告已保存到: $output_file"
     
-    # 如果有有效固件，返回0；否则返回1
     if [ $valid_firmware -gt 0 ]; then
         return 0
     else
@@ -5699,19 +5662,13 @@ workflow_step30_build_summary() {
     echo "配置来源: ${CONFIG_FILE:-使用脚本内默认值}"
     echo ""
     
-    # ============================================
-    # 修正：正确统计固件数量
-    # ============================================
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        # 统计所有 .bin 和 .img 文件（包括 .itb）
         FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | wc -l)
         
-        # 统计可刷机固件（排除 initramfs 等）
         local flashable_count=0
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             local fname=$(basename "$file")
-            # 排除 initramfs 文件
             if [[ "$fname" != *"initramfs"* ]] && [[ "$fname" != *"kernel"* ]] && [[ "$fname" != *"rootfs"* ]]; then
                 flashable_count=$((flashable_count + 1))
             fi
@@ -5725,7 +5682,6 @@ workflow_step30_build_summary() {
             echo "  产物位置: $BUILD_DIR/bin/targets/"
             echo "  下载名称: firmware-$timestamp_sec"
             
-            # 列出所有可刷机固件
             echo ""
             echo "📋 可刷机固件列表:"
             while IFS= read -r file; do
@@ -5781,31 +5737,24 @@ workflow_step30_build_summary() {
     echo "✅ 构建流程完成"
     echo "========================================"
     
-    # ========== 无条件运行快速错误检查，生成报告文件 ==========
     echo ""
     echo "🔧 运行快速错误检查（生成报告文件）..."
-    # 确保 TARGET 变量可用
     local target_for_check="${TARGET:-$([ -f "$BUILD_DIR/build_env.sh" ] && source "$BUILD_DIR/build_env.sh" && echo "$TARGET")}"
     local report_file="/tmp/quick-error-check-$timestamp_sec.txt"
     
-    # 调用快速错误检查，但不让它导致脚本退出
     set +e
     quick_error_check "$BUILD_DIR" "$target_for_check" "build.log" "$report_file"
     local check_result=$?
     set -e
     
-    # 复制报告到工作区，便于上传
     mkdir -p "$GITHUB_WORKSPACE/error-reports" 2>/dev/null || true
     if [ -f "$report_file" ]; then
         cp "$report_file" "$GITHUB_WORKSPACE/error-reports/" 2>/dev/null || true
         echo "ERROR_REPORT_PATH=$GITHUB_WORKSPACE/error-reports/quick-error-check-$timestamp_sec.txt" >> $GITHUB_ENV
     fi
     
-    # ============================================
-    
     log "✅ 步骤30 完成"
     
-    # 返回成功，即使快速错误检查返回非0
     return 0
 }
 #【build_firmware_main.sh-44-end】
