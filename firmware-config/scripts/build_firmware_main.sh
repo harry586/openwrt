@@ -1946,6 +1946,40 @@ EOF
     sed -i '/ddns/d' .config
     sed -i '/DDNS/d' .config
     
+    log "🔧 特别处理 smartdns（LEDE 源码兼容性修复）..."
+    
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        local smartdns_mk=$(find package/feeds -name "smartdns" -type d 2>/dev/null | head -1)
+        if [ -n "$smartdns_mk" ] && [ -f "$smartdns_mk/Makefile" ]; then
+            log "  找到 smartdns Makefile: $smartdns_mk/Makefile"
+            
+            cp "$smartdns_mk/Makefile" "$smartdns_mk/Makefile.bak"
+            
+            if ! grep -q "mkdir.*etc/config" "$smartdns_mk/Makefile" 2>/dev/null; then
+                sed -i '/define Package\/smartdns\/install/a\\t$(INSTALL_DIR) $(1)/etc/config\n\t$(INSTALL_DATA) ./files/smartdns.conf $(1)/etc/config/smartdns 2>/dev/null || touch $(1)/etc/config/smartdns' "$smartdns_mk/Makefile"
+                log "  ✅ 已添加配置文件创建逻辑"
+            fi
+        fi
+        
+        local smartdns_files_dir=$(find package/feeds -name "smartdns" -type d 2>/dev/null | head -1)
+        if [ -n "$smartdns_files_dir" ] && [ ! -f "$smartdns_files_dir/files/smartdns.conf" ]; then
+            mkdir -p "$smartdns_files_dir/files"
+            cat > "$smartdns_files_dir/files/smartdns.conf" << 'SMARTEOF'
+# SmartDNS configuration
+# This file is auto-generated to fix packaging error
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
+SMARTEOF
+            log "  ✅ 创建 smartdns 配置文件模板"
+        fi
+    fi
+    
+    log "✅ smartdns 特殊处理完成"
+    
     log "✅ 禁用完成"
     
     sort .config | uniq > .config.tmp
@@ -4864,7 +4898,7 @@ EOF
                 log "  ✅ package/install 错误修复完成"
             fi
             
-            if grep -q "smartdns.*No such file" "$log_file"; then
+            if grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*No such file or directory" "$log_file"; then
                 log "  ⚠️ 检测到 smartdns 打包错误，强制创建配置文件..."
                 
                 find build_dir -type d -name "smartdns-*" 2>/dev/null | while read smartdns_dir; do
@@ -4881,6 +4915,8 @@ config smartdns
     option enabled '1'
     option port '6053'
     option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
 INNEREOF
                             chmod 644 "$pkg_dir/etc/config/smartdns"
                             log "    ✅ 强制创建: $pkg_dir/etc/config/smartdns"
@@ -4897,6 +4933,8 @@ config smartdns
     option enabled '1'
     option port '6053'
     option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
 INNEREOF
                         chmod 644 "$alt_ipkg_dir/etc/config/smartdns"
                         log "    ✅ 备用创建: $alt_ipkg_dir/etc/config/smartdns"
@@ -4911,13 +4949,31 @@ config smartdns
     option enabled '1'
     option port '6053'
     option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
 INNEREOF
                     chmod 644 "$pkg_dir/etc/config/smartdns"
                     log "    ✅ 直接创建: $pkg_dir/etc/config/smartdns"
                 done
+                
+                find build_dir -type d -path "*/ipkg-*/smartdns*/CONTROL" 2>/dev/null | while read control_dir; do
+                    local smartdns_root=$(dirname "$control_dir")
+                    mkdir -p "$smartdns_root/etc/config"
+                    cat > "$smartdns_root/etc/config/smartdns" << 'INNEREOF'
+# SmartDNS configuration
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
+INNEREOF
+                    chmod 644 "$smartdns_root/etc/config/smartdns"
+                    log "    ✅ CONTROL目录创建: $smartdns_root/etc/config/smartdns"
+                done
             fi
             
-            if grep -q "samba4.*Error" "$log_file" || grep -q "samba.*configure.*error" "$log_file"; then
+            if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
                 log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
                 
                 rm -f staging_dir/target-*/stamp/.samba4* 2>/dev/null
@@ -4935,7 +4991,7 @@ INNEREOF
                 log "  ✅ samba4 错误修复完成"
             fi
             
-            if grep -q "ath10k.*Error" "$log_file" || grep -q "ath10k.*error:" "$log_file"; then
+            if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file"; then
                 log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
                 
                 find build_dir -type d -name "ath10k-ct*" 2>/dev/null | while read ath10k_dir; do
