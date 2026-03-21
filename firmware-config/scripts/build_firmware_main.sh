@@ -471,12 +471,10 @@ initialize_build_env() {
         
         local lookup_device="$device_name"
         
-        # 从MK文件获取设备名（由support.sh处理）
         PLATFORM_INFO=$("$SUPPORT_SCRIPT" get-platform "$lookup_device")
         if [ -n "$PLATFORM_INFO" ]; then
             TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
             SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
-            # DEVICE保持输入名，后续步骤会从MK文件获取
             DEVICE="$device_name"
             log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
         else
@@ -560,48 +558,42 @@ EOF
         fi
     fi
 
-    if [ $config_tool_created -eq 0 ]; then
-        if [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
-            log "✅ 方法2成功: 直接使用 conf 工具"
-            mkdir -p scripts/config
-            cat > scripts/config/config << 'EOF'
+    if [ $config_tool_created -eq 0 ] && [ -f "scripts/config/conf" ] && [ -x "scripts/config/conf" ]; then
+        log "✅ 方法2成功: 直接使用 conf 工具"
+        mkdir -p scripts/config
+        cat > scripts/config/config << 'EOF'
 #!/bin/sh
 exec "$(dirname "$0")/conf" "$@"
 EOF
-            chmod +x scripts/config/config
-            real_config_tool="scripts/config/config"
-            config_tool_created=1
-        fi
+        chmod +x scripts/config/config
+        real_config_tool="scripts/config/config"
+        config_tool_created=1
     fi
 
-    if [ $config_tool_created -eq 0 ]; then
-        if [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
-            log "✅ 方法3成功: 使用 mconf 工具"
-            mkdir -p scripts/config
-            cat > scripts/config/config << 'EOF'
+    if [ $config_tool_created -eq 0 ] && [ -f "scripts/config/mconf" ] && [ -x "scripts/config/mconf" ]; then
+        log "✅ 方法3成功: 使用 mconf 工具"
+        mkdir -p scripts/config
+        cat > scripts/config/config << 'EOF'
 #!/bin/sh
 exec "$(dirname "$0")/mconf" "$@"
 EOF
-            chmod +x scripts/config/config
-            real_config_tool="scripts/config/config"
-            config_tool_created=1
-        fi
+        chmod +x scripts/config/config
+        real_config_tool="scripts/config/config"
+        config_tool_created=1
     fi
 
-    if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ]; then
+    if [ $config_tool_created -eq 0 ] && [ -n "$COMPILER_DIR" ] && [ -f "$COMPILER_DIR/scripts/config/conf" ] && [ -x "$COMPILER_DIR/scripts/config/conf" ]; then
         log "🔧 尝试方法4: 从 SDK 目录复制"
-        if [ -f "$COMPILER_DIR/scripts/config/conf" ] && [ -x "$COMPILER_DIR/scripts/config/conf" ]; then
-            mkdir -p scripts/config
-            cp "$COMPILER_DIR/scripts/config/conf" scripts/config/
-            cat > scripts/config/config << 'EOF'
+        mkdir -p scripts/config
+        cp "$COMPILER_DIR/scripts/config/conf" scripts/config/
+        cat > scripts/config/config << 'EOF'
 #!/bin/sh
 exec "$(dirname "$0")/conf" "$@"
 EOF
-            chmod +x scripts/config/config
-            log "✅ 方法4成功: 从 SDK 复制 conf 工具"
-            real_config_tool="scripts/config/config"
-            config_tool_created=1
-        fi
+        chmod +x scripts/config/config
+        log "✅ 方法4成功: 从 SDK 复制 conf 工具"
+        real_config_tool="scripts/config/config"
+        config_tool_created=1
     fi
 
     if [ $config_tool_created -eq 0 ]; then
@@ -735,12 +727,10 @@ EOF
 
         if scripts/config-tool --version > /dev/null 2>&1 || scripts/config-tool -h > /dev/null 2>&1; then
             log "✅ 统一调用接口测试通过"
+        elif [ -f scripts/config/config ] || [ -f scripts/config/conf ]; then
+            log "✅ 统一调用接口可用（跳过参数测试）"
         else
-            if [ -f scripts/config/config ] || [ -f scripts/config/conf ]; then
-                log "✅ 统一调用接口可用（跳过参数测试）"
-            else
-                log "⚠️ 统一调用接口可能有问题，但工具可能仍可用"
-            fi
+            log "⚠️ 统一调用接口可能有问题，但工具可能仍可用"
         fi
     fi
 
@@ -749,12 +739,10 @@ EOF
         log "📁 真实工具路径: $real_config_tool"
         log "📁 统一调用接口: scripts/config-tool"
 
-        if [ -f "$real_config_tool" ]; then
-            if file "$real_config_tool" | grep -q "ELF"; then
-                log "📋 工具类型: 已编译二进制文件"
-            else
-                log "📋 工具类型: Shell 脚本"
-            fi
+        if [ -f "$real_config_tool" ] && file "$real_config_tool" | grep -q "ELF"; then
+            log "📋 工具类型: 已编译二进制文件"
+        else
+            log "📋 工具类型: Shell 脚本"
         fi
     else
         log "❌ 所有方法都失败，配置工具不存在"
@@ -1346,7 +1334,7 @@ generate_config() {
     log "✅ 已清理旧配置文件"
     
     # ============================================
-    # 直接从MK文件获取设备名
+    # 直接从MK文件获取设备名（保留原始格式）
     # ============================================
     local search_device=""
     case "$DEVICE" in
@@ -1372,7 +1360,7 @@ generate_config() {
     for file in $mk_files; do
         if grep -q "define Device.*$search_device" "$file" 2>/dev/null; then
             mk_file="$file"
-            # 提取define行中的设备名
+            # 提取define行中的设备名（保留原始格式，如 cmcc_rax3000m-nand）
             mk_device_name=$(grep -m1 "define Device.*$search_device" "$file" | sed 's/define Device\///' | awk '{print $1}')
             log "✅ 找到设备定义: $mk_device_name (在 $file)"
             break
@@ -1385,13 +1373,12 @@ generate_config() {
         exit 1
     fi
     
-    # 使用MK文件中定义的设备名
+    # 使用MK文件中定义的设备名（原始格式）
     local openwrt_device="$mk_device_name"
     log "🔧 使用MK文件设备名: $openwrt_device"
     
     # 直接使用MK文件中的设备名，不做任何转换
-    local device_config_name="$openwrt_device"
-    local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_config_name}"
+    local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${openwrt_device}"
     
     log "🔧 设备配置变量: $device_config=y"
     log "🔧 MK文件设备名: $openwrt_device"
@@ -1412,7 +1399,7 @@ EOF
             handle_error "LEDE基础配置失败"
         }
         
-        # 然后再添加设备配置
+        # 然后再添加设备配置（使用原始设备名）
         log "🔧 添加设备配置: $device_config=y"
         echo "${device_config}=y" >> .config
         
@@ -1557,14 +1544,298 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # ... 内核配置和USB包添加代码保持不变 ...
+    # 内核配置检测
+    local kernel_config_file=""
+    local kernel_version=""
+    local found_kernel=0
     
-    # 验证设备配置
-    log "🔍 验证设备配置是否保留..."
-    if grep -q "^${device_config}=y" .config; then
-        log "✅ 设备配置已正确保留"
+    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
+        if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+            local device_def_file="$mk_file"
+            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
+                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
+                if [ -n "$kernel_version" ]; then
+                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
+                fi
+            fi
+        fi
+        
+        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
+            for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
+                kernel_config_file="target/linux/$TARGET/config-$ver"
+                if [ -f "$kernel_config_file" ]; then
+                    kernel_version="$ver"
+                    found_kernel=1
+                    break
+                fi
+            done
+        else
+            found_kernel=1
+        fi
+    fi
+    
+    if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
+        log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
+        
+        local kernel_patterns=(
+            "^CONFIG_USB"
+            "^CONFIG_PHY"
+            "^CONFIG_DWC"
+            "^CONFIG_XHCI"
+            "^CONFIG_EXTCON"
+            "^CONFIG_COMMON_CLK"
+            "^CONFIG_ARCH"
+        )
+        
+        if [ ${#KERNEL_EXTRACT_PATTERNS[@]} -gt 0 ]; then
+            kernel_patterns=("${KERNEL_EXTRACT_PATTERNS[@]}")
+        fi
+        
+        local usb_configs_file="/tmp/usb_configs_$$.txt"
+        
+        for pattern in "${kernel_patterns[@]}"; do
+            grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
+        done
+        
+        sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
+        
+        local config_count=$(wc -l < "$usb_configs_file.sorted")
+        log "找到 $config_count 个USB相关内核配置"
+        
+        local added_count=0
+        while read line; do
+            local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
+            
+            if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
+                if echo "$line" | grep -q "=y$"; then
+                    echo "$line" >> .config
+                    added_count=$((added_count + 1))
+                elif echo "$line" | grep -q "is not set"; then
+                    echo "$line" >> .config
+                    added_count=$((added_count + 1))
+                fi
+            fi
+        done < "$usb_configs_file.sorted"
+        
+        log "✅ 添加了 $added_count 个新的内核配置"
+        
+        rm -f "$usb_configs_file" "$usb_configs_file.sorted"
     else
-        log "⚠️ 设备配置丢失，尝试恢复..."
+        if [ "${DEBUG:-false}" = "true" ]; then
+            log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
+        fi
+    fi
+    
+    # 根据源码类型选择配置更新方式
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔄 LEDE使用 olddefconfig 更新配置..."
+        make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "⚠️ 第一次 olddefconfig 有警告，但继续"
+        }
+    else
+        log "🔄 第一次运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "❌ 第一次 make defconfig 失败"
+            tail -50 /tmp/build-logs/defconfig1.log
+            handle_error "第一次依赖解决失败"
+        }
+    fi
+    log "✅ 第一次配置更新成功"
+    
+    # 重新运行defconfig使格式配置生效
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+            log "⚠️ olddefconfig 有警告，但继续"
+        }
+    else
+        make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续"
+        }
+    fi
+    
+    log "🔍 动态检测实际生效的USB内核配置..."
+    
+    local usb_components=(
+        "USB_SUPPORT"
+        "USB_COMMON"
+        "USB"
+        "USB_XHCI_HCD"
+        "USB_DWC3"
+        "PHY"
+    )
+    
+    for component in "${usb_components[@]}"; do
+        local matches=$(grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | wc -l)
+        if [ $matches -gt 0 ]; then
+            log "✅ $component 相关配置: 找到 $matches 个"
+        fi
+    done
+    
+    log "📋 动态添加USB软件包..."
+    
+    local base_usb_packages=(
+        "kmod-usb-core"
+        "kmod-usb-common"
+        "kmod-usb2"
+        "kmod-usb3"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+        "block-mount"
+        "automount"
+        "usbutils"
+    )
+    
+    local extended_usb_packages=(
+        "kmod-usb-storage-uas"
+        "kmod-usb-storage-extras"
+        "kmod-scsi-generic"
+    )
+    
+    local fs_support_packages=(
+        "kmod-fs-ext4"
+        "kmod-fs-vfat"
+        "kmod-fs-exfat"
+        "kmod-fs-ntfs3"
+        "kmod-nls-utf8"
+        "kmod-nls-cp936"
+    )
+    
+    if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
+        base_usb_packages=("${BASE_USB_PACKAGES[@]}")
+    fi
+    
+    if [ ${#EXTENDED_USB_PACKAGES[@]} -gt 0 ]; then
+        extended_usb_packages=("${EXTENDED_USB_PACKAGES[@]}")
+    fi
+    
+    if [ ${#FS_SUPPORT_PACKAGES[@]} -gt 0 ]; then
+        fs_support_packages=("${FS_SUPPORT_PACKAGES[@]}")
+    fi
+    
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom)
+            log "检测到高通平台，添加专用USB驱动..."
+            local qcom_packages=(
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-qcom"
+                "kmod-usb-dwc3-of-simple"
+                "kmod-phy-qcom-ipq4019-usb"
+                "kmod-usb-xhci-hcd"
+                "kmod-usb-xhci-plat-hcd"
+            )
+            base_usb_packages+=("${qcom_packages[@]}")
+            ;;
+        mediatek|ramips)
+            log "检测到联发科平台，添加专用USB驱动..."
+            local mtk_packages=(
+                "kmod-usb-xhci-mtk"
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-mediatek"
+            )
+            base_usb_packages+=("${mtk_packages[@]}")
+            ;;
+        ath79)
+            log "检测到ATH79平台，添加专用USB驱动..."
+            local ath79_packages=(
+                "kmod-usb2-ath79"
+                "kmod-usb-ohci"
+            )
+            base_usb_packages+=("${ath79_packages[@]}")
+            ;;
+    esac
+    
+    local added_packages=0
+    local existing_packages=0
+    while read pkg; do
+        [ -z "$pkg" ] && continue
+        if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config && ! grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            added_packages=$((added_packages + 1))
+            log "  ✅ 添加软件包: $pkg"
+        else
+            existing_packages=$((existing_packages + 1))
+        fi
+    done < <(printf "%s\n" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
+    
+    log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
+    
+    log "🔄 第二次去重配置..."
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 第二次配置更新
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔄 LEDE第二次使用 olddefconfig..."
+        make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+            log "⚠️ 第二次 olddefconfig 有警告，但继续..."
+        }
+    else
+        log "🔄 第二次运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+            log "⚠️ 第二次 make defconfig 有警告，但继续..."
+        }
+    fi
+    log "✅ 第二次配置更新完成"
+    
+    log "🔍 验证关键USB驱动状态..."
+    
+    local critical_usb_drivers=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
+    
+    if [ ${#CRITICAL_USB_DRIVERS[@]} -gt 0 ]; then
+        critical_usb_drivers=("${CRITICAL_USB_DRIVERS[@]}")
+    fi
+    
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom)
+            critical_usb_drivers+=(
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-qcom"
+            )
+            ;;
+        mediatek|ramips)
+            critical_usb_drivers+=(
+                "kmod-usb-xhci-mtk"
+            )
+            ;;
+    esac
+    
+    local missing_drivers=()
+    for driver in "${critical_usb_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "  ✅ $driver: 已启用"
+        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
+            log "  📦 $driver: 模块化"
+        else
+            log "  ❌ $driver: 未启用"
+            missing_drivers+=("$driver")
+        fi
+    done
+    
+    if [ ${#missing_drivers[@]} -gt 0 ] && [ "${AUTO_FIX_USB_DRIVERS:-true}" = "true" ]; then
+        log "🔧 自动修复缺失驱动..."
+        for driver in "${missing_drivers[@]}"; do
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log "  ✅ 已添加: $driver"
+        done
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
+    fi
+    
+    log "🔍 正在验证设备 $openwrt_device 是否被选中..."
+    
+    if grep -q "^${device_config}=y" .config; then
+        log "✅ 目标设备已正确启用: ${device_config}=y"
+    elif grep -q "^# ${device_config} is not set" .config; then
+        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
+        sed -i "/^# ${device_config} is not set/d" .config
         echo "${device_config}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
@@ -1573,6 +1844,177 @@ EOF
         else
             make defconfig > /dev/null 2>&1
         fi
+        
+        if grep -q "^${device_config}=y" .config; then
+            log "✅ 设备已强制启用"
+        else
+            log "❌ 无法启用设备"
+        fi
+    else
+        log "⚠️ 警告: 设备配置行未找到，手动添加..."
+        echo "${device_config}=y" >> .config
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
+        
+        if grep -q "^${device_config}=y" .config; then
+            log "✅ 设备已手动添加成功"
+        else
+            log "❌ 设备手动添加失败"
+        fi
+    fi
+    
+    local total_configs=$(wc -l < .config)
+    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
+    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
+    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
+    
+    log "📊 配置统计:"
+    log "  总配置行数: $total_configs"
+    log "  启用软件包: $enabled_packages"
+    log "  模块化软件包: $module_packages"
+    log "  禁用软件包: $disabled_packages"
+    
+    log "🔧 ===== 全面禁用不需要的插件 ===== "
+    
+    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
+    log "📋 基础禁用插件: $base_forbidden"
+    
+    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
+    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
+    
+    local search_keywords=()
+    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
+    for pkg in "${BASE_PKGS[@]}"; do
+        search_keywords+=("$pkg")
+        search_keywords+=("luci-app-${pkg}")
+        search_keywords+=("${pkg}-scripts")
+    done
+    
+    log "🔧 第一轮：彻底删除源文件..."
+    for keyword in "${search_keywords[@]}"; do
+        if [ -d "package/feeds" ]; then
+            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️ 删除 package/feeds: $dir"
+                rm -rf "$dir"
+            done
+        fi
+        if [ -d "feeds" ]; then
+            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️ 删除 feeds: $dir"
+                rm -rf "$dir"
+            done
+        fi
+    done
+    
+    log "📋 第二轮：在 .config 中禁用所有相关包..."
+    
+    local disable_temp=$(mktemp)
+    for plugin in "${full_forbidden_list[@]}"; do
+        echo "$plugin" >> "$disable_temp"
+    done
+    sort -u "$disable_temp" > "$disable_temp.sorted"
+    
+    while read plugin; do
+        [ -z "$plugin" ] && continue
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/CONFIG_PACKAGE_.*${plugin}/d" .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+    done < "$disable_temp.sorted"
+    
+    rm -f "$disable_temp" "$disable_temp.sorted"
+    
+    log "🔧 第三轮：删除所有包含关键字的配置行..."
+    for keyword in "${search_keywords[@]}"; do
+        sed -i "/${keyword}/d" .config
+        local upper_keyword=$(echo "$keyword" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+        sed -i "/${upper_keyword}/d" .config
+    done
+    
+    log "🔧 特别处理 DDNS 相关配置..."
+    sed -i '/ddns/d' .config
+    sed -i '/DDNS/d' .config
+    
+    log "✅ 禁用完成"
+    
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    log "🔄 运行 make defconfig 使禁用生效..."
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+            log "⚠️ olddefconfig 有警告，但继续..."
+        }
+    else
+        make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续..."
+        }
+    fi
+    
+    log "🔍 第四轮：检查插件残留..."
+    
+    local remaining=()
+    local check_temp=$(mktemp)
+    
+    for plugin in "${full_forbidden_list[@]}"; do
+        echo "$plugin" >> "$check_temp"
+    done
+    
+    sort -u "$check_temp" > "$check_temp.sorted"
+    
+    while read plugin; do
+        [ -z "$plugin" ] && continue
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            remaining+=("$plugin")
+        fi
+    done < "$check_temp.sorted"
+    
+    rm -f "$check_temp" "$check_temp.sorted"
+    
+    if [ ${#remaining[@]} -gt 0 ]; then
+        log "⚠️ 发现 ${#remaining[@]} 个插件残留，第四轮禁用..."
+        
+        for plugin in "${remaining[@]}"; do
+            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+            log "  ✅ 再次禁用: $plugin"
+        done
+        
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
+    fi
+    
+    log "📊 最终插件状态验证:"
+    local still_enabled=0
+    
+    for plugin in "${BASE_PKGS[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
+            log "  ❌ $plugin 相关包仍被启用"
+            still_enabled=$((still_enabled + 1))
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
+            log "  ❌ $plugin 相关包仍被模块化"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ $plugin 已禁用"
+        fi
+    done
+    
+    if [ $still_enabled -eq 0 ]; then
+        log "🎉 所有指定插件已成功禁用"
+    else
+        log "⚠️ 有 $still_enabled 个插件未能禁用，将在后续阶段再次尝试"
     fi
     
     log "✅ 配置生成完成"
@@ -1764,7 +2206,6 @@ workflow_step15_generate_config() {
     for mkfile in "${mk_files[@]}"; do
         if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
-            # 提取define行中的设备名（保留原始格式，包括连字符）
             mk_device_name=$(grep -m1 "define Device.*$search_device" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
             log "✅ 找到设备定义: $mk_device_name (在 $device_file)"
             break
@@ -1777,7 +2218,7 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 关键：使用MK文件中定义的设备名（保持原始格式，如 cmcc_rax3000m-nand）
+    # 使用MK文件中定义的设备名（保持原始格式，如 cmcc_rax3000m-nand）
     local device_for_config="$mk_device_name"
     log "🔧 使用MK文件设备名: $device_for_config"
     
@@ -1796,7 +2237,6 @@ workflow_step15_generate_config() {
     fi
     
     # 关键修复：直接使用MK文件中的设备名（原始格式），不要做任何转换
-    # 这里将 DEVICE 设置为 MK文件中的原始设备名
     export DEVICE="$device_for_config"
     log "🔧 设置 DEVICE=$DEVICE 用于 generate_config"
     
@@ -4114,9 +4554,6 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    # ============================================
-    # 工具链状态检查
-    # ============================================
     echo "2. ✅ 工具链状态检查:"
     
     if [ -d "$BUILD_DIR/staging_dir" ]; then
@@ -4124,7 +4561,6 @@ workflow_step23_pre_build_check() {
         local staging_size=$(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}')
         echo "   📊 大小: $staging_size"
         
-        # 查找交叉编译工具链
         local cross_gcc=$(find "$BUILD_DIR/staging_dir" -type f -executable -path "*/bin/*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
         
         if [ -n "$cross_gcc" ]; then
@@ -4154,9 +4590,6 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    # ============================================
-    # Feeds检查
-    # ============================================
     echo "3. ✅ Feeds检查:"
     if [ -d "feeds" ]; then
         local feeds_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
@@ -4177,9 +4610,6 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    # ============================================
-    # 磁盘空间检查
-    # ============================================
     echo "4. ✅ 磁盘空间检查:"
     local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
     local available_gb=$((available_space / 1024 / 1024))
@@ -4199,9 +4629,6 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    # ============================================
-    # USB驱动检查
-    # ============================================
     echo "5. ✅ USB驱动检查:"
     local critical_drivers=(
         "kmod-usb-core"
@@ -4234,9 +4661,6 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    # ============================================
-    # 内存检查
-    # ============================================
     echo "6. ✅ 内存检查:"
     local mem_total=$(free -m | awk '/^Mem:/{print $2}')
     local mem_available=$(free -m | awk '/^Mem:/{print $7}')
@@ -4250,9 +4674,6 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    # ============================================
-    # CPU检查
-    # ============================================
     echo "7. ✅ CPU检查:"
     local cpu_cores=$(nproc)
     local cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)
@@ -4290,34 +4711,6 @@ workflow_step25_build_firmware() {
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
-    
-    # ============================================
-    # 预创建smartdns配置文件（修复打包错误）
-    # ============================================
-    log "🔧 预创建smartdns配置文件..."
-    
-    # 查找所有smartdns的构建目录并创建配置文件
-    find build_dir -type d -name "smartdns-*" 2>/dev/null | while read smartdns_dir; do
-        # 创建ipkg目录结构
-        local target_arch=$(basename "$smartdns_dir" | sed 's/smartdns-//' | cut -d'/' -f1)
-        if [ -n "$target_arch" ]; then
-            local ipkg_dir="$smartdns_dir/ipkg-$target_arch/smartdns"
-            mkdir -p "$ipkg_dir/etc/config"
-            touch "$ipkg_dir/etc/config/smartdns" 2>/dev/null
-            log "  ✅ 创建: $ipkg_dir/etc/config/smartdns"
-        fi
-    done
-    
-    # 通用预创建：为所有ipkg目录创建etc/config
-    find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_base; do
-        find "$ipkg_base" -maxdepth 1 -type d | while read pkg_dir; do
-            if [ -d "$pkg_dir" ] && [ "$pkg_dir" != "$ipkg_base" ]; then
-                local pkg_name=$(basename "$pkg_dir")
-                mkdir -p "$pkg_dir/etc/config"
-                touch "$pkg_dir/etc/config/$pkg_name" 2>/dev/null
-            fi
-        done
-    done
     
     # 设置文件描述符限制
     ulimit -n 65536 2>/dev/null || true
@@ -4389,7 +4782,6 @@ echo "=== 强制恢复结束 ==="
 EOF
     chmod +x "$protect_dir/recover.sh"
     
-    # 系统信息
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
     
@@ -4399,7 +4791,6 @@ EOF
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     
-    # 根据不同源码类型设置编译参数
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
         "openwrt"|"lede")
@@ -4410,7 +4801,6 @@ EOF
             ;;
     esac
     
-    # 智能判断并行任务数
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
             MAKE_JOBS=4
@@ -4425,7 +4815,6 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    # 编译循环
     local max_attempts=3
     local attempt=1
     local compile_success=0
@@ -4457,7 +4846,7 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            # 检测并修复 package/install 错误
+            # 通用的错误修复
             if grep -q "package/install.*Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
                 rm -f staging_dir/target-*/.stamp_package_install
@@ -4467,28 +4856,70 @@ EOF
             # 修复smartdns打包错误
             if grep -q "smartdns.*No such file" "$log_file"; then
                 log "  ⚠️ 检测到 smartdns 打包错误，强制创建配置文件..."
+                
+                # 查找所有smartdns的构建目录
                 find build_dir -type d -name "smartdns-*" 2>/dev/null | while read smartdns_dir; do
+                    log "    找到 smartdns 目录: $smartdns_dir"
+                    
                     # 找到 ipkg 目录
                     local ipkg_dir=$(find "$smartdns_dir" -type d -name "ipkg-*" 2>/dev/null | head -1)
                     if [ -n "$ipkg_dir" ]; then
+                        # 找到 smartdns 包目录
                         local pkg_dir=$(find "$ipkg_dir" -type d -name "smartdns" 2>/dev/null | head -1)
                         if [ -n "$pkg_dir" ]; then
                             mkdir -p "$pkg_dir/etc/config"
-                            touch "$pkg_dir/etc/config/smartdns"
+                            cat > "$pkg_dir/etc/config/smartdns" << 'INNEREOF'
+# SmartDNS configuration
+# This file is auto-generated to fix packaging error
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+INNEREOF
                             chmod 644 "$pkg_dir/etc/config/smartdns"
                             log "    ✅ 强制创建: $pkg_dir/etc/config/smartdns"
                         fi
                     fi
+                    
+                    # 也尝试直接创建 ipkg 目录下的配置
+                    local target_arch=$(basename "$smartdns_dir" | sed 's/smartdns-//' | cut -d'/' -f1)
+                    if [ -n "$target_arch" ]; then
+                        local alt_ipkg_dir="$smartdns_dir/ipkg-$target_arch/smartdns"
+                        mkdir -p "$alt_ipkg_dir/etc/config"
+                        cat > "$alt_ipkg_dir/etc/config/smartdns" << 'INNEREOF'
+# SmartDNS configuration
+# This file is auto-generated to fix packaging error
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+INNEREOF
+                        chmod 644 "$alt_ipkg_dir/etc/config/smartdns"
+                        log "    ✅ 备用创建: $alt_ipkg_dir/etc/config/smartdns"
+                    fi
+                done
+                
+                # 额外处理：直接在所有 ipkg 目录中查找并创建
+                find build_dir -type d -path "*/ipkg-*/smartdns" 2>/dev/null | while read pkg_dir; do
+                    mkdir -p "$pkg_dir/etc/config"
+                    cat > "$pkg_dir/etc/config/smartdns" << 'INNEREOF'
+# SmartDNS configuration
+# This file is auto-generated to fix packaging error
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+INNEREOF
+                    chmod 644 "$pkg_dir/etc/config/smartdns"
+                    log "    ✅ 直接创建: $pkg_dir/etc/config/smartdns"
                 done
             fi
             
-            # 修复 Broken pipe 错误
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
             fi
             
-            # 修复 libssl 缺失问题
             if grep -q "libssl was not found" "$log_file"; then
                 log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
                 sudo apt-get update > /dev/null 2>&1 || true
@@ -4511,7 +4942,6 @@ EOF
         exit $PHASE1_EXIT_CODE
     fi
     
-    # 第二阶段：单线程生成最终固件
     echo ""
     echo "🚀 第二阶段：单线程生成最终固件"
     echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
@@ -4534,11 +4964,9 @@ EOF
     
     cat build_phase1_attempt*.log build_phase2.log > build.log
     
-    # 停止保护脚本
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
     
-    # 验证固件
     log "🔍 验证固件..."
     
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
