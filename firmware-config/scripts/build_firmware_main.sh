@@ -4781,6 +4781,18 @@ config smartdns
 SMARTEOF
     log "  ✅ 已创建 files/etc/config/smartdns"
     
+    mkdir -p staging_dir/target-*/root-*/etc/config 2>/dev/null || true
+    for target_dir in staging_dir/target-*; do
+        if [ -d "$target_dir" ]; then
+            for root_dir in "$target_dir"/root-*; do
+                if [ -d "$root_dir" ]; then
+                    mkdir -p "$root_dir/etc/config"
+                    cp files/etc/config/smartdns "$root_dir/etc/config/smartdns" 2>/dev/null || true
+                fi
+            done
+        fi
+    done
+    
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -5061,6 +5073,23 @@ INNEREOF
                 fi
                 
                 log "  ✅ ath10k-ct 错误修复完成"
+            fi
+            
+            if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file"; then
+                log "  ⚠️ 检测到 shortcut-fe 驱动编译错误，尝试修复..."
+                
+                find build_dir -type d -name "shortcut-fe*" 2>/dev/null | while read sfe_dir; do
+                    log "    清理 shortcut-fe 目录: $sfe_dir"
+                    rm -rf "$sfe_dir"
+                done
+                
+                if [ -f ".config" ]; then
+                    sed -i '/CONFIG_PACKAGE_kmod-shortcut-fe=y/d' .config
+                    echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
+                    log "    已在配置中禁用 kmod-shortcut-fe"
+                fi
+                
+                log "  ✅ shortcut-fe 错误修复完成"
             fi
             
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
