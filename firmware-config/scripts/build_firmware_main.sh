@@ -1477,6 +1477,21 @@ EOF
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+        
+        if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ "$TARGET" = "mediatek" ]; then
+            log "🔧 LEDE + mediatek 平台特殊处理：修复 shortcut-fe 驱动"
+            
+            local sfe_mk=$(find package -path "*/shortcut-fe/*" -name "Makefile" 2>/dev/null | head -1)
+            if [ -n "$sfe_mk" ] && [ -f "$sfe_mk" ]; then
+                cp "$sfe_mk" "$sfe_mk.bak"
+                log "  找到 shortcut-fe Makefile: $sfe_mk"
+                
+                if grep -q "tcp_no_window_check" "$sfe_mk" 2>/dev/null; then
+                    sed -i 's/tcp_no_window_check/tcp_no_window_check_old/g' "$sfe_mk"
+                    log "  ✅ 已修复 tcp_no_window_check 符号"
+                fi
+            fi
+        fi
     elif [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
         log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
