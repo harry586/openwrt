@@ -1030,9 +1030,6 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    # ============================================
-    # 预创建所有可能缺失的文件
-    # ============================================
     log "🔧 预创建所有可能缺失的文件..."
     
     mkdir -p staging_dir/target-*/root-*/etc 2>/dev/null || true
@@ -1057,44 +1054,50 @@ configure_feeds() {
         fi
     done
     
-    # ============================================
-    # 修复 smartdns 打包问题（针对 LEDE）
-    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 LEDE源码特殊处理：修复 smartdns 打包问题"
         
-        # 查找 smartdns 的 Makefile
         local smartdns_mk=$(find package -name "smartdns" -type d 2>/dev/null | head -1)
         if [ -n "$smartdns_mk" ] && [ -f "$smartdns_mk/Makefile" ]; then
             log "  找到 smartdns Makefile: $smartdns_mk/Makefile"
             
-            # 备份原文件
             cp "$smartdns_mk/Makefile" "$smartdns_mk/Makefile.bak"
             
-            # 检查是否已有 CONFIG 目录的创建
             if ! grep -q "mkdir.*etc/config" "$smartdns_mk/Makefile" 2>/dev/null; then
-                log "  添加配置文件创建逻辑..."
-                # 在 define Package/smartdns/install 中添加创建配置文件的代码
                 sed -i '/define Package\/smartdns\/install/a\\t$(INSTALL_DIR) $(1)/etc/config\n\t$(INSTALL_DATA) ./files/smartdns.conf $(1)/etc/config/smartdns 2>/dev/null || touch $(1)/etc/config/smartdns' "$smartdns_mk/Makefile"
-                log "  ✅ 已添加配置文件创建"
+                log "  ✅ 已添加配置文件创建逻辑"
             fi
         fi
         
-        # 创建 smartdns 配置文件模板
         local smartdns_files_dir=$(find package -name "smartdns" -type d 2>/dev/null | head -1)
         if [ -n "$smartdns_files_dir" ] && [ ! -f "$smartdns_files_dir/files/smartdns.conf" ]; then
             mkdir -p "$smartdns_files_dir/files"
-            cat > "$smartdns_files_dir/files/smartdns.conf" << 'EOF'
+            cat > "$smartdns_files_dir/files/smartdns.conf" << 'SMARTEOF'
 # SmartDNS configuration
-# This file is auto-generated
-EOF
+# This file is auto-generated to fix packaging error
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
+SMARTEOF
             log "  ✅ 创建 smartdns 配置文件模板"
         fi
+        
+        log "  🔧 预创建 smartdns 配置目录（解决 package/install 错误）"
+        mkdir -p files/etc/config
+        cat > files/etc/config/smartdns << 'SMARTEOF'
+# SmartDNS configuration
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
+SMARTEOF
+        log "  ✅ 已在 files/etc/config/ 创建 smartdns 配置文件"
     fi
-    
-    # ============================================
-    # 通用的feeds配置（兼容所有源码类型）
-    # ============================================
     
     if [ -f "feeds.conf.default" ]; then
         cp "feeds.conf.default" "feeds.conf.default.bak"
@@ -1162,7 +1165,6 @@ EOF
             ;;
     esac
     
-    # 根据配置模式添加额外feeds
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         case "$SOURCE_REPO_TYPE" in
             "immortalwrt"|"lede")
@@ -4751,6 +4753,19 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
+    log "🔧 预创建 smartdns 配置文件（防止打包错误）..."
+    mkdir -p files/etc/config
+    cat > files/etc/config/smartdns << 'SMARTEOF'
+# SmartDNS configuration
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
+SMARTEOF
+    log "  ✅ 已创建 files/etc/config/smartdns"
+    
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -4895,11 +4910,34 @@ EOF
                 log "    重新安装 feeds..."
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 
+                log "    重新创建 smartdns 配置文件..."
+                mkdir -p files/etc/config
+                cat > files/etc/config/smartdns << 'SMARTEOF'
+# SmartDNS configuration
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
+SMARTEOF
+                
                 log "  ✅ package/install 错误修复完成"
             fi
             
             if grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*No such file or directory" "$log_file"; then
                 log "  ⚠️ 检测到 smartdns 打包错误，强制创建配置文件..."
+                
+                mkdir -p files/etc/config
+                cat > files/etc/config/smartdns << 'SMARTEOF'
+# SmartDNS configuration
+config smartdns
+    option enabled '1'
+    option port '6053'
+    option server_name 'smartdns'
+    option tcp_server '1'
+    option ipv6_server '1'
+SMARTEOF
                 
                 find build_dir -type d -name "smartdns-*" 2>/dev/null | while read smartdns_dir; do
                     log "    找到 smartdns 目录: $smartdns_dir"
@@ -4971,6 +5009,8 @@ INNEREOF
                     chmod 644 "$smartdns_root/etc/config/smartdns"
                     log "    ✅ CONTROL目录创建: $smartdns_root/etc/config/smartdns"
                 done
+                
+                log "  ✅ smartdns 错误修复完成"
             fi
             
             if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
