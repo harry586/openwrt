@@ -1057,24 +1057,27 @@ configure_feeds() {
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 LEDE源码特殊处理：修复 smartdns 打包问题"
         
-        local smartdns_mk=$(find package -name "smartdns" -type d 2>/dev/null | head -1)
-        if [ -n "$smartdns_mk" ] && [ -f "$smartdns_mk/Makefile" ]; then
-            log "  找到 smartdns Makefile: $smartdns_mk/Makefile"
+        local smartdns_mk=$(find package/feeds -path "*/smartdns/Makefile" 2>/dev/null | head -1)
+        if [ -z "$smartdns_mk" ]; then
+            smartdns_mk=$(find package -path "*/smartdns/Makefile" 2>/dev/null | head -1)
+        fi
+        
+        if [ -n "$smartdns_mk" ] && [ -f "$smartdns_mk" ]; then
+            log "  找到 smartdns Makefile: $smartdns_mk"
             
-            cp "$smartdns_mk/Makefile" "$smartdns_mk/Makefile.bak"
+            cp "$smartdns_mk" "$smartdns_mk.bak"
             
-            if ! grep -q "mkdir.*etc/config" "$smartdns_mk/Makefile" 2>/dev/null; then
-                sed -i '/define Package\/smartdns\/install/a\\t$(INSTALL_DIR) $(1)/etc/config\n\t$(INSTALL_DATA) ./files/smartdns.conf $(1)/etc/config/smartdns 2>/dev/null || touch $(1)/etc/config/smartdns' "$smartdns_mk/Makefile"
+            if ! grep -q "mkdir.*etc/config" "$smartdns_mk" 2>/dev/null; then
+                sed -i '/define Package\/smartdns\/install/a\\t$(INSTALL_DIR) $(1)/etc/config\n\t$(INSTALL_DATA) ./files/smartdns.conf $(1)/etc/config/smartdns 2>/dev/null || touch $(1)/etc/config/smartdns' "$smartdns_mk"
                 log "  ✅ 已添加配置文件创建逻辑"
             fi
         fi
         
-        local smartdns_files_dir=$(find package -name "smartdns" -type d 2>/dev/null | head -1)
-        if [ -n "$smartdns_files_dir" ] && [ ! -f "$smartdns_files_dir/files/smartdns.conf" ]; then
-            mkdir -p "$smartdns_files_dir/files"
-            cat > "$smartdns_files_dir/files/smartdns.conf" << 'SMARTEOF'
+        local smartdns_dir=$(dirname "$smartdns_mk" 2>/dev/null)
+        if [ -n "$smartdns_dir" ] && [ ! -f "$smartdns_dir/files/smartdns.conf" ]; then
+            mkdir -p "$smartdns_dir/files"
+            cat > "$smartdns_dir/files/smartdns.conf" << 'SMARTEOF'
 # SmartDNS configuration
-# This file is auto-generated to fix packaging error
 config smartdns
     option enabled '1'
     option port '6053'
