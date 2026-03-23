@@ -1055,26 +1055,52 @@ configure_feeds() {
     done
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码特殊处理：修复 smartdns 打包问题"
+        log "🔧 LEDE源码特殊处理：替换为兼容版 smartdns"
         
-        local smartdns_mk=$(find package/feeds -path "*/smartdns/Makefile" 2>/dev/null | head -1)
-        if [ -z "$smartdns_mk" ]; then
-            smartdns_mk=$(find package -path "*/smartdns/Makefile" 2>/dev/null | head -1)
-        fi
-        
-        if [ -n "$smartdns_mk" ] && [ -f "$smartdns_mk" ]; then
-            log "  找到 smartdns Makefile: $smartdns_mk"
-            
-            cp "$smartdns_mk" "$smartdns_mk.bak"
-            
-            if ! grep -q "mkdir.*etc/config" "$smartdns_mk" 2>/dev/null; then
-                sed -i '/define Package\/smartdns\/install/a\\t$(INSTALL_DIR) $(1)/etc/config\n\t$(INSTALL_DATA) ./files/smartdns.conf $(1)/etc/config/smartdns 2>/dev/null || touch $(1)/etc/config/smartdns' "$smartdns_mk"
-                log "  ✅ 已添加配置文件创建逻辑"
+        log "  🔧 删除原有 smartdns 源文件..."
+        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除: $dir"
+            rm -rf "$dir"
+        done
+        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            if [[ "$dir" != *"luci-app-smartdns-compat"* ]] && [[ "$dir" != *"smartdns-compat"* ]]; then
+                log "    🗑️ 删除: $dir"
+                rm -rf "$dir"
             fi
+        done
+        
+        log "  📥 下载兼容版 SmartDns..."
+        cd $BUILD_DIR
+        
+        if [ ! -d "luci-app-smartdns-compat" ]; then
+            git clone https://github.com/ujincn/luci-app-smartdns-compat.git || {
+                log "    ⚠️ 克隆 luci-app-smartdns-compat 失败，尝试继续"
+            }
         fi
         
-        local smartdns_dir=$(dirname "$smartdns_mk" 2>/dev/null)
-        if [ -n "$smartdns_dir" ] && [ ! -f "$smartdns_dir/files/smartdns.conf" ]; then
+        if [ ! -d "smartdns" ]; then
+            git clone https://github.com/ujincn/smartdns.git || {
+                log "    ⚠️ 克隆 smartdns 失败，尝试继续"
+            }
+        fi
+        
+        log "  🔧 复制兼容版 smartdns 到 package 目录..."
+        if [ -d "luci-app-smartdns-compat" ] && [ -d "smartdns" ]; then
+            cp -rf luci-app-smartdns-compat/* package/feeds/luci/ 2>/dev/null || true
+            cp -rf smartdns/* package/feeds/packages/net/ 2>/dev/null || true
+            
+            mkdir -p package/feeds/luci/luci-app-smartdns-compat
+            cp -rf luci-app-smartdns-compat/* package/feeds/luci/luci-app-smartdns-compat/ 2>/dev/null || true
+            
+            mkdir -p package/feeds/packages/net/smartdns
+            cp -rf smartdns/* package/feeds/packages/net/smartdns/ 2>/dev/null || true
+            
+            log "  ✅ 兼容版 smartdns 已复制"
+        fi
+        
+        log "  🔧 创建 smartdns 配置文件模板..."
+        local smartdns_dir=$(find package/feeds -type d -name "smartdns" 2>/dev/null | head -1)
+        if [ -n "$smartdns_dir" ]; then
             mkdir -p "$smartdns_dir/files"
             cat > "$smartdns_dir/files/smartdns.conf" << 'SMARTEOF'
 # SmartDNS configuration
@@ -1088,7 +1114,7 @@ SMARTEOF
             log "  ✅ 创建 smartdns 配置文件模板"
         fi
         
-        log "  🔧 预创建 smartdns 配置目录（解决 package/install 错误）"
+        log "  🔧 预创建 smartdns 配置目录..."
         mkdir -p files/etc/config
         cat > files/etc/config/smartdns << 'SMARTEOF'
 # SmartDNS configuration
@@ -4771,9 +4797,34 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    log "🔧 预创建 smartdns 配置文件（防止打包错误）..."
-    mkdir -p files/etc/config
-    cat > files/etc/config/smartdns << 'SMARTEOF'
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE源码特殊处理：确保兼容版 smartdns 存在..."
+        
+        if [ ! -d "luci-app-smartdns-compat" ]; then
+            log "  📥 下载兼容版 luci-app-smartdns-compat..."
+            git clone https://github.com/ujincn/luci-app-smartdns-compat.git || true
+        fi
+        
+        if [ ! -d "smartdns" ]; then
+            log "  📥 下载兼容版 smartdns..."
+            git clone https://github.com/ujincn/smartdns.git || true
+        fi
+        
+        log "  🔧 确保兼容版 smartdns 已复制到正确位置..."
+        if [ -d "luci-app-smartdns-compat" ] && [ -d "smartdns" ]; then
+            cp -rf luci-app-smartdns-compat/* package/feeds/luci/ 2>/dev/null || true
+            cp -rf smartdns/* package/feeds/packages/net/ 2>/dev/null || true
+            
+            mkdir -p package/feeds/luci/luci-app-smartdns-compat
+            cp -rf luci-app-smartdns-compat/* package/feeds/luci/luci-app-smartdns-compat/ 2>/dev/null || true
+            
+            mkdir -p package/feeds/packages/net/smartdns
+            cp -rf smartdns/* package/feeds/packages/net/smartdns/ 2>/dev/null || true
+        fi
+        
+        log "  🔧 创建 smartdns 配置文件..."
+        mkdir -p files/etc/config
+        cat > files/etc/config/smartdns << 'SMARTEOF'
 # SmartDNS configuration
 config smartdns
     option enabled '1'
@@ -4782,19 +4833,16 @@ config smartdns
     option tcp_server '1'
     option ipv6_server '1'
 SMARTEOF
-    log "  ✅ 已创建 files/etc/config/smartdns"
-    
-    mkdir -p staging_dir/target-*/root-*/etc/config 2>/dev/null || true
-    for target_dir in staging_dir/target-*; do
-        if [ -d "$target_dir" ]; then
-            for root_dir in "$target_dir"/root-*; do
-                if [ -d "$root_dir" ]; then
-                    mkdir -p "$root_dir/etc/config"
-                    cp files/etc/config/smartdns "$root_dir/etc/config/smartdns" 2>/dev/null || true
-                fi
-            done
+        
+        local smartdns_dir=$(find package/feeds -type d -name "smartdns" 2>/dev/null | head -1)
+        if [ -n "$smartdns_dir" ]; then
+            mkdir -p "$smartdns_dir/files"
+            cp files/etc/config/smartdns "$smartdns_dir/files/smartdns.conf" 2>/dev/null || true
+            log "  ✅ 已复制配置文件到: $smartdns_dir/files/"
         fi
-    done
+        
+        log "  ✅ 兼容版 smartdns 准备完成"
+    fi
     
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
@@ -4940,18 +4988,6 @@ EOF
                 log "    重新安装 feeds..."
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 
-                log "    重新创建 smartdns 配置文件..."
-                mkdir -p files/etc/config
-                cat > files/etc/config/smartdns << 'SMARTEOF'
-# SmartDNS configuration
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-SMARTEOF
-                
                 log "  ✅ package/install 错误修复完成"
             fi
             
@@ -4977,67 +5013,10 @@ SMARTEOF
                         local pkg_dir=$(find "$ipkg_dir" -type d -name "smartdns" 2>/dev/null | head -1)
                         if [ -n "$pkg_dir" ]; then
                             mkdir -p "$pkg_dir/etc/config"
-                            cat > "$pkg_dir/etc/config/smartdns" << 'INNEREOF'
-# SmartDNS configuration
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-INNEREOF
-                            chmod 644 "$pkg_dir/etc/config/smartdns"
+                            cp files/etc/config/smartdns "$pkg_dir/etc/config/smartdns" 2>/dev/null
                             log "    ✅ 强制创建: $pkg_dir/etc/config/smartdns"
                         fi
                     fi
-                    
-                    local target_arch=$(basename "$smartdns_dir" | sed 's/smartdns-//' | cut -d'/' -f1)
-                    if [ -n "$target_arch" ]; then
-                        local alt_ipkg_dir="$smartdns_dir/ipkg-$target_arch/smartdns"
-                        mkdir -p "$alt_ipkg_dir/etc/config"
-                        cat > "$alt_ipkg_dir/etc/config/smartdns" << 'INNEREOF'
-# SmartDNS configuration
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-INNEREOF
-                        chmod 644 "$alt_ipkg_dir/etc/config/smartdns"
-                        log "    ✅ 备用创建: $alt_ipkg_dir/etc/config/smartdns"
-                    fi
-                done
-                
-                find build_dir -type d -path "*/ipkg-*/smartdns" 2>/dev/null | while read pkg_dir; do
-                    mkdir -p "$pkg_dir/etc/config"
-                    cat > "$pkg_dir/etc/config/smartdns" << 'INNEREOF'
-# SmartDNS configuration
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-INNEREOF
-                    chmod 644 "$pkg_dir/etc/config/smartdns"
-                    log "    ✅ 直接创建: $pkg_dir/etc/config/smartdns"
-                done
-                
-                find build_dir -type d -path "*/ipkg-*/smartdns*/CONTROL" 2>/dev/null | while read control_dir; do
-                    local smartdns_root=$(dirname "$control_dir")
-                    mkdir -p "$smartdns_root/etc/config"
-                    cat > "$smartdns_root/etc/config/smartdns" << 'INNEREOF'
-# SmartDNS configuration
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-INNEREOF
-                    chmod 644 "$smartdns_root/etc/config/smartdns"
-                    log "    ✅ CONTROL目录创建: $smartdns_root/etc/config/smartdns"
                 done
                 
                 log "  ✅ smartdns 错误修复完成"
