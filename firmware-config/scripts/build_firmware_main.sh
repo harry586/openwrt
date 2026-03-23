@@ -1545,21 +1545,6 @@ EOF
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-        
-        if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ "$TARGET" = "mediatek" ]; then
-            log "🔧 LEDE + mediatek 平台特殊处理：修复 shortcut-fe 驱动"
-            
-            local sfe_mk=$(find package -path "*/shortcut-fe/*" -name "Makefile" 2>/dev/null | head -1)
-            if [ -n "$sfe_mk" ] && [ -f "$sfe_mk" ]; then
-                cp "$sfe_mk" "$sfe_mk.bak"
-                log "  找到 shortcut-fe Makefile: $sfe_mk"
-                
-                if grep -q "tcp_no_window_check" "$sfe_mk" 2>/dev/null; then
-                    sed -i 's/tcp_no_window_check/tcp_no_window_check_old/g' "$sfe_mk"
-                    log "  ✅ 已修复 tcp_no_window_check 符号"
-                fi
-            fi
-        fi
     elif [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
         log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
@@ -1573,21 +1558,6 @@ EOF
         echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
         echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
         log "✅ ath10k-ct驱动已强制启用"
-    fi
-    
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ "$TARGET" = "mediatek" ]; then
-        log "🔧 LEDE + mediatek 平台特殊处理：禁用有问题的 ath10k-ct 驱动"
-        
-        sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct/d' .config
-        sed -i '/CONFIG_PACKAGE_ath10k-firmware/d' .config
-        sed -i '/CONFIG_PACKAGE_ath10k-board/d' .config
-        
-        echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
-        echo "# CONFIG_PACKAGE_ath10k-firmware-qca988x is not set" >> .config
-        echo "# CONFIG_PACKAGE_ath10k-firmware-qca9984 is not set" >> .config
-        echo "# CONFIG_PACKAGE_ath10k-firmware-qca4019 is not set" >> .config
-        
-        log "  ✅ 已禁用 ath10k-ct 驱动（避免 API 不匹配错误）"
     fi
     
     log "🔧 强制配置生成固件..."
@@ -2002,12 +1972,49 @@ EOF
         fi
     done
     
+    log "🔧 特别处理：根据平台决定是否禁用 smartdns"
+    local disable_smartdns=0
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom|mediatek|ramips)
+            log "  ⚠️ 平台 $TARGET 已知 smartdns 编译问题，将禁用 smartdns"
+            disable_smartdns=1
+            ;;
+        *)
+            log "  ✅ 平台 $TARGET 支持 smartdns，保留"
+            disable_smartdns=0
+            ;;
+    esac
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        log "  🔧 彻底删除 smartdns 源文件..."
+        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 smartdns 目录: $dir"
+            rm -rf "$dir"
+        done
+        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 package smartdns 目录: $dir"
+            rm -rf "$dir"
+        done
+        find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 feeds smartdns 目录: $dir"
+            rm -rf "$dir"
+        done
+    fi
+    
     log "📋 第二轮：在 .config 中禁用所有相关包..."
     
     local disable_temp=$(mktemp)
     for plugin in "${full_forbidden_list[@]}"; do
         echo "$plugin" >> "$disable_temp"
     done
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        echo "smartdns" >> "$disable_temp"
+        echo "luci-app-smartdns" >> "$disable_temp"
+        echo "luci-i18n-smartdns-zh-cn" >> "$disable_temp"
+        echo "luci-i18n-smartdns-en" >> "$disable_temp"
+    fi
+    
     sort -u "$disable_temp" > "$disable_temp.sorted"
     
     while read plugin; do
@@ -2027,43 +2034,14 @@ EOF
         sed -i "/${upper_keyword}/d" .config
     done
     
+    if [ $disable_smartdns -eq 1 ]; then
+        sed -i "/smartdns/d" .config
+        sed -i "/SMARTDNS/d" .config
+    fi
+    
     log "🔧 特别处理 DDNS 相关配置..."
     sed -i '/ddns/d' .config
     sed -i '/DDNS/d' .config
-    
-    log "🔧 特别处理 smartdns（LEDE 源码兼容性修复）..."
-    
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        local smartdns_mk=$(find package/feeds -name "smartdns" -type d 2>/dev/null | head -1)
-        if [ -n "$smartdns_mk" ] && [ -f "$smartdns_mk/Makefile" ]; then
-            log "  找到 smartdns Makefile: $smartdns_mk/Makefile"
-            
-            cp "$smartdns_mk/Makefile" "$smartdns_mk/Makefile.bak"
-            
-            if ! grep -q "mkdir.*etc/config" "$smartdns_mk/Makefile" 2>/dev/null; then
-                sed -i '/define Package\/smartdns\/install/a\\t$(INSTALL_DIR) $(1)/etc/config\n\t$(INSTALL_DATA) ./files/smartdns.conf $(1)/etc/config/smartdns 2>/dev/null || touch $(1)/etc/config/smartdns' "$smartdns_mk/Makefile"
-                log "  ✅ 已添加配置文件创建逻辑"
-            fi
-        fi
-        
-        local smartdns_files_dir=$(find package/feeds -name "smartdns" -type d 2>/dev/null | head -1)
-        if [ -n "$smartdns_files_dir" ] && [ ! -f "$smartdns_files_dir/files/smartdns.conf" ]; then
-            mkdir -p "$smartdns_files_dir/files"
-            cat > "$smartdns_files_dir/files/smartdns.conf" << 'SMARTEOF'
-# SmartDNS configuration
-# This file is auto-generated to fix packaging error
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-SMARTEOF
-            log "  ✅ 创建 smartdns 配置文件模板"
-        fi
-    fi
-    
-    log "✅ smartdns 特殊处理完成"
     
     log "✅ 禁用完成"
     
@@ -2089,6 +2067,10 @@ SMARTEOF
     for plugin in "${full_forbidden_list[@]}"; do
         echo "$plugin" >> "$check_temp"
     done
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        echo "smartdns" >> "$check_temp"
+    fi
     
     sort -u "$check_temp" > "$check_temp.sorted"
     
@@ -2135,6 +2117,15 @@ SMARTEOF
             log "  ✅ $plugin 已禁用"
         fi
     done
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        if grep -q "^CONFIG_PACKAGE_smartdns=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" .config; then
+            log "  ❌ smartdns 仍被启用"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ smartdns 已禁用"
+        fi
+    fi
     
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
@@ -4836,73 +4827,49 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码特殊处理：确保兼容版 smartdns 存在..."
-        
-        log "  🔧 删除所有旧版 smartdns 构建目录..."
+    log "🔧 根据平台决定 smartdns 处理策略..."
+    local disable_smartdns=0
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom|mediatek|ramips)
+            log "  ⚠️ 平台 $TARGET 已知 smartdns 编译问题，将彻底删除 smartdns"
+            disable_smartdns=1
+            ;;
+        *)
+            log "  ✅ 平台 $TARGET 支持 smartdns，保留"
+            disable_smartdns=0
+            ;;
+    esac
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        log "🔧 彻底删除 smartdns 源文件和构建目录..."
+        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 package/feeds: $dir"
+            rm -rf "$dir"
+        done
+        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 package: $dir"
+            rm -rf "$dir"
+        done
+        find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 feeds: $dir"
+            rm -rf "$dir"
+        done
         find build_dir -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除构建目录: $dir"
+            log "  🗑️ 删除 build_dir: $dir"
             rm -rf "$dir"
         done
         
-        log "  📥 确保兼容版 smartdns 源码存在..."
-        if [ ! -d "smartdns" ] || [ ! -d "luci-app-smartdns-compat" ]; then
-            rm -rf luci-app-smartdns-compat smartdns 2>/dev/null
-            git clone https://github.com/ujincn/luci-app-smartdns-compat.git || true
-            git clone https://github.com/ujincn/smartdns.git || true
+        log "  🔧 在 .config 中禁用 smartdns..."
+        if [ -f ".config" ]; then
+            sed -i '/CONFIG_PACKAGE_smartdns/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-smartdns/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-i18n-smartdns/d' .config
+            echo "# CONFIG_PACKAGE_smartdns is not set" >> .config
+            echo "# CONFIG_PACKAGE_luci-app-smartdns is not set" >> .config
+            sort -u .config -o .config
         fi
         
-        log "  🔧 强制替换 smartdns 源码..."
-        local smartdns_dir=$(find package -type d -name "smartdns" 2>/dev/null | head -1)
-        if [ -n "$smartdns_dir" ] && [ -d "smartdns" ]; then
-            rm -rf "$smartdns_dir"/* 2>/dev/null
-            cp -rf smartdns/* "$smartdns_dir/" 2>/dev/null
-            log "  ✅ 已替换 smartdns 源码"
-        fi
-        
-        local luci_smartdns_dir=$(find package -type d -name "luci-app-smartdns*" 2>/dev/null | head -1)
-        if [ -n "$luci_smartdns_dir" ] && [ -d "luci-app-smartdns-compat" ]; then
-            rm -rf "$luci_smartdns_dir"/* 2>/dev/null
-            cp -rf luci-app-smartdns-compat/* "$luci_smartdns_dir/" 2>/dev/null
-            log "  ✅ 已替换 luci-app-smartdns 源码"
-        fi
-        
-        log "  🔧 强制设置 smartdns 版本为 1.2024.45..."
-        smartdns_dir=$(find package -type d -name "smartdns" 2>/dev/null | head -1)
-        if [ -n "$smartdns_dir" ] && [ -f "$smartdns_dir/Makefile" ]; then
-            sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=1.2024.45/' "$smartdns_dir/Makefile"
-            sed -i 's/PKG_RELEASE:=.*/PKG_RELEASE:=1/' "$smartdns_dir/Makefile"
-            log "  ✅ 已设置版本号"
-        fi
-        
-        log "  🔧 创建 smartdns 配置文件..."
-        mkdir -p files/etc/config
-        cat > files/etc/config/smartdns << 'SMARTEOF'
-# SmartDNS configuration
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-    option redirect '1'
-SMARTEOF
-        
-        smartdns_dir=$(find package -type d -name "smartdns" 2>/dev/null | head -1)
-        if [ -n "$smartdns_dir" ]; then
-            mkdir -p "$smartdns_dir/files"
-            cp files/etc/config/smartdns "$smartdns_dir/files/smartdns.conf" 2>/dev/null
-            log "  ✅ 已复制配置文件到: $smartdns_dir/files/"
-        fi
-        
-        log "  🔧 验证 smartdns 版本..."
-        smartdns_dir=$(find package -type d -name "smartdns" 2>/dev/null | head -1)
-        if [ -n "$smartdns_dir" ] && [ -f "$smartdns_dir/Makefile" ]; then
-            local version=$(grep "PKG_VERSION:=" "$smartdns_dir/Makefile" 2>/dev/null)
-            log "    当前版本: $version"
-        fi
-        
-        log "  ✅ 兼容版 smartdns 准备完成"
+        log "  ✅ smartdns 已彻底删除"
     fi
     
     log "🔧 创建双固件保护脚本..."
@@ -5033,52 +5000,6 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            if grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*dns.c\|smartdns.*util.c\|smartdns.*tlog.c" "$log_file"; then
-                log "  ⚠️ 检测到 smartdns 编译错误，强制清理并重新准备..."
-                
-                find build_dir -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-                    log "    删除 smartdns 构建目录: $dir"
-                    rm -rf "$dir"
-                done
-                
-                if [ -d "smartdns" ] && [ -d "luci-app-smartdns-compat" ]; then
-                    local smartdns_dir=$(find package -type d -name "smartdns" 2>/dev/null | head -1)
-                    if [ -n "$smartdns_dir" ]; then
-                        rm -rf "$smartdns_dir"/* 2>/dev/null
-                        cp -rf smartdns/* "$smartdns_dir/" 2>/dev/null
-                        sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=1.2024.45/' "$smartdns_dir/Makefile"
-                        log "    ✅ 已重新复制 smartdns 并设置版本"
-                    fi
-                    
-                    local luci_dir=$(find package -type d -name "luci-app-smartdns*" 2>/dev/null | head -1)
-                    if [ -n "$luci_dir" ]; then
-                        rm -rf "$luci_dir"/* 2>/dev/null
-                        cp -rf luci-app-smartdns-compat/* "$luci_dir/" 2>/dev/null
-                        log "    ✅ 已重新复制 luci-app-smartdns"
-                    fi
-                fi
-                
-                mkdir -p files/etc/config
-                cat > files/etc/config/smartdns << 'SMARTEOF'
-# SmartDNS configuration
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-    option redirect '1'
-SMARTEOF
-                
-                smartdns_dir=$(find package -type d -name "smartdns" 2>/dev/null | head -1)
-                if [ -n "$smartdns_dir" ]; then
-                    mkdir -p "$smartdns_dir/files"
-                    cp files/etc/config/smartdns "$smartdns_dir/files/smartdns.conf" 2>/dev/null
-                fi
-                
-                log "  ✅ smartdns 错误修复完成，继续编译"
-            fi
-            
             if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
                 
@@ -5096,6 +5017,29 @@ SMARTEOF
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 
                 log "  ✅ package/install 错误修复完成"
+            fi
+            
+            if [ $disable_smartdns -eq 1 ] && grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*dns.c\|smartdns.*util.c\|smartdns.*tlog.c" "$log_file"; then
+                log "  ⚠️ 检测到 smartdns 编译错误，强制删除..."
+                
+                find build_dir -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    删除 smartdns 构建目录: $dir"
+                    rm -rf "$dir"
+                done
+                
+                find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    删除 smartdns 源码目录: $dir"
+                    rm -rf "$dir"
+                done
+                
+                if [ -f ".config" ]; then
+                    sed -i '/CONFIG_PACKAGE_smartdns/d' .config
+                    sed -i '/CONFIG_PACKAGE_luci-app-smartdns/d' .config
+                    echo "# CONFIG_PACKAGE_smartdns is not set" >> .config
+                    sort -u .config -o .config
+                fi
+                
+                log "  ✅ smartdns 已删除，将继续编译"
             fi
             
             if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
