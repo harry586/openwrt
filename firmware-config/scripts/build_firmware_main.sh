@@ -1140,123 +1140,44 @@ EOF
         log "⚠️ feeds更新有警告，尝试继续..."
     }
     
+    log "=== 删除有问题的包（在安装前） ==="
+    
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码特殊处理：替换为兼容版 smartdns"
+        log "🔧 LEDE源码：删除有冲突的 vsftpd-alt 包"
         
-        log "  🔧 删除所有旧版 smartdns 源文件..."
-        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除: $dir"
-            rm -rf "$dir"
-        done
-        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除: $dir"
-            rm -rf "$dir"
-        done
-        find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除: $dir"
+        find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 vsftpd-alt 目录: $dir"
             rm -rf "$dir"
         done
         
-        log "  📥 下载兼容版 SmartDns (v1.2024.45)..."
-        cd $BUILD_DIR
+        find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 feeds 中的 vsftpd-alt 目录: $dir"
+            rm -rf "$dir"
+        done
         
-        rm -rf luci-app-smartdns-compat smartdns 2>/dev/null
-        
-        git clone https://github.com/ujincn/luci-app-smartdns-compat.git || {
-            log "    ⚠️ 克隆 luci-app-smartdns-compat 失败"
-        }
-        
-        git clone https://github.com/ujincn/smartdns.git || {
-            log "    ⚠️ 克隆 smartdns 失败"
-        }
-        
-        log "  🔧 复制兼容版 smartdns 到 package 目录..."
-        
-        if [ -d "luci-app-smartdns-compat" ]; then
-            cp -rf luci-app-smartdns-compat/* package/feeds/luci/ 2>/dev/null || true
-            cp -rf luci-app-smartdns-compat package/ 2>/dev/null || true
-            log "  ✅ 已复制 luci-app-smartdns-compat"
-        fi
-        
-        if [ -d "smartdns" ]; then
-            cp -rf smartdns/* package/feeds/packages/net/ 2>/dev/null || true
-            cp -rf smartdns package/ 2>/dev/null || true
-            log "  ✅ 已复制 smartdns"
-        fi
-        
-        log "  🔧 验证 smartdns 版本..."
-        local smartdns_mk=$(find package -path "*/smartdns/Makefile" 2>/dev/null | head -1)
-        if [ -n "$smartdns_mk" ] && [ -f "$smartdns_mk" ]; then
-            local version=$(grep "PKG_VERSION:=" "$smartdns_mk" 2>/dev/null | head -1)
-            log "    当前版本: $version"
-            if echo "$version" | grep -q "2024"; then
-                log "    ✅ 版本正确 (2024+)"
-            else
-                log "    ⚠️ 版本可能较旧，尝试强制更新"
-                sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=1.2024.45/' "$smartdns_mk"
-                sed -i 's/PKG_RELEASE:=.*/PKG_RELEASE:=1/' "$smartdns_mk"
-            fi
-        fi
-        
-        log "  🔧 创建 smartdns 配置文件..."
-        mkdir -p files/etc/config
-        cat > files/etc/config/smartdns << 'SMARTEOF'
-# SmartDNS configuration
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-    option redirect '1'
-SMARTEOF
-        
-        local smartdns_dir=$(find package -type d -name "smartdns" 2>/dev/null | head -1)
-        if [ -n "$smartdns_dir" ]; then
-            mkdir -p "$smartdns_dir/files"
-            cp files/etc/config/smartdns "$smartdns_dir/files/smartdns.conf" 2>/dev/null
-            log "  ✅ 已复制配置文件到: $smartdns_dir/files/"
-        fi
-        
-        log "  ✅ 兼容版 smartdns 准备完成"
+        log "🔧 LEDE源码：删除有问题的 smartdns 包（ipq40xx/mediatek 平台）"
+        case "$TARGET" in
+            ipq40xx|ipq806x|qcom|mediatek|ramips)
+                log "  平台 $TARGET，删除 smartdns"
+                find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    🗑️ 删除 smartdns 目录: $dir"
+                    rm -rf "$dir"
+                done
+                find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    🗑️ 删除 feeds smartdns 目录: $dir"
+                    rm -rf "$dir"
+                done
+                ;;
+            *)
+                log "  平台 $TARGET，保留 smartdns"
+                ;;
+        esac
     fi
     
     log "=== 安装Feeds ==="
     ./scripts/feeds install -a || {
         log "⚠️ feeds安装有警告，尝试继续..."
     }
-    
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码：再次确保兼容版 smartdns 不被覆盖..."
-        
-        local smartdns_dir=$(find package -type d -name "smartdns" 2>/dev/null | head -1)
-        if [ -n "$smartdns_dir" ] && [ -f "$smartdns_dir/Makefile" ]; then
-            local version=$(grep "PKG_VERSION:=" "$smartdns_dir/Makefile" 2>/dev/null)
-            if echo "$version" | grep -q "2021"; then
-                log "  ⚠️ 检测到旧版本，再次替换..."
-                cp -rf smartdns/* "$smartdns_dir/" 2>/dev/null || true
-                sed -i 's/PKG_VERSION:=.*/PKG_VERSION:=1.2024.45/' "$smartdns_dir/Makefile"
-                log "  ✅ 已强制更新为 2024 版本"
-            fi
-        fi
-        
-        mkdir -p files/etc/config
-        cat > files/etc/config/smartdns << 'SMARTEOF'
-# SmartDNS configuration
-config smartdns
-    option enabled '1'
-    option port '6053'
-    option server_name 'smartdns'
-    option tcp_server '1'
-    option ipv6_server '1'
-    option redirect '1'
-SMARTEOF
-        
-        if [ -n "$smartdns_dir" ]; then
-            mkdir -p "$smartdns_dir/files"
-            cp files/etc/config/smartdns "$smartdns_dir/files/smartdns.conf" 2>/dev/null
-        fi
-    fi
     
     log "✅ Feeds配置完成"
 }
@@ -1972,6 +1893,16 @@ EOF
         fi
     done
     
+    log "🔧 特别处理 vsftpd 冲突问题..."
+    find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        log "  🗑️ 删除 vsftpd-alt 目录: $dir"
+        rm -rf "$dir"
+    done
+    find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        log "  🗑️ 删除 feeds vsftpd-alt 目录: $dir"
+        rm -rf "$dir"
+    done
+    
     log "🔧 特别处理：根据平台决定是否禁用 smartdns"
     local disable_smartdns=0
     case "$TARGET" in
@@ -2008,6 +1939,8 @@ EOF
         echo "$plugin" >> "$disable_temp"
     done
     
+    echo "vsftpd-alt" >> "$disable_temp"
+    
     if [ $disable_smartdns -eq 1 ]; then
         echo "smartdns" >> "$disable_temp"
         echo "luci-app-smartdns" >> "$disable_temp"
@@ -2034,6 +1967,9 @@ EOF
         sed -i "/${upper_keyword}/d" .config
     done
     
+    sed -i "/vsftpd-alt/d" .config
+    sed -i "/VSFTPD-ALT/d" .config
+    
     if [ $disable_smartdns -eq 1 ]; then
         sed -i "/smartdns/d" .config
         sed -i "/SMARTDNS/d" .config
@@ -2042,6 +1978,12 @@ EOF
     log "🔧 特别处理 DDNS 相关配置..."
     sed -i '/ddns/d' .config
     sed -i '/DDNS/d' .config
+    
+    log "🔧 确保 vsftpd 被启用..."
+    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        log "  ✅ 已启用 vsftpd"
+    fi
     
     log "✅ 禁用完成"
     
@@ -2067,6 +2009,8 @@ EOF
     for plugin in "${full_forbidden_list[@]}"; do
         echo "$plugin" >> "$check_temp"
     done
+    
+    echo "vsftpd-alt" >> "$check_temp"
     
     if [ $disable_smartdns -eq 1 ]; then
         echo "smartdns" >> "$check_temp"
@@ -2117,6 +2061,13 @@ EOF
             log "  ✅ $plugin 已禁用"
         fi
     done
+    
+    if grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd-alt=m" .config; then
+        log "  ❌ vsftpd-alt 仍被启用"
+        still_enabled=$((still_enabled + 1))
+    else
+        log "  ✅ vsftpd-alt 已禁用"
+    fi
     
     if [ $disable_smartdns -eq 1 ]; then
         if grep -q "^CONFIG_PACKAGE_smartdns=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" .config; then
