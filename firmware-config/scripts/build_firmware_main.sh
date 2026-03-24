@@ -1140,10 +1140,10 @@ EOF
         log "⚠️ feeds更新有警告，尝试继续..."
     }
     
-    log "=== 删除有问题的包（在安装前） ==="
+    log "=== 修复有问题的包（在安装前） ==="
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码：删除有冲突的 vsftpd-alt 包"
+        log "🔧 LEDE源码：删除 vsftpd-alt，修复 luci-app-vsftpd 依赖"
         
         find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
             log "  🗑️ 删除 vsftpd-alt 目录: $dir"
@@ -1151,14 +1151,22 @@ EOF
         done
         
         find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 feeds 中的 vsftpd-alt 目录: $dir"
+            log "  🗑️ 删除 feeds vsftpd-alt 目录: $dir"
             rm -rf "$dir"
         done
         
         find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package 中的 vsftpd-alt 目录: $dir"
+            log "  🗑️ 删除 package vsftpd-alt 目录: $dir"
             rm -rf "$dir"
         done
+        
+        local luci_vsftpd_mk=$(find package/feeds -path "*/luci-app-vsftpd/Makefile" 2>/dev/null | head -1)
+        if [ -n "$luci_vsftpd_mk" ] && [ -f "$luci_vsftpd_mk" ]; then
+            log "  🔧 修复 luci-app-vsftpd 依赖: $luci_vsftpd_mk"
+            cp "$luci_vsftpd_mk" "$luci_vsftpd_mk.bak"
+            sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_mk"
+            log "  ✅ 已将依赖 vsftpd-alt 改为 vsftpd"
+        fi
         
         log "🔧 LEDE源码：删除有问题的 smartdns 包（ipq40xx/mediatek 平台）"
         case "$TARGET" in
@@ -1916,6 +1924,14 @@ EOF
         rm -rf "$dir"
     done
     
+    local luci_vsftpd_mk=$(find package/feeds -path "*/luci-app-vsftpd/Makefile" 2>/dev/null | head -1)
+    if [ -n "$luci_vsftpd_mk" ] && [ -f "$luci_vsftpd_mk" ]; then
+        log "  🔧 修复 luci-app-vsftpd 依赖"
+        cp "$luci_vsftpd_mk" "$luci_vsftpd_mk.bak"
+        sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_mk"
+        log "  ✅ 已将依赖 vsftpd-alt 改为 vsftpd"
+    fi
+    
     log "🔧 特别处理：根据平台决定是否禁用 smartdns"
     local disable_smartdns=0
     case "$TARGET" in
@@ -2080,6 +2096,13 @@ EOF
         still_enabled=$((still_enabled + 1))
     else
         log "  ✅ vsftpd-alt 已禁用"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_vsftpd=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
+        log "  ✅ vsftpd 已启用"
+    else
+        log "  ❌ vsftpd 未启用，尝试启用"
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
     if [ $disable_smartdns -eq 1 ]; then
