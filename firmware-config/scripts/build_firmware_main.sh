@@ -1160,12 +1160,12 @@ EOF
             rm -rf "$dir"
         done
         
-        local luci_vsftpd_mk=$(find package/feeds -path "*/luci-app-vsftpd/Makefile" 2>/dev/null | head -1)
-        if [ -n "$luci_vsftpd_mk" ] && [ -f "$luci_vsftpd_mk" ]; then
-            log "  🔧 修复 luci-app-vsftpd 依赖: $luci_vsftpd_mk"
-            cp "$luci_vsftpd_mk" "$luci_vsftpd_mk.bak"
-            sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_mk"
-            log "  ✅ 已将依赖 vsftpd-alt 改为 vsftpd"
+        local luci_vsftpd_dir=$(find package/feeds -type d -name "luci-app-vsftpd" 2>/dev/null | head -1)
+        if [ -n "$luci_vsftpd_dir" ] && [ -f "$luci_vsftpd_dir/Makefile" ]; then
+            log "  🔧 修复 luci-app-vsftpd 依赖: $luci_vsftpd_dir/Makefile"
+            cp "$luci_vsftpd_dir/Makefile" "$luci_vsftpd_dir/Makefile.bak"
+            sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_dir/Makefile"
+            grep -q "DEPENDS.*vsftpd" "$luci_vsftpd_dir/Makefile" && log "  ✅ 依赖已改为 vsftpd"
         fi
         
         log "🔧 LEDE源码：删除有问题的 smartdns 包（ipq40xx/mediatek 平台）"
@@ -1911,6 +1911,7 @@ EOF
     done
     
     log "🔧 特别处理 vsftpd 冲突问题..."
+    
     find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
         log "  🗑️ 删除 vsftpd-alt 目录: $dir"
         rm -rf "$dir"
@@ -1924,11 +1925,19 @@ EOF
         rm -rf "$dir"
     done
     
-    local luci_vsftpd_mk=$(find package/feeds -path "*/luci-app-vsftpd/Makefile" 2>/dev/null | head -1)
-    if [ -n "$luci_vsftpd_mk" ] && [ -f "$luci_vsftpd_mk" ]; then
-        log "  🔧 修复 luci-app-vsftpd 依赖"
-        cp "$luci_vsftpd_mk" "$luci_vsftpd_mk.bak"
-        sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_mk"
+    local luci_vsftpd_dir=$(find package/feeds -type d -name "luci-app-vsftpd" 2>/dev/null | head -1)
+    if [ -n "$luci_vsftpd_dir" ] && [ -f "$luci_vsftpd_dir/Makefile" ]; then
+        log "  🔧 修复 luci-app-vsftpd 依赖: $luci_vsftpd_dir/Makefile"
+        cp "$luci_vsftpd_dir/Makefile" "$luci_vsftpd_dir/Makefile.bak"
+        sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_dir/Makefile"
+        log "  ✅ 已将依赖 vsftpd-alt 改为 vsftpd"
+    fi
+    
+    local luci_vsftpd_i18n_dir=$(find package/feeds -type d -name "luci-i18n-vsftpd-zh-cn" 2>/dev/null | head -1)
+    if [ -n "$luci_vsftpd_i18n_dir" ] && [ -f "$luci_vsftpd_i18n_dir/Makefile" ]; then
+        log "  🔧 修复 luci-i18n-vsftpd-zh-cn 依赖"
+        cp "$luci_vsftpd_i18n_dir/Makefile" "$luci_vsftpd_i18n_dir/Makefile.bak"
+        sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_i18n_dir/Makefile"
         log "  ✅ 已将依赖 vsftpd-alt 改为 vsftpd"
     fi
     
@@ -2101,7 +2110,7 @@ EOF
     if grep -q "^CONFIG_PACKAGE_vsftpd=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
         log "  ✅ vsftpd 已启用"
     else
-        log "  ❌ vsftpd 未启用，尝试启用"
+        log "  ⚠️ vsftpd 未启用，尝试启用"
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
