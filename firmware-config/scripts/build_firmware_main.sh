@@ -1155,6 +1155,11 @@ EOF
             rm -rf "$dir"
         done
         
+        find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 package 中的 vsftpd-alt 目录: $dir"
+            rm -rf "$dir"
+        done
+        
         log "🔧 LEDE源码：删除有问题的 smartdns 包（ipq40xx/mediatek 平台）"
         case "$TARGET" in
             ipq40xx|ipq806x|qcom|mediatek|ramips)
@@ -1165,6 +1170,10 @@ EOF
                 done
                 find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
                     log "    🗑️ 删除 feeds smartdns 目录: $dir"
+                    rm -rf "$dir"
+                done
+                find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    🗑️ 删除 package smartdns 目录: $dir"
                     rm -rf "$dir"
                 done
                 ;;
@@ -1900,6 +1909,10 @@ EOF
     done
     find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
         log "  🗑️ 删除 feeds vsftpd-alt 目录: $dir"
+        rm -rf "$dir"
+    done
+    find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        log "  🗑️ 删除 package vsftpd-alt 目录: $dir"
         rm -rf "$dir"
     done
     
