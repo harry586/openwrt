@@ -1393,29 +1393,12 @@ generate_config() {
     log "🔧 设备配置变量: $device_config=y"
     log "🔧 MK文件设备名: $openwrt_device"
     
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码特殊处理：先设置目标平台"
-        cat > .config << EOF
-CONFIG_TARGET_${TARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-EOF
-        log "🔄 运行 make defconfig 生成基础配置..."
-        make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || {
-            log "❌ LEDE基础配置失败"
-            handle_error "LEDE基础配置失败"
-        }
-        
-        log "🔧 添加设备配置: $device_config=y"
-        echo "${device_config}=y" >> .config
-        
-        make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || true
-    else
-        cat > .config << EOF
+    # 先写入目标平台配置
+    cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
 ${device_config}=y
 EOF
-    fi
     
     log "🔧 基础配置文件内容:"
     cat .config
@@ -1431,15 +1414,12 @@ EOF
     
     : ${CONFIG_BASE:="base.config"}
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
-    : ${CONFIG_NORMAL:="normal.config"}
     
-    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
     local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
     local base_config_file="$CONFIG_DIR/$CONFIG_BASE"
     
-    # 根据配置模式决定使用哪些配置文件
     if [ "$CONFIG_MODE" = "base" ]; then
-        log "📋 base模式: 只使用 base.config + usb-generic.config"
+        log "📋 base模式: 只添加 base.config 和 usb-generic.config"
         
         if [ -f "$base_config_file" ]; then
             append_config "$base_config_file"
@@ -1456,6 +1436,9 @@ EOF
         fi
     else
         log "📋 normal模式: 使用完整配置组合"
+        
+        local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
+        
         if [ -f "$device_config_file" ]; then
             log "📋 找到设备专用配置文件: $device_config_file"
             append_config "$device_config_file"
@@ -1472,7 +1455,7 @@ EOF
             
             append_config "$CONFIG_DIR/$TARGET.config"
             append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-            append_config "$CONFIG_DIR/$CONFIG_NORMAL"
+            append_config "$CONFIG_DIR/normal.config"
         fi
     fi
     
@@ -1487,13 +1470,15 @@ EOF
         done
     fi
     
+    # TCP BBR 配置
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
         log "✅ TCP BBR已启用"
     fi
     
-    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
+    # TurboACC 配置（仅 normal 模式）
+    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ] && [ "$CONFIG_MODE" != "base" ]; then
         log "✅ TurboACC已启用"
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
@@ -1502,6 +1487,7 @@ EOF
         log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
+    # ath10k-ct 驱动
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
         sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
@@ -1558,135 +1544,23 @@ EOF
             ;;
     esac
     
-    log "🔄 第一次去重配置..."
+    log "🔄 去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    local kernel_config_file=""
-    local kernel_version=""
-    local found_kernel=0
-    
-    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
-        if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-            local device_def_file="$mk_file"
-            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
-                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
-                if [ -n "$kernel_version" ]; then
-                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
-                fi
-            fi
-        fi
-        
-        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
-            for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
-                kernel_config_file="target/linux/$TARGET/config-$ver"
-                if [ -f "$kernel_config_file" ]; then
-                    kernel_version="$ver"
-                    found_kernel=1
-                    break
-                fi
-            done
-        else
-            found_kernel=1
-        fi
-    fi
-    
-    if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
-        log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-        
-        local kernel_patterns=(
-            "^CONFIG_USB"
-            "^CONFIG_PHY"
-            "^CONFIG_DWC"
-            "^CONFIG_XHCI"
-            "^CONFIG_EXTCON"
-            "^CONFIG_COMMON_CLK"
-            "^CONFIG_ARCH"
-        )
-        
-        if [ ${#KERNEL_EXTRACT_PATTERNS[@]} -gt 0 ]; then
-            kernel_patterns=("${KERNEL_EXTRACT_PATTERNS[@]}")
-        fi
-        
-        local usb_configs_file="/tmp/usb_configs_$$.txt"
-        
-        for pattern in "${kernel_patterns[@]}"; do
-            grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
-        done
-        
-        sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
-        
-        local config_count=$(wc -l < "$usb_configs_file.sorted")
-        log "找到 $config_count 个USB相关内核配置"
-        
-        local added_count=0
-        while read line; do
-            local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
-            
-            if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
-                if echo "$line" | grep -q "=y$"; then
-                    echo "$line" >> .config
-                    added_count=$((added_count + 1))
-                elif echo "$line" | grep -q "is not set"; then
-                    echo "$line" >> .config
-                    added_count=$((added_count + 1))
-                fi
-            fi
-        done < "$usb_configs_file.sorted"
-        
-        log "✅ 添加了 $added_count 个新的内核配置"
-        
-        rm -f "$usb_configs_file" "$usb_configs_file.sorted"
-    else
-        if [ "${DEBUG:-false}" = "true" ]; then
-            log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
-        fi
-    fi
-    
+    log "🔄 运行 make defconfig 解决依赖..."
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔄 LEDE使用 olddefconfig 更新配置..."
         make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
-            log "⚠️ 第一次 olddefconfig 有警告，但继续"
-        }
-    else
-        log "🔄 第一次运行 make defconfig..."
-        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
-            log "❌ 第一次 make defconfig 失败"
-            tail -50 /tmp/build-logs/defconfig1.log
-            handle_error "第一次依赖解决失败"
-        }
-    fi
-    log "✅ 第一次配置更新成功"
-    
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
             log "⚠️ olddefconfig 有警告，但继续"
         }
     else
-        make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
             log "⚠️ make defconfig 有警告，但继续"
         }
     fi
+    log "✅ 配置更新完成"
     
-    log "🔍 动态检测实际生效的USB内核配置..."
-    
-    local usb_components=(
-        "USB_SUPPORT"
-        "USB_COMMON"
-        "USB"
-        "USB_XHCI_HCD"
-        "USB_DWC3"
-        "PHY"
-    )
-    
-    for component in "${usb_components[@]}"; do
-        local matches=$(grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | wc -l)
-        if [ $matches -gt 0 ]; then
-            log "✅ $component 相关配置: 找到 $matches 个"
-        fi
-    done
-    
-    log "📋 动态添加USB软件包..."
+    log "🔍 动态添加USB软件包..."
     
     local base_usb_packages=(
         "kmod-usb-core"
@@ -1714,18 +1588,6 @@ EOF
         "kmod-nls-utf8"
         "kmod-nls-cp936"
     )
-    
-    if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
-        base_usb_packages=("${BASE_USB_PACKAGES[@]}")
-    fi
-    
-    if [ ${#EXTENDED_USB_PACKAGES[@]} -gt 0 ]; then
-        extended_usb_packages=("${EXTENDED_USB_PACKAGES[@]}")
-    fi
-    
-    if [ ${#FS_SUPPORT_PACKAGES[@]} -gt 0 ]; then
-        fs_support_packages=("${FS_SUPPORT_PACKAGES[@]}")
-    fi
     
     case "$TARGET" in
         ipq40xx|ipq806x|qcom)
@@ -1778,120 +1640,35 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
+    # 运行 defconfig 使新添加的包生效
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔄 LEDE第二次使用 olddefconfig..."
         make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-            log "⚠️ 第二次 olddefconfig 有警告，但继续..."
+            log "⚠️ olddefconfig 有警告，但继续..."
         }
     else
-        log "🔄 第二次运行 make defconfig..."
         make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-            log "⚠️ 第二次 make defconfig 有警告，但继续..."
+            log "⚠️ make defconfig 有警告，但继续..."
         }
     fi
-    log "✅ 第二次配置更新完成"
     
-    log "🔍 验证关键USB驱动状态..."
-    
-    local critical_usb_drivers=(
-        "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-    )
-    
-    if [ ${#CRITICAL_USB_DRIVERS[@]} -gt 0 ]; then
-        critical_usb_drivers=("${CRITICAL_USB_DRIVERS[@]}")
-    fi
-    
-    case "$TARGET" in
-        ipq40xx|ipq806x|qcom)
-            critical_usb_drivers+=(
-                "kmod-usb-dwc3"
-                "kmod-usb-dwc3-qcom"
-            )
-            ;;
-        mediatek|ramips)
-            critical_usb_drivers+=(
-                "kmod-usb-xhci-mtk"
-            )
-            ;;
-    esac
-    
-    local missing_drivers=()
-    for driver in "${critical_usb_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            log "  ✅ $driver: 已启用"
-        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
-            log "  📦 $driver: 模块化"
-        else
-            log "  ❌ $driver: 未启用"
-            missing_drivers+=("$driver")
-        fi
-    done
-    
-    if [ ${#missing_drivers[@]} -gt 0 ] && [ "${AUTO_FIX_USB_DRIVERS:-true}" = "true" ]; then
-        log "🔧 自动修复缺失驱动..."
-        for driver in "${missing_drivers[@]}"; do
-            echo "CONFIG_PACKAGE_${driver}=y" >> .config
-            log "  ✅ 已添加: $driver"
-        done
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1
-        else
-            make defconfig > /dev/null 2>&1
-        fi
-    fi
-    
-    log "🔍 正在验证设备 $openwrt_device 是否被选中..."
-    
+    # 验证设备配置
     if grep -q "^${device_config}=y" .config; then
         log "✅ 目标设备已正确启用: ${device_config}=y"
-    elif grep -q "^# ${device_config} is not set" .config; then
-        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
-        sed -i "/^# ${device_config} is not set/d" .config
-        echo "${device_config}=y" >> .config
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1
-        else
-            make defconfig > /dev/null 2>&1
-        fi
-        
-        if grep -q "^${device_config}=y" .config; then
-            log "✅ 设备已强制启用"
-        else
-            log "❌ 无法启用设备"
-        fi
     else
-        log "⚠️ 警告: 设备配置行未找到，手动添加..."
+        log "⚠️ 警告: 设备配置未找到，手动添加..."
         echo "${device_config}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1
-        else
-            make defconfig > /dev/null 2>&1
-        fi
-        
-        if grep -q "^${device_config}=y" .config; then
-            log "✅ 设备已手动添加成功"
-        else
-            log "❌ 设备手动添加失败"
-        fi
     fi
     
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
     local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
-    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
     
     log "📊 配置统计:"
     log "  总配置行数: $total_configs"
     log "  启用软件包: $enabled_packages"
     log "  模块化软件包: $module_packages"
-    log "  禁用软件包: $disabled_packages"
     
     log "✅ 配置生成完成"
 }
