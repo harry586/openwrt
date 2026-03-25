@@ -1140,33 +1140,25 @@ EOF
         log "⚠️ feeds更新有警告，尝试继续..."
     }
     
-    log "=== 修复有问题的包（在安装前） ==="
+    log "=== 删除有问题的包（在安装前） ==="
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码：删除 vsftpd-alt，修复 luci-app-vsftpd 依赖"
+        log "🔧 LEDE源码：删除有依赖问题的 vsftpd 相关包"
         
-        find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 vsftpd-alt 目录: $dir"
+        find package/feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 package/feeds 目录: $dir"
             rm -rf "$dir"
         done
         
-        find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 feeds vsftpd-alt 目录: $dir"
+        find feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 feeds 目录: $dir"
             rm -rf "$dir"
         done
         
-        find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package vsftpd-alt 目录: $dir"
+        find package -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 package 目录: $dir"
             rm -rf "$dir"
         done
-        
-        local luci_vsftpd_dir=$(find package/feeds -type d -name "luci-app-vsftpd" 2>/dev/null | head -1)
-        if [ -n "$luci_vsftpd_dir" ] && [ -f "$luci_vsftpd_dir/Makefile" ]; then
-            log "  🔧 修复 luci-app-vsftpd 依赖: $luci_vsftpd_dir/Makefile"
-            cp "$luci_vsftpd_dir/Makefile" "$luci_vsftpd_dir/Makefile.bak"
-            sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_dir/Makefile"
-            grep -q "DEPENDS.*vsftpd" "$luci_vsftpd_dir/Makefile" && log "  ✅ 依赖已改为 vsftpd"
-        fi
         
         log "🔧 LEDE源码：删除有问题的 smartdns 包（ipq40xx/mediatek 平台）"
         case "$TARGET" in
