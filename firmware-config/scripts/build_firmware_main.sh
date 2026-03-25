@@ -1385,6 +1385,20 @@ generate_config() {
     log "🔧 设备配置变量: $device_config=y"
     log "🔧 MK文件设备名: $openwrt_device"
     
+    # base 模式：清空 target.mk 中的 DEFAULT_PACKAGES
+    if [ "$CONFIG_MODE" = "base" ]; then
+        log "📋 base模式: 清空 target.mk 中的 DEFAULT_PACKAGES"
+        local target_mk="target/linux/$TARGET/$SUBTARGET/target.mk"
+        if [ ! -f "$target_mk" ]; then
+            target_mk="target/linux/$TARGET/target.mk"
+        fi
+        if [ -f "$target_mk" ]; then
+            cp "$target_mk" "$target_mk.bak"
+            sed -i 's/^DEFAULT_PACKAGES.*/DEFAULT_PACKAGES:=/' "$target_mk"
+            log "  ✅ 已清空 $target_mk 中的 DEFAULT_PACKAGES"
+        fi
+    fi
+    
     # 先写入目标平台配置
     cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
@@ -1551,6 +1565,48 @@ EOF
         }
     fi
     log "✅ 配置更新完成"
+    
+    # base 模式：再次确保没有 Luci 插件被意外启用
+    if [ "$CONFIG_MODE" = "base" ]; then
+        log "📋 base模式: 清理可能被 DEFAULT_PACKAGES 添加的插件"
+        
+        # 定义需要禁用的 Luci 插件列表
+        local luci_apps_to_disable="
+luci-app-accesscontrol
+luci-app-arpbind
+luci-app-autoreboot
+luci-app-cpufreq
+luci-app-ddns
+luci-app-filetransfer
+luci-app-nlbwmon
+luci-app-ssr-plus
+luci-app-turboacc
+luci-app-upnp
+luci-app-vlmcsd
+luci-app-vsftpd
+luci-app-wol
+luci-app-smartdns
+luci-app-qbittorrent
+luci-app-qbittorrent_dynamic
+"
+        
+        for app in $luci_apps_to_disable; do
+            sed -i "/CONFIG_PACKAGE_${app}=y/d" .config
+            sed -i "/CONFIG_PACKAGE_${app}=m/d" .config
+            echo "# CONFIG_PACKAGE_${app} is not set" >> .config
+        done
+        
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        
+        # 重新运行 defconfig 使禁用生效
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /tmp/build-logs/defconfig_cleanup.log 2>&1 || true
+        else
+            make defconfig > /tmp/build-logs/defconfig_cleanup.log 2>&1 || true
+        fi
+        log "  ✅ 已清理非基础插件"
+    fi
     
     log "🔍 动态添加USB软件包..."
     
