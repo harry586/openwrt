@@ -1437,26 +1437,41 @@ EOF
     local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
     local base_config_file="$CONFIG_DIR/$CONFIG_BASE"
     
-    if [ -f "$device_config_file" ]; then
-        log "📋 找到设备专用配置文件: $device_config_file"
-        log "📋 完全只使用设备.config文件，不添加任何其他通用配置"
-        append_config "$device_config_file"
-    else
-        log "📋 未找到设备专用配置文件，使用通用配置组合"
+    # 根据配置模式决定使用哪些配置文件
+    if [ "$CONFIG_MODE" = "base" ]; then
+        log "📋 base模式: 只使用 base.config + usb-generic.config"
         
         if [ -f "$base_config_file" ]; then
             append_config "$base_config_file"
+            log "  ✅ 已添加 base.config"
+        else
+            log "  ⚠️ 未找到 base.config"
         fi
         
         if [ -f "$usb_generic_file" ]; then
             append_config "$usb_generic_file"
+            log "  ✅ 已添加 usb-generic.config"
+        else
+            log "  ⚠️ 未找到 usb-generic.config"
         fi
-        
-        append_config "$CONFIG_DIR/$TARGET.config"
-        append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-        
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            log "📋 normal模式: 添加 $CONFIG_NORMAL"
+    else
+        log "📋 normal模式: 使用完整配置组合"
+        if [ -f "$device_config_file" ]; then
+            log "📋 找到设备专用配置文件: $device_config_file"
+            append_config "$device_config_file"
+        else
+            log "📋 未找到设备专用配置文件，使用通用配置组合"
+            
+            if [ -f "$base_config_file" ]; then
+                append_config "$base_config_file"
+            fi
+            
+            if [ -f "$usb_generic_file" ]; then
+                append_config "$usb_generic_file"
+            fi
+            
+            append_config "$CONFIG_DIR/$TARGET.config"
+            append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
             append_config "$CONFIG_DIR/$CONFIG_NORMAL"
         fi
     fi
@@ -1877,257 +1892,6 @@ EOF
     log "  启用软件包: $enabled_packages"
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
-    
-    log "🔧 ===== 全面禁用不需要的插件 ===== "
-    
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
-    log "📋 基础禁用插件: $base_forbidden"
-    
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
-    
-    local search_keywords=()
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
-    for pkg in "${BASE_PKGS[@]}"; do
-        search_keywords+=("$pkg")
-        search_keywords+=("luci-app-${pkg}")
-        search_keywords+=("${pkg}-scripts")
-    done
-    
-    log "🔧 第一轮：彻底删除源文件..."
-    for keyword in "${search_keywords[@]}"; do
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除 package/feeds: $dir"
-                rm -rf "$dir"
-            done
-        fi
-        if [ -d "feeds" ]; then
-            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除 feeds: $dir"
-                rm -rf "$dir"
-            done
-        fi
-    done
-    
-    log "🔧 特别处理 vsftpd 冲突问题..."
-    
-    find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-        log "  🗑️ 删除 vsftpd-alt 目录: $dir"
-        rm -rf "$dir"
-    done
-    find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-        log "  🗑️ 删除 feeds vsftpd-alt 目录: $dir"
-        rm -rf "$dir"
-    done
-    find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-        log "  🗑️ 删除 package vsftpd-alt 目录: $dir"
-        rm -rf "$dir"
-    done
-    
-    local luci_vsftpd_dir=$(find package/feeds -type d -name "luci-app-vsftpd" 2>/dev/null | head -1)
-    if [ -n "$luci_vsftpd_dir" ] && [ -f "$luci_vsftpd_dir/Makefile" ]; then
-        log "  🔧 修复 luci-app-vsftpd 依赖: $luci_vsftpd_dir/Makefile"
-        cp "$luci_vsftpd_dir/Makefile" "$luci_vsftpd_dir/Makefile.bak"
-        sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_dir/Makefile"
-        log "  ✅ 已将依赖 vsftpd-alt 改为 vsftpd"
-    fi
-    
-    local luci_vsftpd_i18n_dir=$(find package/feeds -type d -name "luci-i18n-vsftpd-zh-cn" 2>/dev/null | head -1)
-    if [ -n "$luci_vsftpd_i18n_dir" ] && [ -f "$luci_vsftpd_i18n_dir/Makefile" ]; then
-        log "  🔧 修复 luci-i18n-vsftpd-zh-cn 依赖"
-        cp "$luci_vsftpd_i18n_dir/Makefile" "$luci_vsftpd_i18n_dir/Makefile.bak"
-        sed -i 's/vsftpd-alt/vsftpd/g' "$luci_vsftpd_i18n_dir/Makefile"
-        log "  ✅ 已将依赖 vsftpd-alt 改为 vsftpd"
-    fi
-    
-    log "🔧 特别处理：根据平台决定是否禁用 smartdns"
-    local disable_smartdns=0
-    case "$TARGET" in
-        ipq40xx|ipq806x|qcom|mediatek|ramips)
-            log "  ⚠️ 平台 $TARGET 已知 smartdns 编译问题，将禁用 smartdns"
-            disable_smartdns=1
-            ;;
-        *)
-            log "  ✅ 平台 $TARGET 支持 smartdns，保留"
-            disable_smartdns=0
-            ;;
-    esac
-    
-    if [ $disable_smartdns -eq 1 ]; then
-        log "  🔧 彻底删除 smartdns 源文件..."
-        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除 smartdns 目录: $dir"
-            rm -rf "$dir"
-        done
-        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除 package smartdns 目录: $dir"
-            rm -rf "$dir"
-        done
-        find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除 feeds smartdns 目录: $dir"
-            rm -rf "$dir"
-        done
-    fi
-    
-    log "📋 第二轮：在 .config 中禁用所有相关包..."
-    
-    local disable_temp=$(mktemp)
-    for plugin in "${full_forbidden_list[@]}"; do
-        echo "$plugin" >> "$disable_temp"
-    done
-    
-    echo "vsftpd-alt" >> "$disable_temp"
-    
-    if [ $disable_smartdns -eq 1 ]; then
-        echo "smartdns" >> "$disable_temp"
-        echo "luci-app-smartdns" >> "$disable_temp"
-        echo "luci-i18n-smartdns-zh-cn" >> "$disable_temp"
-        echo "luci-i18n-smartdns-en" >> "$disable_temp"
-    fi
-    
-    sort -u "$disable_temp" > "$disable_temp.sorted"
-    
-    while read plugin; do
-        [ -z "$plugin" ] && continue
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        sed -i "/CONFIG_PACKAGE_.*${plugin}/d" .config
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-    done < "$disable_temp.sorted"
-    
-    rm -f "$disable_temp" "$disable_temp.sorted"
-    
-    log "🔧 第三轮：删除所有包含关键字的配置行..."
-    for keyword in "${search_keywords[@]}"; do
-        sed -i "/${keyword}/d" .config
-        local upper_keyword=$(echo "$keyword" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-        sed -i "/${upper_keyword}/d" .config
-    done
-    
-    sed -i "/vsftpd-alt/d" .config
-    sed -i "/VSFTPD-ALT/d" .config
-    
-    if [ $disable_smartdns -eq 1 ]; then
-        sed -i "/smartdns/d" .config
-        sed -i "/SMARTDNS/d" .config
-    fi
-    
-    log "🔧 特别处理 DDNS 相关配置..."
-    sed -i '/ddns/d' .config
-    sed -i '/DDNS/d' .config
-    
-    log "🔧 确保 vsftpd 被启用..."
-    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        log "  ✅ 已启用 vsftpd"
-    fi
-    
-    log "✅ 禁用完成"
-    
-    sort .config | uniq > .config.tmp
-    mv .config.tmp .config
-    
-    log "🔄 运行 make defconfig 使禁用生效..."
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-            log "⚠️ olddefconfig 有警告，但继续..."
-        }
-    else
-        make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-            log "⚠️ make defconfig 有警告，但继续..."
-        }
-    fi
-    
-    log "🔍 第四轮：检查插件残留..."
-    
-    local remaining=()
-    local check_temp=$(mktemp)
-    
-    for plugin in "${full_forbidden_list[@]}"; do
-        echo "$plugin" >> "$check_temp"
-    done
-    
-    echo "vsftpd-alt" >> "$check_temp"
-    
-    if [ $disable_smartdns -eq 1 ]; then
-        echo "smartdns" >> "$check_temp"
-    fi
-    
-    sort -u "$check_temp" > "$check_temp.sorted"
-    
-    while read plugin; do
-        [ -z "$plugin" ] && continue
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            remaining+=("$plugin")
-        fi
-    done < "$check_temp.sorted"
-    
-    rm -f "$check_temp" "$check_temp.sorted"
-    
-    if [ ${#remaining[@]} -gt 0 ]; then
-        log "⚠️ 发现 ${#remaining[@]} 个插件残留，第四轮禁用..."
-        
-        for plugin in "${remaining[@]}"; do
-            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-            log "  ✅ 再次禁用: $plugin"
-        done
-        
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1
-        else
-            make defconfig > /dev/null 2>&1
-        fi
-    fi
-    
-    log "📊 最终插件状态验证:"
-    local still_enabled=0
-    
-    for plugin in "${BASE_PKGS[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
-            log "  ❌ $plugin 相关包仍被启用"
-            still_enabled=$((still_enabled + 1))
-        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
-            log "  ❌ $plugin 相关包仍被模块化"
-            still_enabled=$((still_enabled + 1))
-        else
-            log "  ✅ $plugin 已禁用"
-        fi
-    done
-    
-    if grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd-alt=m" .config; then
-        log "  ❌ vsftpd-alt 仍被启用"
-        still_enabled=$((still_enabled + 1))
-    else
-        log "  ✅ vsftpd-alt 已禁用"
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_vsftpd=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
-        log "  ✅ vsftpd 已启用"
-    else
-        log "  ⚠️ vsftpd 未启用，尝试启用"
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-    fi
-    
-    if [ $disable_smartdns -eq 1 ]; then
-        if grep -q "^CONFIG_PACKAGE_smartdns=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" .config; then
-            log "  ❌ smartdns 仍被启用"
-            still_enabled=$((still_enabled + 1))
-        else
-            log "  ✅ smartdns 已禁用"
-        fi
-    fi
-    
-    if [ $still_enabled -eq 0 ]; then
-        log "🎉 所有指定插件已成功禁用"
-    else
-        log "⚠️ 有 $still_enabled 个插件未能禁用，将在后续阶段再次尝试"
-    fi
     
     log "✅ 配置生成完成"
 }
