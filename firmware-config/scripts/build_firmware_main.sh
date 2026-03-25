@@ -986,7 +986,6 @@ EOF
     find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
         if [ -f "$dir/Makefile" ]; then
             cp "$dir/Makefile" "$dir/Makefile.bak"
-            # 替换为可用的下载源
             sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
             sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
             log "  ✅ 修复 libxml2 下载源"
@@ -1003,6 +1002,39 @@ EOF
             log "  ✅ 修复: $file"
         fi
     done
+    
+    # ============================================
+    # 修复补丁兼容性问题（区分源码类型）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
+        log "🔧 ImmortalWrt 源码特殊处理：修复补丁兼容性"
+        
+        # 删除可能导致问题的补丁（根据错误日志）
+        local problem_patches=(
+            "target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+        )
+        
+        for patch in "${problem_patches[@]}"; do
+            if [ -f "$patch" ]; then
+                log "  🗑️ 删除有问题的补丁: $patch"
+                mv "$patch" "$patch.disabled" 2>/dev/null || rm -f "$patch"
+            fi
+        done
+        
+        # 对于 mediatek 平台，也可能有类似问题
+        if [ "$TARGET" = "mediatek" ]; then
+            local mediatek_patches=(
+                "target/linux/mediatek/patches-6.6/100-xxx.patch"
+            )
+            for patch in "${mediatek_patches[@]}"; do
+                if [ -f "$patch" ] && [ ! -f "$patch.disabled" ]; then
+                    log "  🔧 检查补丁: $patch"
+                fi
+            done
+        fi
+        
+        log "  ✅ ImmortalWrt 补丁兼容性修复完成"
+    fi
     
     # 使用配置文件中的开关
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
@@ -3687,52 +3719,78 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    local device_file=""
-    local mk_device_name=""
-    
+    # 收集所有匹配的设备定义
+    local matches=()
     for mkfile in "${mk_files[@]}"; do
-        if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
-            device_file="$mkfile"
-            mk_device_name=$(grep -m1 "define Device.*$search_device" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
-            log "✅ 找到设备定义: $mk_device_name (在 $device_file)"
-            break
-        fi
+        while IFS= read -r line; do
+            if [[ "$line" =~ define\ Device/([a-zA-Z0-9_-]+) ]]; then
+                local dev_name="${BASH_REMATCH[1]}"
+                if [[ "$dev_name" == *"$search_device"* ]]; then
+                    matches+=("$dev_name|$mkfile")
+                fi
+            fi
+        done < "$mkfile"
     done
     
-    if [ -z "$device_file" ] && [[ "$search_device" == *"_"* ]]; then
-        local alt_search="${search_device//_/-}"
-        for mkfile in "${mk_files[@]}"; do
-            if grep -q "define Device.*$alt_search" "$mkfile" 2>/dev/null; then
-                device_file="$mkfile"
-                mk_device_name=$(grep -m1 "define Device.*$alt_search" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
-                log "✅ 通过连字符转换找到设备定义: $mk_device_name (在 $device_file)"
-                break
-            fi
-        done
-    fi
-    
-    if [ -z "$device_file" ] && [[ "$search_device" == *"-"* ]]; then
-        local alt_search="${search_device//-/_}"
-        for mkfile in "${mk_files[@]}"; do
-            if grep -q "define Device.*$alt_search" "$mkfile" 2>/dev/null; then
-                device_file="$mkfile"
-                mk_device_name=$(grep -m1 "define Device.*$alt_search" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
-                log "✅ 通过下划线转换找到设备定义: $mk_device_name (在 $device_file)"
-                break
-            fi
-        done
-    fi
-    
-    if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
-        log "❌ 错误：未找到设备 $DEVICE 的定义文件"
+    if [ ${#matches[@]} -eq 0 ]; then
+        log "❌ 错误：未找到任何包含设备名 '$search_device' 的定义"
         log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
         exit 1
     fi
     
+    # 计算匹配权重并排序
+    echo ""
+    echo "🔍 找到 ${#matches[@]} 个匹配的设备定义:"
+    echo "----------------------------------------"
+    
+    local weighted_matches=()
+    for match in "${matches[@]}"; do
+        local dev_name="${match%|*}"
+        local mkfile="${match#*|}"
+        
+        # 计算权重
+        local weight=0
+        if [[ "$dev_name" == "$search_device" ]]; then
+            weight=100  # 完全匹配，最高权重
+        elif [[ "$dev_name" == "$search_device"* ]]; then
+            weight=90   # 以搜索词开头
+        elif [[ "$dev_name" == *"$search_device" ]]; then
+            weight=80   # 以搜索词结尾
+        elif [[ "$dev_name" == *"$search_device"* ]]; then
+            weight=70   # 包含搜索词
+        fi
+        
+        # 更短的名字权重更高（避免 ubootmod 等后缀）
+        local name_len=${#dev_name}
+        weight=$((weight + (1000 - name_len) / 10))
+        
+        weighted_matches+=("$weight|$dev_name|$mkfile")
+        printf "  %-40s 权重: %3d  (文件: %s)\n" "$dev_name" "$weight" "$(basename "$mkfile")"
+    done
+    echo "----------------------------------------"
+    
+    # 按权重降序排序
+    IFS=$'\n' weighted_matches=($(sort -t'|' -k1 -rn <<< "${weighted_matches[*]}"))
+    unset IFS
+    
+    # 选择权重最高的
+    local best="${weighted_matches[0]}"
+    local best_weight="${best%%|*}"
+    local best_dev_name="${best#*|}"
+    best_dev_name="${best_dev_name%|*}"
+    local best_mkfile="${best##*|}"
+    
+    echo ""
+    log "✅ 选择最佳匹配: $best_dev_name (权重: $best_weight)"
+    log "   定义文件: $best_mkfile"
+    
+    local device_file="$best_mkfile"
+    local mk_device_name="$best_dev_name"
+    
     log "✅ 找到设备定义文件: $device_file"
     
     local device_block=""
-    device_block=$(awk "/define Device.*$mk_device_name/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+    device_block=$(awk "/define Device *$mk_device_name/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
     
     if [ -n "$device_block" ]; then
         echo ""
