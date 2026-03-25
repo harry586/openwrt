@@ -5198,8 +5198,11 @@ quick_error_check() {
             ["Broken pipe"]="Broken pipe|write error"
             ["符号链接循环"]="Too many levels of symbolic links"
             ["package/install错误"]="package/install.*Error 255|package/install.*Error"
+            ["文件冲突"]="check_data_file_clashes|already provided by package"
             ["samba4错误"]="samba4.*Error|samba.*configure.*error"
             ["ath10k错误"]="ath10k.*Error|ath10k.*error:"
+            ["smartdns错误"]="smartdns.*Error|smartdns.*error:|dns.c|util.c|tlog.c"
+            ["vsftpd错误"]="vsftpd.*Error|vsftpd-alt"
         )
 
         local found=0
@@ -5208,7 +5211,7 @@ quick_error_check() {
         
         for err_type in "${!error_patterns[@]}"; do
             local pattern="${error_patterns[$err_type]}"
-            local matches=$(grep -E -i -B 3 -A 3 "$pattern" "$latest_log" 2>/dev/null | grep -v "^--$" | head -20)
+            local matches=$(grep -E -i -B 3 -A 3 "$pattern" "$latest_log" 2>/dev/null | grep -v "^--$" | head -30)
             if [ -n "$matches" ]; then
                 echo "❌ $err_type 检测到："
                 echo "$matches" | while IFS= read -r line; do
@@ -5227,7 +5230,24 @@ quick_error_check() {
         fi
         echo ""
 
-        echo "🔍 3. 关键组件状态检查:"
+        echo "🔍 3. package/install 详细错误分析:"
+        echo "----------------------------------------"
+        
+        local install_errors=$(grep -n -A 10 -B 5 "package/install.*Error" "$latest_log" 2>/dev/null | head -50)
+        if [ -n "$install_errors" ]; then
+            echo "❌ package/install 阶段详细错误:"
+            echo "$install_errors" | while IFS= read -r line; do
+                if [ ${#line} -gt 120 ]; then
+                    line="${line:0:120}..."
+                fi
+                echo "   $line"
+            done
+        else
+            echo "✅ 未检测到 package/install 错误"
+        fi
+        echo ""
+
+        echo "🔍 4. 关键组件状态检查:"
         echo "----------------------------------------"
         
         if [ -d "staging_dir" ]; then
@@ -5259,7 +5279,7 @@ quick_error_check() {
         fi
         echo ""
 
-        echo "🔍 4. 固件生成状态检查:"
+        echo "🔍 5. 固件生成状态检查:"
         echo "----------------------------------------"
         
         local target_dir="bin/targets/$target_platform"
@@ -5319,9 +5339,9 @@ quick_error_check() {
         fi
         echo ""
 
-        echo "🔍 5. 最后30行日志摘要:"
+        echo "🔍 6. 最后50行日志摘要:"
         echo "----------------------------------------"
-        tail -30 "$latest_log" | sed 's/^/   /'
+        tail -50 "$latest_log" | sed 's/^/   /'
         echo ""
 
         echo "================================================================="
@@ -5345,11 +5365,15 @@ quick_error_check() {
         else
             echo ""
             echo "❌❌❌ 编译失败：没有生成任何有效固件 ❌❌❌"
-            echo "   退出代码检查:"
-            
-            tail -50 "$latest_log" | grep -E "make.*Error|exit status|ERROR:" | tail -5 | while read line; do
+            echo ""
+            echo "   最后出现的错误:"
+            echo "   ----------------------------------------"
+            tail -100 "$latest_log" | grep -E "make.*Error|ERROR:|error:|failed|check_data_file_clashes|already provided" | tail -20 | while read line; do
                 echo "   $line"
             done
+            echo "   ----------------------------------------"
+            echo ""
+            echo "   建议: 查看上方详细错误信息定位问题"
         fi
         
         echo "================================================================="
