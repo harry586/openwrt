@@ -1460,26 +1460,29 @@ generate_config() {
     log "🔧 设备配置变量: $device_config=y"
     log "🔧 MK文件设备名: $openwrt_device"
     
-    # base 模式：清空 target.mk 中的 DEFAULT_PACKAGES
-    if [ "$CONFIG_MODE" = "base" ]; then
-        log "📋 base模式: 清空 target.mk 中的 DEFAULT_PACKAGES"
-        local target_mk="target/linux/$TARGET/$SUBTARGET/target.mk"
-        if [ ! -f "$target_mk" ]; then
-            target_mk="target/linux/$TARGET/target.mk"
-        fi
-        if [ -f "$target_mk" ]; then
-            cp "$target_mk" "$target_mk.bak"
-            sed -i 's/^DEFAULT_PACKAGES.*/DEFAULT_PACKAGES:=/' "$target_mk"
-            log "  ✅ 已清空 $target_mk 中的 DEFAULT_PACKAGES"
-        fi
-    fi
-    
-    # 先写入目标平台配置
-    cat > .config << EOF
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE源码特殊处理：先设置目标平台"
+        cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+EOF
+        log "🔄 运行 make defconfig 生成基础配置..."
+        make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || {
+            log "❌ LEDE基础配置失败"
+            handle_error "LEDE基础配置失败"
+        }
+        
+        log "🔧 添加设备配置: $device_config=y"
+        echo "${device_config}=y" >> .config
+        
+        make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || true
+    else
+        cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
 ${device_config}=y
 EOF
+    fi
     
     log "🔧 基础配置文件内容:"
     cat .config
@@ -1495,12 +1498,15 @@ EOF
     
     : ${CONFIG_BASE:="base.config"}
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
+    : ${CONFIG_NORMAL:="normal.config"}
     
+    local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
     local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
     local base_config_file="$CONFIG_DIR/$CONFIG_BASE"
     
+    # 根据配置模式决定使用哪些配置文件
     if [ "$CONFIG_MODE" = "base" ]; then
-        log "📋 base模式: 只添加 base.config 和 usb-generic.config"
+        log "📋 base模式: 只使用 base.config + usb-generic.config"
         
         if [ -f "$base_config_file" ]; then
             append_config "$base_config_file"
@@ -1517,9 +1523,6 @@ EOF
         fi
     else
         log "📋 normal模式: 使用完整配置组合"
-        
-        local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
-        
         if [ -f "$device_config_file" ]; then
             log "📋 找到设备专用配置文件: $device_config_file"
             append_config "$device_config_file"
@@ -1536,7 +1539,7 @@ EOF
             
             append_config "$CONFIG_DIR/$TARGET.config"
             append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-            append_config "$CONFIG_DIR/normal.config"
+            append_config "$CONFIG_DIR/$CONFIG_NORMAL"
         fi
     fi
     
@@ -1551,15 +1554,13 @@ EOF
         done
     fi
     
-    # TCP BBR 配置
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
         log "✅ TCP BBR已启用"
     fi
     
-    # TurboACC 配置（仅 normal 模式）
-    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ] && [ "$CONFIG_MODE" != "base" ]; then
+    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
         log "✅ TurboACC已启用"
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
@@ -1568,7 +1569,6 @@ EOF
         log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
-    # ath10k-ct 驱动
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
         sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
@@ -1625,65 +1625,135 @@ EOF
             ;;
     esac
     
-    log "🔄 去重配置..."
+    log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    log "🔄 运行 make defconfig 解决依赖..."
+    local kernel_config_file=""
+    local kernel_version=""
+    local found_kernel=0
+    
+    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
+        if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+            local device_def_file="$mk_file"
+            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
+                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
+                if [ -n "$kernel_version" ]; then
+                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
+                fi
+            fi
+        fi
+        
+        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
+            for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
+                kernel_config_file="target/linux/$TARGET/config-$ver"
+                if [ -f "$kernel_config_file" ]; then
+                    kernel_version="$ver"
+                    found_kernel=1
+                    break
+                fi
+            done
+        else
+            found_kernel=1
+        fi
+    fi
+    
+    if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
+        log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
+        
+        local kernel_patterns=(
+            "^CONFIG_USB"
+            "^CONFIG_PHY"
+            "^CONFIG_DWC"
+            "^CONFIG_XHCI"
+            "^CONFIG_EXTCON"
+            "^CONFIG_COMMON_CLK"
+            "^CONFIG_ARCH"
+        )
+        
+        if [ ${#KERNEL_EXTRACT_PATTERNS[@]} -gt 0 ]; then
+            kernel_patterns=("${KERNEL_EXTRACT_PATTERNS[@]}")
+        fi
+        
+        local usb_configs_file="/tmp/usb_configs_$$.txt"
+        
+        for pattern in "${kernel_patterns[@]}"; do
+            grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
+        done
+        
+        sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
+        
+        local config_count=$(wc -l < "$usb_configs_file.sorted")
+        log "找到 $config_count 个USB相关内核配置"
+        
+        local added_count=0
+        while read line; do
+            local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
+            
+            if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
+                if echo "$line" | grep -q "=y$"; then
+                    echo "$line" >> .config
+                    added_count=$((added_count + 1))
+                elif echo "$line" | grep -q "is not set"; then
+                    echo "$line" >> .config
+                    added_count=$((added_count + 1))
+                fi
+            fi
+        done < "$usb_configs_file.sorted"
+        
+        log "✅ 添加了 $added_count 个新的内核配置"
+        
+        rm -f "$usb_configs_file" "$usb_configs_file.sorted"
+    else
+        if [ "${DEBUG:-false}" = "true" ]; then
+            log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
+        fi
+    fi
+    
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔄 LEDE使用 olddefconfig 更新配置..."
         make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "⚠️ 第一次 olddefconfig 有警告，但继续"
+        }
+    else
+        log "🔄 第一次运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "❌ 第一次 make defconfig 失败"
+            tail -50 /tmp/build-logs/defconfig1.log
+            handle_error "第一次依赖解决失败"
+        }
+    fi
+    log "✅ 第一次配置更新成功"
+    
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
             log "⚠️ olddefconfig 有警告，但继续"
         }
     else
-        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+        make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
             log "⚠️ make defconfig 有警告，但继续"
         }
     fi
-    log "✅ 配置更新完成"
     
-    # base 模式：再次确保没有 Luci 插件被意外启用
-    if [ "$CONFIG_MODE" = "base" ]; then
-        log "📋 base模式: 清理可能被 DEFAULT_PACKAGES 添加的插件"
-        
-        # 定义需要禁用的 Luci 插件列表
-        local luci_apps_to_disable="
-luci-app-accesscontrol
-luci-app-arpbind
-luci-app-autoreboot
-luci-app-cpufreq
-luci-app-ddns
-luci-app-filetransfer
-luci-app-nlbwmon
-luci-app-ssr-plus
-luci-app-turboacc
-luci-app-upnp
-luci-app-vlmcsd
-luci-app-vsftpd
-luci-app-wol
-luci-app-smartdns
-luci-app-qbittorrent
-luci-app-qbittorrent_dynamic
-"
-        
-        for app in $luci_apps_to_disable; do
-            sed -i "/CONFIG_PACKAGE_${app}=y/d" .config
-            sed -i "/CONFIG_PACKAGE_${app}=m/d" .config
-            echo "# CONFIG_PACKAGE_${app} is not set" >> .config
-        done
-        
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        
-        # 重新运行 defconfig 使禁用生效
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /tmp/build-logs/defconfig_cleanup.log 2>&1 || true
-        else
-            make defconfig > /tmp/build-logs/defconfig_cleanup.log 2>&1 || true
+    log "🔍 动态检测实际生效的USB内核配置..."
+    
+    local usb_components=(
+        "USB_SUPPORT"
+        "USB_COMMON"
+        "USB"
+        "USB_XHCI_HCD"
+        "USB_DWC3"
+        "PHY"
+    )
+    
+    for component in "${usb_components[@]}"; do
+        local matches=$(grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | wc -l)
+        if [ $matches -gt 0 ]; then
+            log "✅ $component 相关配置: 找到 $matches 个"
         fi
-        log "  ✅ 已清理非基础插件"
-    fi
+    done
     
-    log "🔍 动态添加USB软件包..."
+    log "📋 动态添加USB软件包..."
     
     local base_usb_packages=(
         "kmod-usb-core"
@@ -1711,6 +1781,18 @@ luci-app-qbittorrent_dynamic
         "kmod-nls-utf8"
         "kmod-nls-cp936"
     )
+    
+    if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
+        base_usb_packages=("${BASE_USB_PACKAGES[@]}")
+    fi
+    
+    if [ ${#EXTENDED_USB_PACKAGES[@]} -gt 0 ]; then
+        extended_usb_packages=("${EXTENDED_USB_PACKAGES[@]}")
+    fi
+    
+    if [ ${#FS_SUPPORT_PACKAGES[@]} -gt 0 ]; then
+        fs_support_packages=("${FS_SUPPORT_PACKAGES[@]}")
+    fi
     
     case "$TARGET" in
         ipq40xx|ipq806x|qcom)
@@ -1763,35 +1845,380 @@ luci-app-qbittorrent_dynamic
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 运行 defconfig 使新添加的包生效
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔄 LEDE第二次使用 olddefconfig..."
         make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-            log "⚠️ olddefconfig 有警告，但继续..."
+            log "⚠️ 第二次 olddefconfig 有警告，但继续..."
         }
     else
+        log "🔄 第二次运行 make defconfig..."
         make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-            log "⚠️ make defconfig 有警告，但继续..."
+            log "⚠️ 第二次 make defconfig 有警告，但继续..."
         }
     fi
+    log "✅ 第二次配置更新完成"
     
-    # 验证设备配置
+    log "🔍 验证关键USB驱动状态..."
+    
+    local critical_usb_drivers=(
+        "kmod-usb-core"
+        "kmod-usb2"
+        "kmod-usb-storage"
+        "kmod-scsi-core"
+    )
+    
+    if [ ${#CRITICAL_USB_DRIVERS[@]} -gt 0 ]; then
+        critical_usb_drivers=("${CRITICAL_USB_DRIVERS[@]}")
+    fi
+    
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom)
+            critical_usb_drivers+=(
+                "kmod-usb-dwc3"
+                "kmod-usb-dwc3-qcom"
+            )
+            ;;
+        mediatek|ramips)
+            critical_usb_drivers+=(
+                "kmod-usb-xhci-mtk"
+            )
+            ;;
+    esac
+    
+    local missing_drivers=()
+    for driver in "${critical_usb_drivers[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
+            log "  ✅ $driver: 已启用"
+        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
+            log "  📦 $driver: 模块化"
+        else
+            log "  ❌ $driver: 未启用"
+            missing_drivers+=("$driver")
+        fi
+    done
+    
+    if [ ${#missing_drivers[@]} -gt 0 ] && [ "${AUTO_FIX_USB_DRIVERS:-true}" = "true" ]; then
+        log "🔧 自动修复缺失驱动..."
+        for driver in "${missing_drivers[@]}"; do
+            echo "CONFIG_PACKAGE_${driver}=y" >> .config
+            log "  ✅ 已添加: $driver"
+        done
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
+    fi
+    
+    log "🔍 正在验证设备 $openwrt_device 是否被选中..."
+    
     if grep -q "^${device_config}=y" .config; then
         log "✅ 目标设备已正确启用: ${device_config}=y"
-    else
-        log "⚠️ 警告: 设备配置未找到，手动添加..."
+    elif grep -q "^# ${device_config} is not set" .config; then
+        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
+        sed -i "/^# ${device_config} is not set/d" .config
         echo "${device_config}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
+        
+        if grep -q "^${device_config}=y" .config; then
+            log "✅ 设备已强制启用"
+        else
+            log "❌ 无法启用设备"
+        fi
+    else
+        log "⚠️ 警告: 设备配置行未找到，手动添加..."
+        echo "${device_config}=y" >> .config
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
+        
+        if grep -q "^${device_config}=y" .config; then
+            log "✅ 设备已手动添加成功"
+        else
+            log "❌ 设备手动添加失败"
+        fi
+    fi
+    
+    # 强制确保设备配置正确，并禁用其他所有设备
+    log "🔧 强制设置设备配置，禁用其他所有设备..."
+    
+    # 删除同平台的所有其他设备配置
+    sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
+    # 添加正确的设备配置
+    echo "${device_config}=y" >> .config
+    # 去重
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    # 运行 defconfig 使配置生效
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_force_device.log 2>&1 || true
+    else
+        make defconfig > /tmp/build-logs/defconfig_force_device.log 2>&1 || true
+    fi
+    
+    # 再次验证
+    if grep -q "^${device_config}=y" .config; then
+        log "✅ 设备配置已强制设置成功: ${device_config}=y"
+    else
+        log "❌ 设备配置设置失败"
+        exit 1
     fi
     
     local total_configs=$(wc -l < .config)
     local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
     local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
+    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
     
     log "📊 配置统计:"
     log "  总配置行数: $total_configs"
     log "  启用软件包: $enabled_packages"
     log "  模块化软件包: $module_packages"
+    log "  禁用软件包: $disabled_packages"
+    
+    log "🔧 ===== 全面禁用不需要的插件 ===== "
+    
+    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
+    log "📋 基础禁用插件: $base_forbidden"
+    
+    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
+    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
+    
+    local search_keywords=()
+    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
+    for pkg in "${BASE_PKGS[@]}"; do
+        search_keywords+=("$pkg")
+        search_keywords+=("luci-app-${pkg}")
+        search_keywords+=("${pkg}-scripts")
+    done
+    
+    log "🔧 第一轮：彻底删除源文件..."
+    for keyword in "${search_keywords[@]}"; do
+        if [ -d "package/feeds" ]; then
+            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️ 删除 package/feeds: $dir"
+                rm -rf "$dir"
+            done
+        fi
+        if [ -d "feeds" ]; then
+            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️ 删除 feeds: $dir"
+                rm -rf "$dir"
+            done
+        fi
+    done
+    
+    log "🔧 特别处理 vsftpd 冲突问题..."
+    find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        log "  🗑️ 删除 vsftpd-alt 目录: $dir"
+        rm -rf "$dir"
+    done
+    find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        log "  🗑️ 删除 feeds vsftpd-alt 目录: $dir"
+        rm -rf "$dir"
+    done
+    find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        log "  🗑️ 删除 package vsftpd-alt 目录: $dir"
+        rm -rf "$dir"
+    done
+    
+    log "🔧 特别处理：根据平台决定是否禁用 smartdns"
+    local disable_smartdns=0
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom|mediatek|ramips)
+            log "  ⚠️ 平台 $TARGET 已知 smartdns 编译问题，将禁用 smartdns"
+            disable_smartdns=1
+            ;;
+        *)
+            log "  ✅ 平台 $TARGET 支持 smartdns，保留"
+            disable_smartdns=0
+            ;;
+    esac
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        log "  🔧 彻底删除 smartdns 源文件..."
+        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 smartdns 目录: $dir"
+            rm -rf "$dir"
+        done
+        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 package smartdns 目录: $dir"
+            rm -rf "$dir"
+        done
+        find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 feeds smartdns 目录: $dir"
+            rm -rf "$dir"
+        done
+    fi
+    
+    log "📋 第二轮：在 .config 中禁用所有相关包..."
+    
+    local disable_temp=$(mktemp)
+    for plugin in "${full_forbidden_list[@]}"; do
+        echo "$plugin" >> "$disable_temp"
+    done
+    
+    echo "vsftpd-alt" >> "$disable_temp"
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        echo "smartdns" >> "$disable_temp"
+        echo "luci-app-smartdns" >> "$disable_temp"
+        echo "luci-i18n-smartdns-zh-cn" >> "$disable_temp"
+        echo "luci-i18n-smartdns-en" >> "$disable_temp"
+    fi
+    
+    sort -u "$disable_temp" > "$disable_temp.sorted"
+    
+    while read plugin; do
+        [ -z "$plugin" ] && continue
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/CONFIG_PACKAGE_.*${plugin}/d" .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+    done < "$disable_temp.sorted"
+    
+    rm -f "$disable_temp" "$disable_temp.sorted"
+    
+    log "🔧 第三轮：删除所有包含关键字的配置行..."
+    for keyword in "${search_keywords[@]}"; do
+        sed -i "/${keyword}/d" .config
+        local upper_keyword=$(echo "$keyword" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+        sed -i "/${upper_keyword}/d" .config
+    done
+    
+    sed -i "/vsftpd-alt/d" .config
+    sed -i "/VSFTPD-ALT/d" .config
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        sed -i "/smartdns/d" .config
+        sed -i "/SMARTDNS/d" .config
+    fi
+    
+    log "🔧 特别处理 DDNS 相关配置..."
+    sed -i '/ddns/d' .config
+    sed -i '/DDNS/d' .config
+    
+    log "🔧 确保 vsftpd 被启用..."
+    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        log "  ✅ 已启用 vsftpd"
+    fi
+    
+    log "✅ 禁用完成"
+    
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    log "🔄 运行 make defconfig 使禁用生效..."
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+            log "⚠️ olddefconfig 有警告，但继续..."
+        }
+    else
+        make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续..."
+        }
+    fi
+    
+    log "🔍 第四轮：检查插件残留..."
+    
+    local remaining=()
+    local check_temp=$(mktemp)
+    
+    for plugin in "${full_forbidden_list[@]}"; do
+        echo "$plugin" >> "$check_temp"
+    done
+    
+    echo "vsftpd-alt" >> "$check_temp"
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        echo "smartdns" >> "$check_temp"
+    fi
+    
+    sort -u "$check_temp" > "$check_temp.sorted"
+    
+    while read plugin; do
+        [ -z "$plugin" ] && continue
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            remaining+=("$plugin")
+        fi
+    done < "$check_temp.sorted"
+    
+    rm -f "$check_temp" "$check_temp.sorted"
+    
+    if [ ${#remaining[@]} -gt 0 ]; then
+        log "⚠️ 发现 ${#remaining[@]} 个插件残留，第四轮禁用..."
+        
+        for plugin in "${remaining[@]}"; do
+            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+            log "  ✅ 再次禁用: $plugin"
+        done
+        
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
+    fi
+    
+    log "📊 最终插件状态验证:"
+    local still_enabled=0
+    
+    for plugin in "${BASE_PKGS[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
+            log "  ❌ $plugin 相关包仍被启用"
+            still_enabled=$((still_enabled + 1))
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
+            log "  ❌ $plugin 相关包仍被模块化"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ $plugin 已禁用"
+        fi
+    done
+    
+    if grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd-alt=m" .config; then
+        log "  ❌ vsftpd-alt 仍被启用"
+        still_enabled=$((still_enabled + 1))
+    else
+        log "  ✅ vsftpd-alt 已禁用"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_vsftpd=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
+        log "  ✅ vsftpd 已启用"
+    else
+        log "  ⚠️ vsftpd 未启用，尝试启用"
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+    fi
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        if grep -q "^CONFIG_PACKAGE_smartdns=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" .config; then
+            log "  ❌ smartdns 仍被启用"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ smartdns 已禁用"
+        fi
+    fi
+    
+    if [ $still_enabled -eq 0 ]; then
+        log "🎉 所有指定插件已成功禁用"
+    else
+        log "⚠️ 有 $still_enabled 个插件未能禁用，将在后续阶段再次尝试"
+    fi
     
     log "✅ 配置生成完成"
 }
@@ -3762,28 +4189,6 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # 提取搜索词中的存储介质参数（-nand, -emmc, -sd, -nor, -spi等）
-    local storage_param=""
-    if [[ "$search_device" == *"-nand"* ]]; then
-        storage_param="nand"
-    elif [[ "$search_device" == *"-emmc"* ]]; then
-        storage_param="emmc"
-    elif [[ "$search_device" == *"-sd"* ]]; then
-        storage_param="sd"
-    elif [[ "$search_device" == *"-nor"* ]]; then
-        storage_param="nor"
-    elif [[ "$search_device" == *"-spi"* ]]; then
-        storage_param="spi"
-    fi
-    
-    # 去掉存储介质参数，得到基础设备名
-    local base_device="$search_device"
-    if [ -n "$storage_param" ]; then
-        base_device="${search_device%-$storage_param}"
-        base_device="${base_device%-$storage_param}"  # 去掉可能的后缀
-        log "🔧 基础设备名: $base_device (参数: $storage_param)"
-    fi
-    
     # 收集所有设备定义块
     local matches=()
     for mkfile in "${mk_files[@]}"; do
@@ -3811,7 +4216,29 @@ workflow_step15_generate_config() {
         done < "$mkfile"
     done
     
-    # 第一步：匹配基础设备名（搜索词以设备名结尾，或设备名以搜索词开头）
+    # 提取搜索词中的存储介质参数
+    local storage_param=""
+    if [[ "$search_device" == *"-nand"* ]]; then
+        storage_param="nand"
+    elif [[ "$search_device" == *"-emmc"* ]]; then
+        storage_param="emmc"
+    elif [[ "$search_device" == *"-sd"* ]]; then
+        storage_param="sd"
+    elif [[ "$search_device" == *"-nor"* ]]; then
+        storage_param="nor"
+    elif [[ "$search_device" == *"-spi"* ]]; then
+        storage_param="spi"
+    fi
+    
+    # 去掉存储介质参数，得到基础设备名
+    local base_device="$search_device"
+    if [ -n "$storage_param" ]; then
+        base_device="${search_device%-$storage_param}"
+        base_device="${base_device%-$storage_param}"
+        log "🔧 基础设备名: $base_device (参数: $storage_param)"
+    fi
+    
+    # 筛选匹配的设备（搜索词以设备名结尾，或设备名等于基础设备名）
     local candidates=()
     for match in "${matches[@]}"; do
         local name="${match%%|*}"
@@ -3819,14 +4246,13 @@ workflow_step15_generate_config() {
         local block="${rest%%|*}"
         local file="${rest#*|}"
         
-        # 匹配条件：搜索词以设备名结尾，或设备名等于基础设备名
         if [[ "$search_device" == *"$name" ]] || [ "$name" = "$base_device" ]; then
             candidates+=("$name|$block|$file")
         fi
     done
     
     if [ ${#candidates[@]} -eq 0 ]; then
-        log "❌ 错误：未找到与基础设备名 '$base_device' 相关的定义"
+        log "❌ 错误：未找到任何与设备名 '$search_device' 相关的定义"
         log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
         exit 1
     fi
@@ -3842,7 +4268,7 @@ workflow_step15_generate_config() {
     echo "----------------------------------------"
     echo ""
     
-    # 第二步：根据块内容选择最佳匹配
+    # 计算权重并选择最佳匹配
     local best_name=""
     local best_block=""
     local best_file=""
@@ -3855,32 +4281,26 @@ workflow_step15_generate_config() {
         local file="${rest#*|}"
         local weight=0
         
-        # 设备名匹配度权重
         if [ "$name" = "$base_device" ]; then
             weight=10000
         elif [[ "$search_device" == *"$name" ]]; then
             weight=9000
         fi
         
-        # 块内容匹配存储参数
         if [ -n "$storage_param" ]; then
-            # 检查块中是否有对应存储介质的配置
             if echo "$block" | grep -qi "$storage_param"; then
                 weight=$((weight + 2000))
                 log "  📌 $name 块中包含 $storage_param 配置，权重+2000"
             fi
-            # 检查是否明确标注了 variant
             if echo "$block" | grep -qi "VARIANT.*$storage_param"; then
                 weight=$((weight + 1000))
             fi
         fi
         
-        # 避免选择 ubootmod 版本（除非明确指定）
         if [[ "$name" == *"ubootmod"* ]] && [[ "$search_device" != *"ubootmod"* ]]; then
             weight=$((weight - 3000))
         fi
         
-        # 名称越短权重越高
         local name_len=${#name}
         weight=$((weight + (1000 - name_len)))
         
@@ -3903,13 +4323,14 @@ workflow_step15_generate_config() {
     
     log "✅ 找到设备定义文件: $device_file"
     
-    # 显示设备定义块的关键信息
     echo ""
     echo "📋 设备定义信息（关键字段）:"
     echo "----------------------------------------"
     echo "$best_block" | grep -E "define Device" | head -1
     echo "$best_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
-    echo "$best_block" | grep -E "^[[:space:]]*ARTIFACT.*$storage_param" | head -3
+    if [ -n "$storage_param" ]; then
+        echo "$best_block" | grep -E "^[[:space:]]*ARTIFACT.*$storage_param" | head -3
+    fi
     echo "----------------------------------------"
     
     local device_for_config="$mk_device_name"
