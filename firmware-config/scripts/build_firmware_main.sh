@@ -400,8 +400,61 @@ initialize_build_env() {
 
     cd $BUILD_DIR || handle_error "进入构建目录失败"
 
+    # ============================================
+    # 通用设备名转换
+    # 去掉常见的存储介质后缀（-nand, -emmc, -sd, -nor, -spi 等）
+    # 保留基础设备名，让 DTS overlay 自动处理不同版本
+    # ============================================
+    local converted_device="$device_name"
+    
+    # 定义需要去除的后缀模式（按长度排序，避免部分匹配）
+    local suffixes=(
+        "-nand"
+        "-emmc"
+        "-sd"
+        "-nor"
+        "-spi"
+        "-sdcard"
+        "-sdmmc"
+        "-snand"
+        "-spinand"
+        "-nand-ubootmod"
+        "-emmc-ubootmod"
+    )
+    
+    for suffix in "${suffixes[@]}"; do
+        if [[ "$device_name" == *"$suffix" ]]; then
+            # 去掉后缀
+            converted_device="${device_name%$suffix}"
+            log "🔧 设备名转换: $device_name -> $converted_device (去掉后缀 $suffix，使用 DTS overlay)"
+            break
+        fi
+    done
+    
+    # 对于 ImmortalWrt，如果去掉后缀后设备名存在，使用基础设备名
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ] && [ "$converted_device" != "$device_name" ]; then
+        # 检查基础设备名是否在 mk 文件中存在
+        local mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+        local found=0
+        for mkfile in $mk_files; do
+            if grep -q "define Device/$converted_device" "$mkfile" 2>/dev/null; then
+                found=1
+                break
+            fi
+        done
+        if [ $found -eq 0 ]; then
+            log "⚠️ 基础设备名 $converted_device 不存在，使用原始设备名 $device_name"
+            converted_device="$device_name"
+        fi
+    fi
+    
     log "=== 版本选择 ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "原始设备名: $device_name"
+    log "转换后设备名: $converted_device"
+    
+    # 使用转换后的设备名
+    device_name="$converted_device"
     
     case "$SOURCE_REPO_TYPE" in
         "lede")
