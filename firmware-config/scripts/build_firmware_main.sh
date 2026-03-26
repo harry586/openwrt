@@ -3762,14 +3762,14 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # 收集所有匹配的设备定义（不 break）
+    # 收集所有匹配的设备定义
     local matches=()
     for mkfile in "${mk_files[@]}"; do
         while IFS= read -r line; do
             if [[ "$line" =~ define\ Device/([a-zA-Z0-9_-]+) ]]; then
                 local dev_name="${BASH_REMATCH[1]}"
-                # 检查是否包含搜索词（子串匹配）
-                if [[ "$dev_name" == *"$search_device"* ]]; then
+                # 检查是否包含搜索词
+                if [[ "$dev_name" == *"$search_device"* ]] || [[ "$search_device" == *"$dev_name"* ]]; then
                     matches+=("$dev_name|$mkfile")
                 fi
             fi
@@ -3782,18 +3782,11 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 列出所有匹配
+    # 计算权重并选择最佳匹配
     echo ""
     echo "🔍 找到 ${#matches[@]} 个匹配的设备定义:"
     echo "----------------------------------------"
-    for match in "${matches[@]}"; do
-        local dev_name="${match%|*}"
-        local mkfile="${match#*|}"
-        printf "  %-40s (文件: %s)\n" "$dev_name" "$(basename "$mkfile")"
-    done
-    echo "----------------------------------------"
     
-    # 计算权重并选择最佳匹配
     local best_dev_name=""
     local best_mkfile=""
     local best_weight=-1
@@ -3801,26 +3794,36 @@ workflow_step15_generate_config() {
     for match in "${matches[@]}"; do
         local dev_name="${match%|*}"
         local mkfile="${match#*|}"
-        
         local weight=0
         
-        # 完全匹配
+        # 权重计算规则：优先匹配基础设备名（不带后缀）
+        # 1. 完全匹配
         if [ "$dev_name" = "$search_device" ]; then
             weight=1000
-        # 以搜索词开头
+        # 2. 搜索词以设备名结尾（如 cmcc_rax3000m-nand 匹配 cmcc_rax3000m）
+        elif [[ "$search_device" == *"$dev_name" ]]; then
+            weight=950
+        # 3. 设备名以搜索词开头
         elif [[ "$dev_name" == "$search_device"* ]]; then
             weight=900
-        # 以搜索词结尾
+        # 4. 设备名以搜索词结尾
         elif [[ "$dev_name" == *"$search_device" ]]; then
             weight=800
-        # 包含搜索词
+        # 5. 包含搜索词
         elif [[ "$dev_name" == *"$search_device"* ]]; then
             weight=700
         fi
         
-        # 名称越短权重越高（避免 ubootmod 等后缀）
+        # 名称越短权重越高（基础设备名通常更短）
         local name_len=${#dev_name}
         weight=$((weight + (1000 - name_len) / 10))
+        
+        # 避免选择带 ubootmod 后缀的，除非完全匹配
+        if [[ "$dev_name" == *"ubootmod"* ]] && [ "$dev_name" != "$search_device" ]; then
+            weight=$((weight - 200))
+        fi
+        
+        printf "  %-40s 权重: %3d  (文件: %s)\n" "$dev_name" "$weight" "$(basename "$mkfile")"
         
         if [ $weight -gt $best_weight ]; then
             best_weight=$weight
@@ -3828,6 +3831,7 @@ workflow_step15_generate_config() {
             best_mkfile="$mkfile"
         fi
     done
+    echo "----------------------------------------"
     
     echo ""
     log "✅ 选择最佳匹配: $best_dev_name (权重: $best_weight)"
