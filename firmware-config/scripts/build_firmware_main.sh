@@ -3762,6 +3762,28 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
+    # 提取搜索词中的存储介质参数（-nand, -emmc, -sd, -nor, -spi等）
+    local storage_param=""
+    if [[ "$search_device" == *"-nand"* ]]; then
+        storage_param="nand"
+    elif [[ "$search_device" == *"-emmc"* ]]; then
+        storage_param="emmc"
+    elif [[ "$search_device" == *"-sd"* ]]; then
+        storage_param="sd"
+    elif [[ "$search_device" == *"-nor"* ]]; then
+        storage_param="nor"
+    elif [[ "$search_device" == *"-spi"* ]]; then
+        storage_param="spi"
+    fi
+    
+    # 去掉存储介质参数，得到基础设备名
+    local base_device="$search_device"
+    if [ -n "$storage_param" ]; then
+        base_device="${search_device%-$storage_param}"
+        base_device="${base_device%-$storage_param}"  # 去掉可能的后缀
+        log "🔧 基础设备名: $base_device (参数: $storage_param)"
+    fi
+    
     # 收集所有设备定义块
     local matches=()
     for mkfile in "${mk_files[@]}"; do
@@ -3789,90 +3811,80 @@ workflow_step15_generate_config() {
         done < "$mkfile"
     done
     
-    # 先列出所有设备定义（调试用）
-    echo ""
-    echo "🔍 所有找到的设备定义 (共 ${#matches[@]} 个):"
-    echo "----------------------------------------"
-    for match in "${matches[@]}"; do
-        local name="${match%%|*}"
-        echo "   $name"
-    done
-    echo "----------------------------------------"
-    echo ""
-    
-    # 筛选匹配的设备（双向匹配）
-    local filtered=()
+    # 第一步：匹配基础设备名（搜索词以设备名结尾，或设备名以搜索词开头）
+    local candidates=()
     for match in "${matches[@]}"; do
         local name="${match%%|*}"
         local rest="${match#*|}"
         local block="${rest%%|*}"
         local file="${rest#*|}"
         
-        # 设备名包含搜索词，或搜索词包含设备名
-        if [[ "$name" == *"$search_device"* ]] || [[ "$search_device" == *"$name"* ]]; then
-            filtered+=("$name|$block|$file")
+        # 匹配条件：搜索词以设备名结尾，或设备名等于基础设备名
+        if [[ "$search_device" == *"$name" ]] || [ "$name" = "$base_device" ]; then
+            candidates+=("$name|$block|$file")
         fi
     done
     
-    if [ ${#filtered[@]} -eq 0 ]; then
-        log "❌ 错误：未找到任何与设备名 '$search_device' 相关的定义"
+    if [ ${#candidates[@]} -eq 0 ]; then
+        log "❌ 错误：未找到与基础设备名 '$base_device' 相关的定义"
         log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
         exit 1
     fi
     
-    # 计算权重并选择最佳匹配
+    # 显示候选设备
     echo ""
-    echo "🔍 找到 ${#filtered[@]} 个匹配的设备定义:"
+    echo "🔍 找到 ${#candidates[@]} 个候选设备定义:"
     echo "----------------------------------------"
+    for cand in "${candidates[@]}"; do
+        local name="${cand%%|*}"
+        printf "  %s\n" "$name"
+    done
+    echo "----------------------------------------"
+    echo ""
     
+    # 第二步：根据块内容选择最佳匹配
     local best_name=""
     local best_block=""
     local best_file=""
     local best_weight=-1
     
-    # 提取存储介质类型
-    local storage_type=""
-    if [[ "$search_device" == *"-nand"* ]]; then
-        storage_type="nand"
-    elif [[ "$search_device" == *"-emmc"* ]]; then
-        storage_type="emmc"
-    fi
-    
-    for match in "${filtered[@]}"; do
-        local name="${match%%|*}"
-        local rest="${match#*|}"
+    for cand in "${candidates[@]}"; do
+        local name="${cand%%|*}"
+        local rest="${cand#*|}"
         local block="${rest%%|*}"
         local file="${rest#*|}"
         local weight=0
         
-        # 完全匹配
-        if [ "$name" = "$search_device" ]; then
+        # 设备名匹配度权重
+        if [ "$name" = "$base_device" ]; then
             weight=10000
-        # 搜索词包含设备名（如 cmcc_rax3000m-nand 包含 cmcc_rax3000m）
         elif [[ "$search_device" == *"$name" ]]; then
-            weight=9500
-        # 设备名包含搜索词
-        elif [[ "$name" == *"$search_device"* ]]; then
             weight=9000
         fi
         
-        # 检查块内容是否包含对应存储介质的配置
-        if [ -n "$storage_type" ]; then
-            if echo "$block" | grep -qi "$storage_type"; then
+        # 块内容匹配存储参数
+        if [ -n "$storage_param" ]; then
+            # 检查块中是否有对应存储介质的配置
+            if echo "$block" | grep -qi "$storage_param"; then
                 weight=$((weight + 2000))
+                log "  📌 $name 块中包含 $storage_param 配置，权重+2000"
+            fi
+            # 检查是否明确标注了 variant
+            if echo "$block" | grep -qi "VARIANT.*$storage_param"; then
+                weight=$((weight + 1000))
             fi
         fi
         
         # 避免选择 ubootmod 版本（除非明确指定）
         if [[ "$name" == *"ubootmod"* ]] && [[ "$search_device" != *"ubootmod"* ]]; then
-            weight=$((weight - 5000))
+            weight=$((weight - 3000))
         fi
         
         # 名称越短权重越高
         local name_len=${#name}
         weight=$((weight + (1000 - name_len)))
         
-        printf "  %-40s 权重: %5d  (文件: %s)\n" "$name" "$weight" "$(basename "$file")"
+        printf "  %-40s 权重: %5d\n" "$name" "$weight"
         
         if [ $weight -gt $best_weight ]; then
             best_weight=$weight
@@ -3881,7 +3893,6 @@ workflow_step15_generate_config() {
             best_file="$file"
         fi
     done
-    echo "----------------------------------------"
     
     echo ""
     log "✅ 选择最佳匹配: $best_name (权重: $best_weight)"
@@ -3898,6 +3909,7 @@ workflow_step15_generate_config() {
     echo "----------------------------------------"
     echo "$best_block" | grep -E "define Device" | head -1
     echo "$best_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
+    echo "$best_block" | grep -E "^[[:space:]]*ARTIFACT.*$storage_param" | head -3
     echo "----------------------------------------"
     
     local device_for_config="$mk_device_name"
