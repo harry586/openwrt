@@ -3762,7 +3762,7 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # 收集所有匹配的设备定义块（包含完整内容）
+    # 收集所有匹配的设备定义块
     local matches=()
     for mkfile in "${mk_files[@]}"; do
         local in_block=0
@@ -3771,9 +3771,7 @@ workflow_step15_generate_config() {
         
         while IFS= read -r line; do
             if [[ "$line" =~ ^define\ Device/([a-zA-Z0-9_-]+) ]]; then
-                # 新块开始
                 if [ $in_block -eq 1 ] && [ -n "$current_name" ]; then
-                    # 保存上一个块
                     matches+=("$current_name|$current_block|$mkfile")
                 fi
                 current_name="${BASH_REMATCH[1]}"
@@ -3782,7 +3780,6 @@ workflow_step15_generate_config() {
             elif [ $in_block -eq 1 ]; then
                 current_block+="$line"$'\n'
                 if [[ "$line" =~ ^endef ]]; then
-                    # 块结束
                     matches+=("$current_name|$current_block|$mkfile")
                     in_block=0
                     current_name=""
@@ -3792,7 +3789,7 @@ workflow_step15_generate_config() {
         done < "$mkfile"
     done
     
-    # 筛选包含搜索词的块
+    # 筛选匹配的设备：搜索词以设备名结尾
     local filtered=()
     for match in "${matches[@]}"; do
         local name="${match%%|*}"
@@ -3800,14 +3797,14 @@ workflow_step15_generate_config() {
         local block="${rest%%|*}"
         local file="${rest#*|}"
         
-        # 检查设备名是否包含搜索词
-        if [[ "$name" == *"$search_device"* ]]; then
+        # 关键：搜索词以设备名结尾
+        if [[ "$search_device" == *"$name" ]]; then
             filtered+=("$name|$block|$file")
         fi
     done
     
     if [ ${#filtered[@]} -eq 0 ]; then
-        log "❌ 错误：未找到任何包含设备名 '$search_device' 的定义"
+        log "❌ 错误：未找到任何与设备名 '$search_device' 相关的定义"
         log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
         exit 1
     fi
@@ -3828,8 +3825,6 @@ workflow_step15_generate_config() {
         storage_type="nand"
     elif [[ "$search_device" == *"-emmc"* ]]; then
         storage_type="emmc"
-    elif [[ "$search_device" == *"-sd"* ]]; then
-        storage_type="sd"
     fi
     
     for match in "${filtered[@]}"; do
@@ -3839,33 +3834,19 @@ workflow_step15_generate_config() {
         local file="${rest#*|}"
         local weight=0
         
-        # 1. 完全匹配
+        # 完全匹配
         if [ "$name" = "$search_device" ]; then
             weight=10000
-        # 2. 搜索词以设备名结尾（如 cmcc_rax3000m-nand 匹配 cmcc_rax3000m）
+        # 搜索词以设备名结尾
         elif [[ "$search_device" == *"$name" ]]; then
             weight=9500
-        # 3. 设备名以搜索词开头
-        elif [[ "$name" == "$search_device"* ]]; then
-            weight=9000
-        # 4. 设备名以搜索词结尾
-        elif [[ "$name" == *"$search_device" ]]; then
-            weight=8000
-        # 5. 包含搜索词
-        elif [[ "$name" == *"$search_device"* ]]; then
-            weight=7000
         fi
         
-        # 检查块内容，匹配存储介质
+        # 检查块内容是否包含对应存储介质的配置
         if [ -n "$storage_type" ]; then
-            # 检查块中是否有对应存储介质的配置
             if echo "$block" | grep -qi "$storage_type"; then
                 weight=$((weight + 2000))
                 log "  📌 $name 块中包含 $storage_type 配置，权重+2000"
-            fi
-            # 检查是否明确标注了 variant
-            if echo "$block" | grep -qi "VARIANT.*$storage_type"; then
-                weight=$((weight + 1000))
             fi
         fi
         
@@ -3874,7 +3855,7 @@ workflow_step15_generate_config() {
             weight=$((weight - 5000))
         fi
         
-        # 名称越短权重越高（基础设备名通常更短）
+        # 名称越短权重越高
         local name_len=${#name}
         weight=$((weight + (1000 - name_len)))
         
@@ -3904,7 +3885,6 @@ workflow_step15_generate_config() {
     echo "----------------------------------------"
     echo "$best_block" | grep -E "define Device" | head -1
     echo "$best_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
-    echo "$best_block" | grep -E "^[[:space:]]*ARTIFACT.*preloader" | head -3
     echo "----------------------------------------"
     
     local device_for_config="$mk_device_name"
