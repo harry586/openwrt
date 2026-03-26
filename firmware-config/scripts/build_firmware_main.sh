@@ -3762,7 +3762,7 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # 收集所有匹配的设备定义块
+    # 收集所有设备定义块
     local matches=()
     for mkfile in "${mk_files[@]}"; do
         local in_block=0
@@ -3789,7 +3789,18 @@ workflow_step15_generate_config() {
         done < "$mkfile"
     done
     
-    # 筛选匹配的设备：搜索词以设备名结尾
+    # 先列出所有设备定义（调试用）
+    echo ""
+    echo "🔍 所有找到的设备定义 (共 ${#matches[@]} 个):"
+    echo "----------------------------------------"
+    for match in "${matches[@]}"; do
+        local name="${match%%|*}"
+        echo "   $name"
+    done
+    echo "----------------------------------------"
+    echo ""
+    
+    # 筛选匹配的设备（双向匹配）
     local filtered=()
     for match in "${matches[@]}"; do
         local name="${match%%|*}"
@@ -3797,8 +3808,8 @@ workflow_step15_generate_config() {
         local block="${rest%%|*}"
         local file="${rest#*|}"
         
-        # 关键：搜索词以设备名结尾
-        if [[ "$search_device" == *"$name" ]]; then
+        # 设备名包含搜索词，或搜索词包含设备名
+        if [[ "$name" == *"$search_device"* ]] || [[ "$search_device" == *"$name"* ]]; then
             filtered+=("$name|$block|$file")
         fi
     done
@@ -3837,16 +3848,18 @@ workflow_step15_generate_config() {
         # 完全匹配
         if [ "$name" = "$search_device" ]; then
             weight=10000
-        # 搜索词以设备名结尾
+        # 搜索词包含设备名（如 cmcc_rax3000m-nand 包含 cmcc_rax3000m）
         elif [[ "$search_device" == *"$name" ]]; then
             weight=9500
+        # 设备名包含搜索词
+        elif [[ "$name" == *"$search_device"* ]]; then
+            weight=9000
         fi
         
         # 检查块内容是否包含对应存储介质的配置
         if [ -n "$storage_type" ]; then
             if echo "$block" | grep -qi "$storage_type"; then
                 weight=$((weight + 2000))
-                log "  📌 $name 块中包含 $storage_type 配置，权重+2000"
             fi
         fi
         
