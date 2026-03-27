@@ -4208,33 +4208,97 @@ workflow_step15_generate_config() {
         log "🔧 基础设备名: $base_device (参数: $storage_param)"
     fi
     
-    # 直接使用基础设备名作为最终设备名
-    local device_for_config="$base_device"
-    log "🔧 最终使用设备名: $device_for_config"
-    
-    # 验证设备定义是否存在
-    local found=0
-    local device_file=""
+    # 收集所有设备定义
+    local device_names=()
     for mkfile in "${mk_files[@]}"; do
-        if grep -q "^define Device/$device_for_config$" "$mkfile" 2>/dev/null; then
-            found=1
-            device_file="$mkfile"
-            log "✅ 找到设备定义: $device_for_config (在 $device_file)"
-            break
-        fi
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^define\ Device/([a-zA-Z0-9_-]+) ]]; then
+                local dev_name="${BASH_REMATCH[1]}"
+                # 排除 _common 结尾的公共定义
+                if [[ "$dev_name" != *"_common"* ]]; then
+                    device_names+=("$dev_name|$mkfile")
+                fi
+            fi
+        done < "$mkfile"
     done
     
-    if [ $found -eq 0 ]; then
-        log "❌ 错误：未找到设备定义 $device_for_config"
-        log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
+    # 计算匹配权重
+    echo ""
+    echo "🔍 找到 ${#device_names[@]} 个设备定义，计算匹配度:"
+    echo "----------------------------------------"
+    
+    local best_device=""
+    local best_file=""
+    local best_weight=-1
+    local best_match_type=""
+    
+    for dev in "${device_names[@]}"; do
+        local name="${dev%%|*}"
+        local file="${dev#*|}"
+        local weight=0
+        local match_type=""
+        
+        # 1. 完全匹配
+        if [ "$name" = "$base_device" ]; then
+            weight=10000
+            match_type="完全匹配"
+        # 2. 设备名以搜索词结尾（如 asus_rt-ac42u 以 ac42u 结尾）
+        elif [[ "$name" == *"$base_device" ]]; then
+            weight=9000
+            match_type="以搜索词结尾"
+        # 3. 搜索词以设备名结尾（如 cmcc_rax3000m-nand 以 cmcc_rax3000m 结尾）
+        elif [[ "$base_device" == *"$name" ]]; then
+            weight=8000
+            match_type="搜索词以设备名结尾"
+        # 4. 设备名包含搜索词
+        elif [[ "$name" == *"$base_device"* ]]; then
+            weight=7000
+            match_type="设备名包含搜索词"
+        # 5. 搜索词包含设备名
+        elif [[ "$base_device" == *"$name"* ]]; then
+            weight=6000
+            match_type="搜索词包含设备名"
+        fi
+        
+        # 名称越短权重越高（基础设备名通常更短）
+        local name_len=${#name}
+        weight=$((weight + (1000 - name_len)))
+        
+        # 如果存储参数匹配，额外加分
+        if [ -n "$storage_param" ]; then
+            if grep -q "$storage_param" "$file" 2>/dev/null; then
+                weight=$((weight + 2000))
+                match_type="$match_type + 存储参数匹配"
+            fi
+        fi
+        
+        if [ $weight -gt $best_weight ]; then
+            best_weight=$weight
+            best_device="$name"
+            best_file="$file"
+            best_match_type="$match_type"
+        fi
+        
+        printf "  %-35s 权重: %5d (%s)\n" "$name" "$weight" "$match_type"
+    done
+    echo "----------------------------------------"
+    
+    if [ -z "$best_device" ]; then
+        log "❌ 错误：未找到与 '$search_device' 匹配的设备定义"
         exit 1
     fi
+    
+    echo ""
+    log "✅ 选择最佳匹配: $best_device (权重: $best_weight, 匹配类型: $best_match_type)"
+    
+    local device_for_config="$best_device"
+    log "🔧 最终使用设备名: $device_for_config"
     
     # 显示设备定义块的关键信息
     echo ""
     echo "📋 设备定义信息（关键字段）:"
     echo "----------------------------------------"
-    grep -A 20 "^define Device/$device_for_config" "$device_file" 2>/dev/null | head -15
+    grep -A 20 "^define Device/$device_for_config" "$best_file" 2>/dev/null | head -15
     echo "----------------------------------------"
     
     # 保存转换后的设备名到环境变量
