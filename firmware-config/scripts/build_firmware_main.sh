@@ -4762,65 +4762,40 @@ workflow_step23_pre_build_check() {
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
         # ============================================
-        # 从MK文件获取设备名（最准确）
+        # 直接使用环境变量中的 DEVICE（步骤15已经确定的值）
         # ============================================
-        local search_device=""
-        case "$DEVICE" in
-            cmcc_rax3000m-nand|cmcc_rax3000m)
-                search_device="rax3000m"
-                ;;
-            ac42u|rt-ac42u|asus_rt-ac42u)
-                search_device="ac42u"
-                ;;
-            netgear_wndr3800)
-                search_device="wndr3800"
-                ;;
-            *)
-                search_device="$DEVICE"
-                ;;
-        esac
+        local device_for_check="$DEVICE"
+        log "🔧 使用步骤15确定的设备名: $device_for_check"
         
-        # 查找MK文件中的设备定义
-        local mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
-        local mk_device_name=""
-        local mk_file_path=""
-        
-        for file in $mk_files; do
-            if grep -q "define Device.*$search_device" "$file" 2>/dev/null; then
-                mk_device_name=$(grep -m1 "define Device.*$search_device" "$file" | sed 's/define Device\///' | awk '{print $1}')
-                mk_file_path="$file"
-                log "🔧 从MK文件获取设备名: $mk_device_name (在 $mk_file_path)"
-                break
-            fi
-        done
-        
-        if [ -z "$mk_device_name" ]; then
-            mk_device_name="$DEVICE"
-            log "⚠️ 无法从MK文件获取设备名，使用输入名: $mk_device_name"
-        fi
-        
-        # 直接使用MK文件中的设备名，不做任何转换
-        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${mk_device_name}=y"
-        local expected_config_disabled="# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${mk_device_name} is not set"
+        # 构建期望的设备配置
+        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}=y"
+        local expected_config_disabled="# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check} is not set"
         
         log "  检查设备配置: $expected_config"
-        log "  MK文件设备名: $mk_device_name"
+        log "  设备名: $device_for_check"
         
         # 显示.config中实际存在的设备配置
         log "  .config中存在的设备配置:"
-        local existing_configs=$(grep "CONFIG_TARGET_.*DEVICE" .config | head -20)
+        local existing_configs=$(grep "CONFIG_TARGET_.*DEVICE" .config | grep -v "^#" | head -20)
         if [ -n "$existing_configs" ]; then
             while IFS= read -r line; do
                 log "    $line"
             done <<< "$existing_configs"
         else
-            log "    未找到任何设备配置"
+            log "    未找到任何已启用的设备配置"
+            # 也显示被禁用的
+            local disabled_configs=$(grep "^# CONFIG_TARGET_.*DEVICE" .config | head -10)
+            if [ -n "$disabled_configs" ]; then
+                log "    被禁用的设备配置:"
+                while IFS= read -r line; do
+                    log "    $line"
+                done <<< "$disabled_configs"
+            fi
         fi
         
         # 检查启用状态
         if grep -q "^${expected_config}$" .config; then
             echo "   ✅ 设备配置正确（已启用）: $expected_config"
-        # 检查禁用状态
         elif grep -q "^${expected_config_disabled}$" .config; then
             echo "   ⚠️ 设备配置存在但被禁用: $expected_config_disabled"
             warning_count=$((warning_count + 1))
