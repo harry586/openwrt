@@ -1413,36 +1413,33 @@ generate_config() {
     local mk_device_name=""
     local mk_file=""
     
+    # 修复：精确匹配设备名，排除包含 _common 的公共定义
     for file in $mk_files; do
-        if grep -q "define Device.*$search_device" "$file" 2>/dev/null; then
+        # 使用正则精确匹配 define Device/设备名，排除 _common 后缀
+        if grep -q "^define Device/$search_device$" "$file" 2>/dev/null; then
             mk_file="$file"
-            mk_device_name=$(grep -m1 "define Device.*$search_device" "$file" | sed 's/define Device\///' | awk '{print $1}')
+            mk_device_name="$search_device"
             log "✅ 找到设备定义: $mk_device_name (在 $file)"
             break
         fi
     done
     
-    if [ -z "$mk_device_name" ] && [[ "$search_device" == *"_"* ]]; then
-        local alt_search="${search_device//_/-}"
+    # 如果精确匹配失败，尝试包含匹配但排除 _common
+    if [ -z "$mk_device_name" ]; then
         for file in $mk_files; do
-            if grep -q "define Device.*$alt_search" "$file" 2>/dev/null; then
-                mk_file="$file"
-                mk_device_name=$(grep -m1 "define Device.*$alt_search" "$file" | sed 's/define Device\///' | awk '{print $1}')
-                log "✅ 通过连字符转换找到设备定义: $mk_device_name (在 $file)"
-                break
-            fi
-        done
-    fi
-    
-    if [ -z "$mk_device_name" ] && [[ "$search_device" == *"-"* ]]; then
-        local alt_search="${search_device//-/_}"
-        for file in $mk_files; do
-            if grep -q "define Device.*$alt_search" "$file" 2>/dev/null; then
-                mk_file="$file"
-                mk_device_name=$(grep -m1 "define Device.*$alt_search" "$file" | sed 's/define Device\///' | awk '{print $1}')
-                log "✅ 通过下划线转换找到设备定义: $mk_device_name (在 $file)"
-                break
-            fi
+            # 查找 define Device/xxx，且不包含 _common
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^define\ Device/([a-zA-Z0-9_-]+) ]]; then
+                    local dev_name="${BASH_REMATCH[1]}"
+                    # 排除 _common 结尾的定义
+                    if [[ "$dev_name" != *"_common"* ]] && [[ "$dev_name" == *"$search_device"* ]]; then
+                        mk_file="$file"
+                        mk_device_name="$dev_name"
+                        log "✅ 找到设备定义: $mk_device_name (在 $file)"
+                        break 2
+                    fi
+                fi
+            done < "$file"
         done
     fi
     
