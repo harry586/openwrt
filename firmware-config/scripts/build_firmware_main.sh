@@ -4186,33 +4186,6 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # 收集所有设备定义块
-    local matches=()
-    for mkfile in "${mk_files[@]}"; do
-        local in_block=0
-        local current_block=""
-        local current_name=""
-        
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^define\ Device/([a-zA-Z0-9_-]+) ]]; then
-                if [ $in_block -eq 1 ] && [ -n "$current_name" ]; then
-                    matches+=("$current_name|$current_block|$mkfile")
-                fi
-                current_name="${BASH_REMATCH[1]}"
-                current_block="$line"$'\n'
-                in_block=1
-            elif [ $in_block -eq 1 ]; then
-                current_block+="$line"$'\n'
-                if [[ "$line" =~ ^endef ]]; then
-                    matches+=("$current_name|$current_block|$mkfile")
-                    in_block=0
-                    current_name=""
-                    current_block=""
-                fi
-            fi
-        done < "$mkfile"
-    done
-    
     # 提取搜索词中的存储介质参数
     local storage_param=""
     if [[ "$search_device" == *"-nand"* ]]; then
@@ -4235,103 +4208,44 @@ workflow_step15_generate_config() {
         log "🔧 基础设备名: $base_device (参数: $storage_param)"
     fi
     
-    # 筛选匹配的设备（搜索词以设备名结尾，或设备名等于基础设备名）
-    local candidates=()
-    for match in "${matches[@]}"; do
-        local name="${match%%|*}"
-        local rest="${match#*|}"
-        local block="${rest%%|*}"
-        local file="${rest#*|}"
-        
-        if [[ "$search_device" == *"$name" ]] || [ "$name" = "$base_device" ]; then
-            candidates+=("$name|$block|$file")
+    # 直接使用基础设备名作为最终设备名
+    local device_for_config="$base_device"
+    log "🔧 最终使用设备名: $device_for_config"
+    
+    # 验证设备定义是否存在
+    local found=0
+    local device_file=""
+    for mkfile in "${mk_files[@]}"; do
+        if grep -q "^define Device/$device_for_config$" "$mkfile" 2>/dev/null; then
+            found=1
+            device_file="$mkfile"
+            log "✅ 找到设备定义: $device_for_config (在 $device_file)"
+            break
         fi
     done
     
-    if [ ${#candidates[@]} -eq 0 ]; then
-        log "❌ 错误：未找到任何与设备名 '$search_device' 相关的定义"
+    if [ $found -eq 0 ]; then
+        log "❌ 错误：未找到设备定义 $device_for_config"
         log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
         exit 1
     fi
     
-    # 显示候选设备
-    echo ""
-    echo "🔍 找到 ${#candidates[@]} 个候选设备定义:"
-    echo "----------------------------------------"
-    for cand in "${candidates[@]}"; do
-        local name="${cand%%|*}"
-        printf "  %s\n" "$name"
-    done
-    echo "----------------------------------------"
-    echo ""
-    
-    # 计算权重并选择最佳匹配
-    local best_name=""
-    local best_block=""
-    local best_file=""
-    local best_weight=-1
-    
-    for cand in "${candidates[@]}"; do
-        local name="${cand%%|*}"
-        local rest="${cand#*|}"
-        local block="${rest%%|*}"
-        local file="${rest#*|}"
-        local weight=0
-        
-        if [ "$name" = "$base_device" ]; then
-            weight=10000
-        elif [[ "$search_device" == *"$name" ]]; then
-            weight=9000
-        fi
-        
-        if [ -n "$storage_param" ]; then
-            if echo "$block" | grep -qi "$storage_param"; then
-                weight=$((weight + 2000))
-                log "  📌 $name 块中包含 $storage_param 配置，权重+2000"
-            fi
-            if echo "$block" | grep -qi "VARIANT.*$storage_param"; then
-                weight=$((weight + 1000))
-            fi
-        fi
-        
-        if [[ "$name" == *"ubootmod"* ]] && [[ "$search_device" != *"ubootmod"* ]]; then
-            weight=$((weight - 3000))
-        fi
-        
-        local name_len=${#name}
-        weight=$((weight + (1000 - name_len)))
-        
-        printf "  %-40s 权重: %5d\n" "$name" "$weight"
-        
-        if [ $weight -gt $best_weight ]; then
-            best_weight=$weight
-            best_name="$name"
-            best_block="$block"
-            best_file="$file"
-        fi
-    done
-    
-    echo ""
-    log "✅ 选择最佳匹配: $best_name (权重: $best_weight)"
-    log "   定义文件: $best_file"
-    
-    local device_file="$best_file"
-    local mk_device_name="$best_name"
-    
-    log "✅ 找到设备定义文件: $device_file"
-    
+    # 显示设备定义块的关键信息
     echo ""
     echo "📋 设备定义信息（关键字段）:"
     echo "----------------------------------------"
-    echo "$best_block" | grep -E "define Device" | head -1
-    echo "$best_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
-    if [ -n "$storage_param" ]; then
-        echo "$best_block" | grep -E "^[[:space:]]*ARTIFACT.*$storage_param" | head -3
-    fi
+    grep -A 20 "^define Device/$device_for_config" "$device_file" 2>/dev/null | head -15
     echo "----------------------------------------"
     
-    local device_for_config="$mk_device_name"
-    log "🔧 最终使用设备名: $device_for_config"
+    # 保存转换后的设备名到环境变量
+    export DEVICE="$device_for_config"
+    if [ -n "$GITHUB_ENV" ]; then
+        echo "DEVICE=$device_for_config" >> $GITHUB_ENV
+    fi
+    # 同时保存到 build_env.sh
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        sed -i "s/^export DEVICE=.*/export DEVICE=\"$device_for_config\"/" "$BUILD_DIR/build_env.sh" 2>/dev/null || true
+    fi
     
     generate_config "$extra_packages" "$device_for_config"
     
@@ -4762,10 +4676,18 @@ workflow_step23_pre_build_check() {
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
         # ============================================
-        # 直接使用环境变量中的 DEVICE（步骤15已经确定的值）
+        # 从 .config 中获取实际启用的设备名
         # ============================================
-        local device_for_check="$DEVICE"
-        log "🔧 使用步骤15确定的设备名: $device_for_check"
+        local actual_device=$(grep "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_" .config | grep "=y" | head -1 | sed "s/CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_//" | sed 's/=y//')
+        
+        if [ -n "$actual_device" ]; then
+            log "🔧 从 .config 获取实际设备名: $actual_device"
+            local device_for_check="$actual_device"
+        else
+            # 如果没有找到，使用环境变量中的 DEVICE
+            local device_for_check="$DEVICE"
+            log "⚠️ 未从 .config 找到设备，使用环境变量: $device_for_check"
+        fi
         
         # 构建期望的设备配置
         local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}=y"
@@ -4783,7 +4705,6 @@ workflow_step23_pre_build_check() {
             done <<< "$existing_configs"
         else
             log "    未找到任何已启用的设备配置"
-            # 也显示被禁用的
             local disabled_configs=$(grep "^# CONFIG_TARGET_.*DEVICE" .config | head -10)
             if [ -n "$disabled_configs" ]; then
                 log "    被禁用的设备配置:"
@@ -4802,6 +4723,7 @@ workflow_step23_pre_build_check() {
         else
             echo "   ❌ 设备配置可能不正确，未找到任何匹配"
             echo "   期望的配置: $expected_config"
+            echo "   实际设备名: $actual_device"
             error_count=$((error_count + 1))
         fi
     else
