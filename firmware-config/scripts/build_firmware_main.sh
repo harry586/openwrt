@@ -2721,6 +2721,7 @@ integrate_custom_files() {
     local other_count=0
     local english_count=0
     local non_english_count=0
+    local space_warning=0
     
     echo ""
     log "📋 详细文件列表:"
@@ -2733,7 +2734,12 @@ integrate_custom_files() {
         local file_name=$(basename "$file")
         local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
         
-        if is_english_filename "$file_name"; then
+        # 检查文件名是否包含空格
+        if echo "$file_name" | grep -q ' '; then
+            local name_status="⚠️ 包含空格"
+            non_english_count=$((non_english_count + 1))
+            space_warning=$((space_warning + 1))
+        elif is_english_filename "$file_name"; then
             local name_status="✅ 英文"
             english_count=$((english_count + 1))
         else
@@ -2755,7 +2761,12 @@ integrate_custom_files() {
             other_count=$((other_count + 1))
         fi
         
-        printf "%-50s %-10s %-15s %s\n" "$rel_path" "$file_size" "$type_desc" "$name_status"
+        # 对包含空格的文件名加引号显示
+        if echo "$rel_path" | grep -q ' '; then
+            printf '"%-48s" %-10s %-15s %s\n' "$rel_path" "$file_size" "$type_desc" "$name_status"
+        else
+            printf "%-50s %-10s %-15s %s\n" "$rel_path" "$file_size" "$type_desc" "$name_status"
+        fi
         
     done <<< "$all_files"
     
@@ -2769,13 +2780,22 @@ integrate_custom_files() {
     log "  ⚙️ 配置文件: $config_count 个"
     log "  📁 其他文件: $other_count 个"
     log "  ✅ 英文文件名: $english_count 个"
-    log "  ⚠️ 非英文文件名: $non_english_count 个"
+    log "  ⚠️ 非英文或含空格文件名: $non_english_count 个"
+    
+    if [ $space_warning -gt 0 ]; then
+        echo ""
+        log "⚠️ 文件名空格警告:"
+        log "  发现 $space_warning 个文件名包含空格"
+        log "  包含空格的文件名在脚本中可能无法正确执行"
+        log "  建议将文件名中的空格替换为下划线 _"
+    fi
     
     if [ $non_english_count -gt 0 ]; then
         echo ""
         log "💡 文件名建议:"
         log "  为了更好的兼容性，方便复制、运行，建议使用英文文件名"
-        log "  当前系统会自动处理非英文文件名，但英文名有更好的兼容性"
+        log "  文件名中不要包含空格，用下划线 _ 或连字符 - 代替"
+        log "  当前系统会自动处理，但英文名有更好的兼容性"
     fi
     
     echo ""
@@ -3024,7 +3044,9 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "  总文件数: $TOTAL_FILES 个" >> $LOG_FILE
     echo "  成功处理: $TOTAL_SUCCESS 个" >> $LOG_FILE
     echo "  失败处理: $TOTAL_FAILED 个" >> $LOG_FILE
-    echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE
+    if [ $((TOTAL_SUCCESS + TOTAL_FAILED)) -gt 0 ]; then
+        echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE
+    fi
     echo "" >> $LOG_FILE
     
     echo "📋 详细分类统计:" >> $LOG_FILE
@@ -3078,6 +3100,7 @@ echo ""
 
 ENGLISH_COUNT=0
 NON_ENGLISH_COUNT=0
+SPACE_COUNT=0
 TOTAL_FILES=0
 
 FILE_LIST=$(mktemp)
@@ -3088,7 +3111,11 @@ while IFS= read -r file; do
     file_name=$(basename "$file")
     rel_path="${file#$CUSTOM_DIR/}"
     
-    if echo "$file_name" | grep -q '^[a-zA-Z0-9_.-]*$'; then
+    if echo "$file_name" | grep -q ' '; then
+        SPACE_COUNT=$((SPACE_COUNT + 1))
+        NON_ENGLISH_COUNT=$((NON_ENGLISH_COUNT + 1))
+        echo "⚠️ $rel_path (文件名包含空格)"
+    elif echo "$file_name" | grep -q '^[a-zA-Z0-9_.-]*$'; then
         ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
         echo "✅ $rel_path"
     else
@@ -3104,7 +3131,15 @@ echo "📊 检查结果:"
 echo "  总文件数: $TOTAL_FILES 个"
 echo "  英文文件名: $ENGLISH_COUNT 个"
 echo "  非英文文件名: $NON_ENGLISH_COUNT 个"
+echo "  包含空格的文件名: $SPACE_COUNT 个"
 echo ""
+
+if [ $SPACE_COUNT -gt 0 ]; then
+    echo "⚠️ 文件名包含空格警告:"
+    echo "  文件名中的空格会导致脚本无法正确执行"
+    echo "  建议将文件名中的空格替换为下划线 _"
+    echo ""
+fi
 
 if [ $NON_ENGLISH_COUNT -gt 0 ]; then
     echo "💡 建议:"
@@ -3129,12 +3164,18 @@ EOF
     log "  📁 其他文件: $other_count 个"
     log "  总文件数: $file_count 个"
     log "  ✅ 英文文件名: $english_count 个"
-    log "  ⚠️ 非英文文件名: $non_english_count 个"
+    log "  ⚠️ 非英文或含空格文件名: $non_english_count 个"
+    
+    if [ $space_warning -gt 0 ]; then
+        log "⚠️ 文件名空格警告:"
+        log "  发现 $space_warning 个文件名包含空格"
+        log "  建议将文件名中的空格替换为下划线 _"
+    fi
     
     if [ $non_english_count -gt 0 ]; then
         log "💡 文件名兼容性提示:"
-        log "  当前有 $non_english_count 个文件使用非英文文件名"
-        log "  建议改为英文文件名以获得更好的兼容性"
+        log "  当前有 $non_english_count 个文件使用非英文文件名或包含空格"
+        log "  建议改为英文文件名并使用下划线 _ 或连字符 - 代替空格"
     fi
     
     CUSTOM_FILE_STATS="/tmp/custom_file_stats.txt"
@@ -3146,6 +3187,7 @@ CUSTOM_CONFIG_COUNT=$config_count
 CUSTOM_OTHER_COUNT=$other_count
 CUSTOM_ENGLISH_COUNT=$english_count
 CUSTOM_NON_ENGLISH_COUNT=$non_english_count
+CUSTOM_SPACE_COUNT=$space_warning
 EOF
     
     log "✅ 自定义文件集成完成"
@@ -5018,7 +5060,7 @@ echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
 while true; do
     TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
     for tmp_dir in $TMP_DIRS; do
-        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.itb" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
                 backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
@@ -5294,7 +5336,7 @@ EOF
     if [ -d "$target_dir" ]; then
         while IFS= read -r file; do
             [ -n "$file" ] && firmware_files+=("$file")
-        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | grep -v "sha256sums")
+        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums")
         
         for file in "${firmware_files[@]}"; do
             local fname=$(basename "$file")
@@ -5302,7 +5344,7 @@ EOF
             local size_mb=$((size_bytes / 1024 / 1024))
             
             local is_flashable=0
-            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]] || [[ "$fname" == *".itb" && "$fname" != *"initramfs"* ]]; then
+            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
                 is_flashable=1
             fi
             
@@ -5311,12 +5353,20 @@ EOF
                     log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
                     valid_firmware=$((valid_firmware + 1))
                 else
-                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
+                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件，将删除"
+                    rm -f "$file"
                 fi
             else
-                log "  ❌ $fname 大小: ${size_mb}MB - 无效"
+                log "  ❌ $fname 大小: ${size_mb}MB - 无效，将删除"
                 rm -f "$file"
             fi
+        done
+        
+        # 清理所有非 factory 和 sysupgrade 的 .bin 文件
+        log "🔧 清理非必要的固件文件..."
+        find "$target_dir" -type f \( -name "*initramfs*" -o -name "*preloader*" -o -name "*gpt*" -o -name "*kernel*" -o -name "*rootfs*" \) 2>/dev/null | while read file; do
+            log "  🗑️ 删除: $(basename "$file")"
+            rm -f "$file"
         done
     fi
     
@@ -5355,15 +5405,11 @@ workflow_step26_check_artifacts() {
         echo "=========================================="
         
         local sysupgrade_count=0
-        local initramfs_count=0
         local factory_count=0
-        local itb_count=0
-        local preloader_count=0
-        local gpt_count=0
         local other_count=0
         
         # 先收集所有文件，避免管道中的子shell问题
-        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" -o -name "*.tar" -o -name "*.gz" \) 2>/dev/null | grep -v "sha256sums" | sort)
+        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums" | sort)
         
         # 遍历所有文件
         while IFS= read -r file; do
@@ -5373,93 +5419,30 @@ workflow_step26_check_artifacts() {
             FILE_NAME=$(basename "$file")
             FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
             
-            # 判断文件类型并添加注释
+            # 只保留 sysupgrade 和 factory 文件
             if echo "$FILE_NAME" | grep -q "sysupgrade"; then
-                if echo "$FILE_NAME" | grep -q "\.itb$"; then
-                    echo "  ✅ $FILE_NAME (FIT格式)"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🚀 刷机用 - FIT格式固件，通过 sysupgrade 命令刷入"
-                    echo "    注释: *sysupgrade.itb - 刷机用"
-                    echo ""
-                    sysupgrade_count=$((sysupgrade_count + 1))
-                else
-                    echo "  ✅ $FILE_NAME"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
-                    echo "    注释: *sysupgrade.bin - 刷机用"
-                    echo ""
-                    sysupgrade_count=$((sysupgrade_count + 1))
-                fi
+                echo "  ✅ $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
+                echo ""
+                sysupgrade_count=$((sysupgrade_count + 1))
             elif echo "$FILE_NAME" | grep -q "factory"; then
                 echo "  🏭 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
                 echo "    用途: 📦 原厂刷机 - 用于从原厂固件第一次刷入 OpenWrt"
-                echo "    注释: *factory.img/*factory.bin - 原厂刷机用"
                 echo ""
                 factory_count=$((factory_count + 1))
-            elif echo "$FILE_NAME" | grep -q "initramfs"; then
-                if echo "$FILE_NAME" | grep -q "\.itb$"; then
-                    echo "  🔷 $FILE_NAME (FIT格式)"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🆘 FIT格式恢复镜像 - 用于支持FIT的引导加载程序"
-                    echo "    注释: *initramfs-recovery.itb - 恢复用"
-                    itb_count=$((itb_count + 1))
-                else
-                    echo "  🔷 $FILE_NAME"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🆘 恢复用 - 内存启动镜像，不写入闪存"
-                    echo "    注释: *initramfs-kernel.bin - 恢复用"
-                    initramfs_count=$((initramfs_count + 1))
-                fi
-                echo ""
-            elif echo "$FILE_NAME" | grep -q "preloader"; then
-                echo "  ⚙️ $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🔧 预加载器 - 用于启动引导程序"
-                echo "    注释: *preloader.bin - 引导加载程序"
-                echo ""
-                preloader_count=$((preloader_count + 1))
-            elif echo "$FILE_NAME" | grep -q "gpt"; then
-                echo "  💽 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 📋 GPT分区表 - 用于eMMC分区"
-                echo "    注释: *gpt.bin - 分区表"
-                echo ""
-                gpt_count=$((gpt_count + 1))
-            elif echo "$FILE_NAME" | grep -q "kernel"; then
-                echo "  🔶 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🧩 内核镜像 - 仅包含内核，不包含根文件系统"
-                echo ""
-                other_count=$((other_count + 1))
-            elif echo "$FILE_NAME" | grep -q "rootfs"; then
-                echo "  📦 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🗄️ 根文件系统 - 仅包含根文件系统，不包含内核"
-                echo ""
-                other_count=$((other_count + 1))
-            elif echo "$FILE_NAME" | grep -q "sha256sums"; then
-                # 跳过校验和文件
-                continue
-            elif echo "$FILE_NAME" | grep -q "Packages\.gz"; then
-                # 跳过软件包索引文件
-                continue
             else
                 echo "  📄 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
-                echo "    用途: ❓ 其他文件"
+                echo "    用途: ❓ 其他文件 - 将被删除"
                 echo ""
                 other_count=$((other_count + 1))
+                # 删除非必要的文件
+                rm -f "$file"
             fi
         done <<< "$all_files"
         
@@ -5468,12 +5451,8 @@ workflow_step26_check_artifacts() {
         echo "📊 固件统计:"
         echo "----------------------------------------"
         echo "  ✅ sysupgrade固件: $sysupgrade_count 个 - 🚀 **刷机用**"
-        echo "  🔷 initramfs恢复镜像: $initramfs_count 个 - 🆘 **传统恢复用**"
-        echo "  🔷 FIT恢复镜像: $itb_count 个 - 🆘 **FIT格式恢复用**"
         echo "  🏭 factory镜像: $factory_count 个 - 📦 **原厂刷机用**"
-        echo "  ⚙️ preloader: $preloader_count 个 - 🔧 **引导加载程序**"
-        echo "  💽 GPT分区表: $gpt_count 个 - 📋 **eMMC分区表**"
-        echo "  📦 其他文件: $other_count 个"
+        echo "  🗑️ 已删除其他文件: $other_count 个"
         echo "----------------------------------------"
         echo ""
         
@@ -5488,16 +5467,17 @@ workflow_step26_check_artifacts() {
         local total_size_mb=0
         local firmware_list=()
         
-        # 收集所有可刷机固件
+        # 重新扫描，只收集 sysupgrade 和 factory 文件
+        local remaining_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums" | sort)
+        
         while IFS= read -r file; do
             [ -z "$file" ] && continue
-            if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"sysupgrade.itb" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
+            if [[ "$file" == *"sysupgrade"* ]] || [[ "$file" == *"factory"* ]]; then
                 local fname=$(basename "$file")
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
                 local fsize_human=$(ls -lh "$file" | awk '{print $5}')
                 
-                # 检查文件类型
                 local ftype=""
                 if [[ "$fname" == *"sysupgrade"* ]]; then
                     ftype="sysupgrade"
@@ -5507,7 +5487,7 @@ workflow_step26_check_artifacts() {
                 
                 firmware_list+=("$ftype:$fname:$fsize_mb:$fsize_human:$file")
             fi
-        done <<< "$all_files"
+        done <<< "$remaining_files"
         
         # 验证固件大小
         echo "📋 固件大小验证结果:"
@@ -5559,12 +5539,8 @@ workflow_step26_check_artifacts() {
         
         # 重要提示
         echo "🔔 固件类型说明:"
-        echo "  ✅ *sysupgrade.bin/*.itb - **刷机用** (已安装OpenWrt时升级)"
-        echo "  🔷 *initramfs-*.bin        - **传统恢复用** (内存启动，用于恢复)"
-        echo "  🔷 *initramfs-*.itb        - **FIT格式恢复** (适用于支持FIT的引导程序)"
-        echo "  🏭 *factory.img/*.bin      - **原厂刷机用** (从原厂固件第一次刷入)"
-        echo "  ⚙️ *preloader.bin          - **引导预加载器** (写入特定分区)"
-        echo "  💽 *gpt.bin                - **GPT分区表** (用于eMMC)"
+        echo "  ✅ *sysupgrade.bin - **刷机用** (已安装OpenWrt时升级)"
+        echo "  🏭 *factory.img/*.bin - **原厂刷机用** (从原厂固件第一次刷入)"
         echo ""
         
         # 检测缺少的固件类型
@@ -5604,23 +5580,10 @@ workflow_step26_check_artifacts() {
                 printf "  📌 %-60s %s %s %s\n" "$fname" "$fsize_human" "$ftype_display" "$status"
                 flashable_count=$((flashable_count + 1))
             fi
-        done | head -20
-        
-        # 修复：这里不应该再打印"没有找到可刷机的固件文件"
-        # 因为上面已经显示了固件列表
+        done
         
         if [ $flashable_count -eq 0 ]; then
             echo "  ⚠️ 没有找到可刷机的固件文件"
-            
-            # 尝试查找initramfs作为替代
-            while IFS= read -r file; do
-                [ -z "$file" ] && continue
-                if [[ "$file" == *"initramfs"* ]]; then
-                    local fname=$(basename "$file")
-                    local fsize=$(ls -lh "$file" | awk '{print $5}')
-                    printf "  🔷 %-60s %s [恢复用]\n" "$fname" "$fsize"
-                fi
-            done <<< "$all_files" | head -5
         fi
         
         echo "----------------------------------------"
@@ -5630,24 +5593,19 @@ workflow_step26_check_artifacts() {
         if [ $valid_sysupgrade -gt 0 ]; then
             echo "📝 刷机建议:"
             echo "   如果您已经安装了OpenWrt，请使用 sysupgrade 固件文件"
-            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin 或 *sysupgrade.itb"
+            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin"
         elif [ $valid_factory -gt 0 ]; then
             echo "📝 刷机建议:"
             echo "   如果您是从原厂固件第一次刷入，请使用 factory.img 文件"
             echo "   通过路由器原厂Web界面刷入"
-        elif [ $initramfs_count -gt 0 ] || [ $itb_count -gt 0 ]; then
-            echo "📝 刷机建议:"
-            echo "   没有找到sysupgrade或factory固件，但找到了initramfs恢复镜像"
-            echo "   initramfs是内存启动镜像，可用于恢复系统，但不能永久刷入"
-            echo "   如需永久刷入，需要先启动initramfs，然后在系统中刷入sysupgrade"
         fi
         
         # 如果是RAX3000M，提供特定说明
         if [[ "$TARGET" == "mediatek" ]] && [[ "$SUBTARGET" == "filogic" ]]; then
             echo ""
             echo "📌 适用于 CMCC RAX3000M 的说明:"
-            echo "   - NAND版本: 使用 nand-preloader.bin 和 sysupgrade.itb"
-            echo "   - eMMC版本: 使用 emmc-gpt.bin, emmc-preloader.bin 和 sysupgrade.itb"
+            echo "   - NAND版本: 使用 sysupgrade.bin 进行刷机"
+            echo "   - eMMC版本: 使用 sysupgrade.bin 进行刷机"
             echo "   - 刷机前请确认您的硬件版本"
         fi
         
@@ -5895,16 +5853,12 @@ quick_error_check() {
                     ftype="sysupgrade"
                 elif [[ "$fname" == *"factory"* ]]; then
                     ftype="factory"
-                elif [[ "$fname" == *"initramfs"* ]]; then
-                    ftype="initramfs"
-                elif [[ "$fname" == *".itb" ]]; then
-                    ftype="fit"
                 else
                     ftype="other"
                 fi
                 
                 local is_flashable=0
-                if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]] || [[ "$ftype" == "fit" ]]; then
+                if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
                     is_flashable=1
                 fi
                 
@@ -5918,7 +5872,7 @@ quick_error_check() {
                 else
                     echo "❌ $fname - ${fsize_human} (${fsize_mb}MB) - 无效(小于5MB)"
                 fi
-            done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | grep -v "sha256sums" | sort)
+            done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums" | sort)
             
             if [ $found_firmware -eq 0 ]; then
                 echo "❌ 未找到任何固件文件"
