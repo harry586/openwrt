@@ -1083,7 +1083,7 @@ add_turboacc_support() {
     done
     
     # ============================================
-    # 修复 smartdns 编译问题
+    # 修复 smartdns 编译问题（可选，保留但不过度干预）
     # ============================================
     log "🔧 修复 smartdns 编译问题..."
     
@@ -1118,11 +1118,11 @@ add_turboacc_support() {
     done
     
     # ============================================
-    # 彻底修复所有下载源
+    # 彻底修复所有下载源（关键修复）
     # ============================================
     log "🔧 彻底修复所有下载源..."
     
-    # 创建补丁目录
+    # 修复 trusted-firmware-a 下载源 - 使用多个备用源
     mkdir -p package/firmware/trusted-firmware-a/patches
     
     cat > package/firmware/trusted-firmware-a/patches/001-fix-download-url.patch << 'EOF'
@@ -1135,13 +1135,23 @@ add_turboacc_support() {
 -PKG_SOURCE_URL:=https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
 -PKG_SOURCE_URL+=https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
 +PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz
-+PKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v$(PKG_VERSION).tar.gz
 +PKG_SOURCE_URL+=https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v$(PKG_VERSION)
++PKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v$(PKG_VERSION).tar.gz
  PKG_HASH:=skip
  
  PKG_LICENSE:=BSD-3-Clause
 EOF
     log "  ✅ 创建 trusted-firmware-a 下载源修复补丁"
+    
+    # 直接修改 Makefile 文件（更可靠）
+    local tf_makefile="package/firmware/trusted-firmware-a/Makefile"
+    if [ -f "$tf_makefile" ]; then
+        cp "$tf_makefile" "$tf_makefile.bak.$(date +%Y%m%d%H%M%S)"
+        sed -i 's|https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz|https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz|g' "$tf_makefile"
+        sed -i 's|https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz|https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v$(PKG_VERSION)|g' "$tf_makefile"
+        sed -i 's|PKG_HASH:=.*|PKG_HASH:=skip|g' "$tf_makefile"
+        log "  ✅ 直接修复 trusted-firmware-a Makefile"
+    fi
     
     # 修复所有 mirror.immortalwrt.org 源
     find . -name "*.mk" -o -name "Makefile" | while read file; do
@@ -2121,34 +2131,8 @@ EOF
         rm -rf "$dir"
     done
     
-    log "🔧 特别处理：根据平台决定是否禁用 smartdns"
-    local disable_smartdns=0
-    case "$TARGET" in
-        ipq40xx|ipq806x|qcom|mediatek|ramips)
-            log "  ⚠️ 平台 $TARGET 已知 smartdns 编译问题，将禁用 smartdns"
-            disable_smartdns=1
-            ;;
-        *)
-            log "  ✅ 平台 $TARGET 支持 smartdns，保留"
-            disable_smartdns=0
-            ;;
-    esac
-    
-    if [ $disable_smartdns -eq 1 ]; then
-        log "  🔧 彻底删除 smartdns 源文件..."
-        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除 smartdns 目录: $dir"
-            rm -rf "$dir"
-        done
-        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除 package smartdns 目录: $dir"
-            rm -rf "$dir"
-        done
-        find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除 feeds smartdns 目录: $dir"
-            rm -rf "$dir"
-        done
-    fi
+    # smartdns 不再自动禁用，保留给用户使用
+    log "  ℹ️ smartdns 保留，根据用户配置决定是否编译"
     
     log "📋 第二轮：在 .config 中禁用所有相关包..."
     
@@ -2159,12 +2143,7 @@ EOF
     
     echo "vsftpd-alt" >> "$disable_temp"
     
-    if [ $disable_smartdns -eq 1 ]; then
-        echo "smartdns" >> "$disable_temp"
-        echo "luci-app-smartdns" >> "$disable_temp"
-        echo "luci-i18n-smartdns-zh-cn" >> "$disable_temp"
-        echo "luci-i18n-smartdns-en" >> "$disable_temp"
-    fi
+    # smartdns 不再自动添加到禁用列表
     
     sort -u "$disable_temp" > "$disable_temp.sorted"
     
@@ -2188,10 +2167,7 @@ EOF
     sed -i "/vsftpd-alt/d" .config
     sed -i "/VSFTPD-ALT/d" .config
     
-    if [ $disable_smartdns -eq 1 ]; then
-        sed -i "/smartdns/d" .config
-        sed -i "/SMARTDNS/d" .config
-    fi
+    # smartdns 相关配置不再删除
     
     log "🔧 特别处理 DDNS 相关配置..."
     sed -i '/ddns/d' .config
@@ -2230,9 +2206,7 @@ EOF
     
     echo "vsftpd-alt" >> "$check_temp"
     
-    if [ $disable_smartdns -eq 1 ]; then
-        echo "smartdns" >> "$check_temp"
-    fi
+    # smartdns 不再检查残留
     
     sort -u "$check_temp" > "$check_temp.sorted"
     
@@ -2294,14 +2268,7 @@ EOF
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
-    if [ $disable_smartdns -eq 1 ]; then
-        if grep -q "^CONFIG_PACKAGE_smartdns=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" .config; then
-            log "  ❌ smartdns 仍被启用"
-            still_enabled=$((still_enabled + 1))
-        else
-            log "  ✅ smartdns 已禁用"
-        fi
-    fi
+    # smartdns 不再验证是否禁用
     
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
@@ -2731,6 +2698,28 @@ download_dependencies() {
     # 使用 -name 条件，不加括号
     local existing_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "现有依赖包数量: $existing_deps 个"
+    
+    # 预先下载 trusted-firmware-a（避免后续404错误）
+    log "🔧 预先下载 trusted-firmware-a..."
+    local tf_version="2.9"
+    local tf_urls=(
+        "https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v${tf_version}.tar.gz"
+        "https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v${tf_version}"
+        "https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v${tf_version}.tar.gz"
+    )
+    
+    for url in "${tf_urls[@]}"; do
+        if [ ! -f "dl/trusted-firmware-a-${tf_version}.tar.gz" ]; then
+            log "  尝试下载: $url"
+            curl -L --connect-timeout 30 --retry 3 -o "dl/trusted-firmware-a-${tf_version}.tar.gz" "$url" 2>/dev/null && {
+                log "  ✅ trusted-firmware-a 下载成功"
+                break
+            }
+        else
+            log "  ✅ trusted-firmware-a 已存在"
+            break
+        fi
+    done
     
     log "开始下载依赖包..."
     make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
@@ -3363,9 +3352,9 @@ workflow_step20_fix_network() {
     cd $BUILD_DIR
     
     # ============================================
-    # 修复下载源（针对超时问题）
+    # 修复下载源（针对401/404错误）
     # ============================================
-    log "🔧 修复下载源（针对超时问题）..."
+    log "🔧 修复下载源（针对401/404错误）..."
     
     # 备份原文件
     if [ -f "feeds.conf.default" ]; then
@@ -3373,44 +3362,23 @@ workflow_step20_fix_network() {
         log "  ✅ 备份 feeds.conf.default"
     fi
     
-    # 修复所有超时的镜像源
-    log "  🔧 替换超时的镜像源..."
+    # 修复ImmortalWrt下载源
+    if grep -q "mirror2.immortalwrt.org" feeds.conf.default 2>/dev/null; then
+        log "  🔧 替换失效的ImmortalWrt镜像源..."
+        sed -i 's|mirror2.immortalwrt.org|mirror.nju.edu.cn/immortalwrt|g' feeds.conf.default
+        sed -i 's|mirror.immortalwrt.org|mirror.nju.edu.cn/immortalwrt|g' feeds.conf.default
+        log "  ✅ 已替换为南京大学镜像源"
+    fi
     
-    # 替换腾讯云镜像源为其他可用源
-    find . -name "*.mk" -o -name "Makefile" | while read file; do
-        if grep -q "mirrors.tencent.com" "$file" 2>/dev/null; then
-            cp "$file" "$file.bak"
-            # 替换为 GitHub 官方源
-            sed -i 's|mirrors.tencent.com/gnu|ftp.gnu.org/gnu|g' "$file"
-            sed -i 's|mirrors.tencent.com|github.com|g' "$file"
-            log "    ✅ 修复: $file"
-        fi
-        if grep -q "mirrors.aliyun.com" "$file" 2>/dev/null; then
-            cp "$file" "$file.bak"
-            # 阿里云镜像保留，只是增加超时时间
-            sed -i 's|--timeout 20|--timeout 60|g' "$file"
-            log "    ✅ 增加超时时间: $file"
-        fi
-    done
+    # 修复trusted-firmware-a下载源（关键修复）
+    log "  🔧 修复trusted-firmware-a下载源..."
     
-    # 修复 trusted-firmware-a 下载源
-    log "  🔧 修复 trusted-firmware-a 下载源..."
+    # 创建补丁目录
+    local patch_dir="package/firmware/trusted-firmware-a/patches"
+    mkdir -p "$patch_dir"
     
-    # 查找并修复所有 trusted-firmware-a 相关的 Makefile
-    find package -type f -name "Makefile" -path "*/trusted-firmware-a/*" 2>/dev/null | while read makefile; do
-        cp "$makefile" "$makefile.bak"
-        # 添加多个备用下载源
-        sed -i 's|PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz \\\nPKG_SOURCE_URL+=https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v$(PKG_VERSION) \\\nPKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v$(PKG_VERSION).tar.gz|g' "$makefile"
-        sed -i 's|PKG_HASH:=.*|PKG_HASH:=skip|g' "$makefile"
-        log "    ✅ 修复: $makefile"
-    done
-    
-    # 创建补丁（如果不存在）
-    if [ -d "package/firmware/trusted-firmware-a" ]; then
-        local patch_dir="package/firmware/trusted-firmware-a/patches"
-        mkdir -p "$patch_dir"
-        
-        cat > "$patch_dir/001-fix-download-url.patch" << 'EOF'
+    # 创建补丁文件，替换下载源
+    cat > "$patch_dir/001-fix-download-url.patch" << 'EOF'
 --- a/package/firmware/trusted-firmware-a/Makefile
 +++ b/package/firmware/trusted-firmware-a/Makefile
 @@ -5,8 +5,9 @@
@@ -3426,19 +3394,33 @@ workflow_step20_fix_network() {
  
  PKG_LICENSE:=BSD-3-Clause
 EOF
-        log "  ✅ 已创建 trusted-firmware-a 下载源修复补丁"
+    log "  ✅ 已创建trusted-firmware-a下载源修复补丁"
+    
+    # 直接修改 Makefile（更可靠）
+    local tf_makefile="package/firmware/trusted-firmware-a/Makefile"
+    if [ -f "$tf_makefile" ]; then
+        cp "$tf_makefile" "$tf_makefile.bak.$(date +%Y%m%d%H%M%S)"
+        sed -i 's|https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz|https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz|g' "$tf_makefile"
+        sed -i 's|https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz|https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v$(PKG_VERSION)|g' "$tf_makefile"
+        sed -i 's|PKG_HASH:=.*|PKG_HASH:=skip|g' "$tf_makefile"
+        log "  ✅ 直接修复 trusted-firmware-a Makefile"
     fi
+    
+    # 修复 libssl 缺失问题
+    log "  🔧 修复 libssl 缺失问题..."
+    sudo apt-get update > /dev/null 2>&1 || true
+    sudo apt-get install -y libssl-dev pkg-config 2>/dev/null || true
+    
+    # 设置 PKG_CONFIG_PATH
+    local pkg_config_path="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$BUILD_DIR/staging_dir/target-*/usr/lib/pkgconfig"
+    export PKG_CONFIG_PATH="$pkg_config_path"
+    echo "PKG_CONFIG_PATH=$pkg_config_path" >> $GITHUB_ENV 2>/dev/null || true
     
     # 调用原有的网络修复函数
     fix_network
     
-    # 设置 Git 配置优化
-    git config --global http.postBuffer 524288000
-    git config --global http.lowSpeedLimit 0
-    git config --global http.lowSpeedTime 999999
-    
-    # 重新更新 feeds
-    log "🔄 重新更新 feeds（使用修复后的源）..."
+    # 重新更新feeds
+    log "🔄 重新更新feeds（使用修复后的源）..."
     ./scripts/feeds update -a > /tmp/build-logs/feeds_update_fixed.log 2>&1 || {
         log "⚠️ feeds更新有警告，继续..."
     }
@@ -3448,32 +3430,61 @@ EOF
 #【build_firmware_main.sh-20-end】
 
 #【build_firmware_main.sh-21】
-cleanup() {
-    log "=== 清理构建目录 ==="
+download_dependencies() {
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    if [ -d "$BUILD_DIR" ]; then
-        log "检查是否有需要保留的文件..."
-        
-        if [ -f "$BUILD_DIR/.config" ]; then
-            log "备份配置文件..."
-            mkdir -p $BACKUP_DIR
-            local backup_file="$BACKUP_DIR/config_$(date +%Y%m%d_%H%M%S).config"
-            cp "$BUILD_DIR/.config" "$backup_file"
-            log "✅ 配置文件备份到: $backup_file"
-        fi
-        
-        if [ -f "$BUILD_DIR/build.log" ]; then
-            log "备份编译日志..."
-            mkdir -p $BACKUP_DIR
-            cp "$BUILD_DIR/build.log" "$BACKUP_DIR/build_$(date +%Y%m%d_%H%M%S).log"
-        fi
-        
-        log "清理构建目录: $BUILD_DIR"
-        sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
-        log "✅ 构建目录已清理"
-    else
-        log "ℹ️ 构建目录不存在，无需清理"
+    log "=== 下载依赖包 ==="
+    
+    if [ ! -d "dl" ]; then
+        mkdir -p dl
+        log "创建依赖包目录: dl"
     fi
+    
+    # 使用 -name 条件，不加括号
+    local existing_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
+    log "现有依赖包数量: $existing_deps 个"
+    
+    # 预先下载 trusted-firmware-a（避免后续404错误）
+    log "🔧 预先下载 trusted-firmware-a..."
+    local tf_version="2.9"
+    local tf_urls=(
+        "https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v${tf_version}.tar.gz"
+        "https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v${tf_version}"
+        "https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v${tf_version}.tar.gz"
+    )
+    
+    for url in "${tf_urls[@]}"; do
+        if [ ! -f "dl/trusted-firmware-a-${tf_version}.tar.gz" ]; then
+            log "  尝试下载: $url"
+            curl -L --connect-timeout 30 --retry 3 -o "dl/trusted-firmware-a-${tf_version}.tar.gz" "$url" 2>/dev/null && {
+                log "  ✅ trusted-firmware-a 下载成功"
+                break
+            }
+        else
+            log "  ✅ trusted-firmware-a 已存在"
+            break
+        fi
+    done
+    
+    log "开始下载依赖包..."
+    make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
+    
+    # 使用 -name 条件，不加括号
+    local downloaded_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
+    log "下载后依赖包数量: $downloaded_deps 个"
+    
+    if [ $downloaded_deps -gt $existing_deps ]; then
+        log "✅ 成功下载了 $((downloaded_deps - existing_deps)) 个新依赖包"
+    else
+        log "ℹ️ 没有下载新的依赖包"
+    fi
+    
+    if grep -q "ERROR|Failed|404" download.log 2>/dev/null; then
+        log "⚠️ 下载过程中发现错误:"
+        grep -E "ERROR|Failed|404" download.log | head -10
+    fi
+    
+    log "✅ 依赖包下载完成"
 }
 #【build_firmware_main.sh-21-end】
 
@@ -5090,50 +5101,8 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    log "🔧 根据平台决定 smartdns 处理策略..."
-    local disable_smartdns=0
-    case "$TARGET" in
-        ipq40xx|ipq806x|qcom|mediatek|ramips)
-            log "  ⚠️ 平台 $TARGET 已知 smartdns 编译问题，将彻底删除 smartdns"
-            disable_smartdns=1
-            ;;
-        *)
-            log "  ✅ 平台 $TARGET 支持 smartdns，保留"
-            disable_smartdns=0
-            ;;
-    esac
-    
-    if [ $disable_smartdns -eq 1 ]; then
-        log "🔧 彻底删除 smartdns 源文件和构建目录..."
-        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package/feeds: $dir"
-            rm -rf "$dir"
-        done
-        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package: $dir"
-            rm -rf "$dir"
-        done
-        find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 feeds: $dir"
-            rm -rf "$dir"
-        done
-        find build_dir -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 build_dir: $dir"
-            rm -rf "$dir"
-        done
-        
-        log "  🔧 在 .config 中禁用 smartdns..."
-        if [ -f ".config" ]; then
-            sed -i '/CONFIG_PACKAGE_smartdns/d' .config
-            sed -i '/CONFIG_PACKAGE_luci-app-smartdns/d' .config
-            sed -i '/CONFIG_PACKAGE_luci-i18n-smartdns/d' .config
-            echo "# CONFIG_PACKAGE_smartdns is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-app-smartdns is not set" >> .config
-            sort -u .config -o .config
-        fi
-        
-        log "  ✅ smartdns 已彻底删除"
-    fi
+    # smartdns 不再自动禁用，保留给用户使用
+    log "  ℹ️ smartdns 保留，根据用户配置决定是否编译"
     
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
@@ -5282,27 +5251,11 @@ EOF
                 log "  ✅ package/install 错误修复完成"
             fi
             
-            if [ $disable_smartdns -eq 1 ] && grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*dns.c\|smartdns.*util.c\|smartdns.*tlog.c" "$log_file"; then
-                log "  ⚠️ 检测到 smartdns 编译错误，强制删除..."
-                
-                find build_dir -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-                    log "    删除 smartdns 构建目录: $dir"
-                    rm -rf "$dir"
-                done
-                
-                find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
-                    log "    删除 smartdns 源码目录: $dir"
-                    rm -rf "$dir"
-                done
-                
-                if [ -f ".config" ]; then
-                    sed -i '/CONFIG_PACKAGE_smartdns/d' .config
-                    sed -i '/CONFIG_PACKAGE_luci-app-smartdns/d' .config
-                    echo "# CONFIG_PACKAGE_smartdns is not set" >> .config
-                    sort -u .config -o .config
-                fi
-                
-                log "  ✅ smartdns 已删除，将继续编译"
+            # smartdns 编译错误处理改为可选的警告，而不是自动删除
+            if grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*dns.c\|smartdns.*util.c\|smartdns.*tlog.c" "$log_file"; then
+                log "  ⚠️ 检测到 smartdns 编译错误"
+                log "  ℹ️ 请检查 smartdns 配置，或通过 FORBIDDEN_PACKAGES 环境变量禁用 smartdns"
+                log "  ℹ️ 继续编译，如果失败请考虑禁用 smartdns"
             fi
             
             if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
