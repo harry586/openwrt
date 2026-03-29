@@ -53,15 +53,43 @@ load_build_config() {
     # 检查文件描述符限制（修复Broken pipe）
     # ============================================
     log "🔧 检查文件描述符限制..."
+    
+    # 获取当前限制
     local current_limit=$(ulimit -n)
     log "  当前文件描述符限制: $current_limit"
     
+    # 如果限制小于65536，尝试提高
     if [ $current_limit -lt 65536 ]; then
         log "  文件描述符限制过低，尝试提高到65536..."
-        ulimit -n 65536 2>/dev/null || sudo ulimit -n 65536 2>/dev/null || true
+        
+        # 尝试使用 ulimit 提高
+        ulimit -n 65536 2>/dev/null || true
+        
+        # 如果还是不够，尝试设置系统范围限制
         local new_limit=$(ulimit -n)
-        log "  新的文件描述符限制: $new_limit"
+        if [ $new_limit -lt 65536 ]; then
+            log "  ⚠️ 无法直接提高限制，尝试修改系统配置..."
+            echo "fs.file-max = 65536" | sudo tee -a /etc/sysctl.conf > /dev/null 2>&1
+            echo "root soft nofile 65536" | sudo tee -a /etc/security/limits.conf > /dev/null 2>&1
+            echo "root hard nofile 65536" | sudo tee -a /etc/security/limits.conf > /dev/null 2>&1
+            sudo sysctl -p > /dev/null 2>&1 || true
+            ulimit -n 65536 2>/dev/null || true
+        fi
+        
+        local final_limit=$(ulimit -n)
+        log "  新的文件描述符限制: $final_limit"
+        
+        if [ $final_limit -lt 4096 ]; then
+            log "  ⚠️ 警告：文件描述符限制仍过低，可能会遇到'Broken pipe'错误"
+        else
+            log "  ✅ 文件描述符限制已优化"
+        fi
+    else
+        log "  ✅ 文件描述符限制足够"
     fi
+    
+    # 导出文件描述符限制到子进程
+    export OPENWRT_ULIMIT=$(ulimit -n)
     
     log "✅ 配置加载完成，当前源码仓库类型: $SOURCE_REPO_TYPE"
 }
@@ -1010,49 +1038,203 @@ add_turboacc_support() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
-    # 彻底修复所有下载源
+    # 自动搜索和测试可用下载源
     # ============================================
-    log "🔧 彻底修复所有下载源..."
+    log "🔧 自动搜索可用下载源..."
     
-    # 创建补丁目录
-    mkdir -p package/firmware/trusted-firmware-a/patches
+    # 定义测试函数
+    test_url() {
+        local url="$1"
+        local timeout=5
+        curl -s -o /dev/null -I -L --connect-timeout $timeout --max-time $timeout "$url" 2>/dev/null && return 0 || return 1
+    }
     
-    # 创建补丁文件，替换所有失效的下载源
-    cat > package/firmware/trusted-firmware-a/patches/001-fix-download-url.patch << 'EOF'
+    # 定义备用源列表（按优先级排序）
+    declare -A MIRROR_SOURCES
+    MIRROR_SOURCES["github"]="https://github.com"
+    MIRROR_SOURCES["ghproxy"]="https://mirror.ghproxy.com/https://github.com"
+    MIRROR_SOURCES["nju"]="https://mirrors.nju.edu.cn/github"
+    MIRROR_SOURCES["bfsu"]="https://mirrors.bfsu.edu.cn/github"
+    MIRROR_SOURCES["ustc"]="https://mirrors.ustc.edu.cn/github"
+    MIRROR_SOURCES["tuna"]="https://mirrors.tuna.tsinghua.edu.cn/github"
+    
+    # 测试可用的镜像源
+    local AVAILABLE_MIRRORS=()
+    for name in "${!MIRROR_SOURCES[@]}"; do
+        local url="${MIRROR_SOURCES[$name]}"
+        if test_url "$url"; then
+            AVAILABLE_MIRRORS+=("$name:$url")
+            log "  ✅ 可用镜像: $name ($url)"
+        else
+            log "  ⚠️ 不可用镜像: $name ($url)"
+        fi
+    done
+    
+    # 如果没有可用镜像，使用 GitHub 官方源
+    if [ ${#AVAILABLE_MIRRORS[@]} -eq 0 ]; then
+        log "  ⚠️ 没有检测到可用镜像，将使用 GitHub 官方源"
+        AVAILABLE_MIRRORS=("github:https://github.com")
+    fi
+    
+    # 动态生成下载源修复脚本
+    generate_download_fix() {
+        local target_file="$1"
+        local pkg_name="$2"
+        local pkg_version="$3"
+        
+        # 构建动态的 PKG_SOURCE_URL
+        local source_urls=""
+        local first=1
+        for mirror in "${AVAILABLE_MIRRORS[@]}"; do
+            local mirror_url="${mirror#*:}"
+            if [ $first -eq 1 ]; then
+                source_urls="PKG_SOURCE_URL:="
+                first=0
+            else
+                source_urls="$source_urls\nPKG_SOURCE_URL+="
+            fi
+            
+            case "$pkg_name" in
+                "trusted-firmware-a")
+                    source_urls="$source_urls\"$mirror_url/ARM-software/arm-trusted-firmware/archive/refs/tags/v\$(PKG_VERSION).tar.gz\""
+                    ;;
+                "openssl")
+                    source_urls="$source_urls\"$mirror_url/openssl/openssl/releases/download/openssl-\$(PKG_VERSION)/openssl-\$(PKG_VERSION).tar.gz\""
+                    ;;
+                *)
+                    source_urls="$source_urls\"$mirror_url/\""
+                    ;;
+            esac
+        done
+        
+        # 添加官方源作为最后备选
+        if [ "$pkg_name" = "trusted-firmware-a" ]; then
+            source_urls="$source_urls\nPKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v\$(PKG_VERSION).tar.gz"
+        fi
+        
+        echo "$source_urls"
+    }
+    
+    # 修复 trusted-firmware-a 下载源
+    log "  🔧 修复 trusted-firmware-a 下载源..."
+    
+    # 查找所有可能的 trusted-firmware-a Makefile
+    local tf_makefiles=$(find package -type f -name "Makefile" -path "*/trusted-firmware-a/*" 2>/dev/null)
+    
+    if [ -n "$tf_makefiles" ]; then
+        echo "$tf_makefiles" | while read makefile; do
+            cp "$makefile" "$makefile.bak.$(date +%s)"
+            
+            # 读取当前版本
+            local version=$(grep "^PKG_VERSION:=" "$makefile" | cut -d'=' -f2 | tr -d ' ')
+            
+            # 生成动态下载源
+            local dynamic_urls=""
+            local first=1
+            for mirror in "${AVAILABLE_MIRRORS[@]}"; do
+                local mirror_url="${mirror#*:}"
+                if [ $first -eq 1 ]; then
+                    dynamic_urls="PKG_SOURCE_URL:="
+                    first=0
+                else
+                    dynamic_urls="$dynamic_urls \\\\\\\nPKG_SOURCE_URL+="
+                fi
+                dynamic_urls="$dynamic_urls\"$mirror_url/ARM-software/arm-trusted-firmware/archive/refs/tags/v\$(PKG_VERSION).tar.gz\""
+            done
+            dynamic_urls="$dynamic_urls \\\\\\\nPKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v\$(PKG_VERSION).tar.gz"
+            
+            # 替换下载源
+            sed -i "/^PKG_SOURCE_URL:/c\\$dynamic_urls" "$makefile"
+            sed -i 's/^PKG_HASH:=.*/PKG_HASH:=skip/' "$makefile"
+            
+            log "    ✅ 修复: $makefile (使用 ${#AVAILABLE_MIRRORS[@]} 个可用镜像)"
+        done
+    else
+        # 创建补丁
+        mkdir -p package/firmware/trusted-firmware-a/patches
+        cat > package/firmware/trusted-firmware-a/patches/001-auto-fix-download-url.patch << EOF
 --- a/package/firmware/trusted-firmware-a/Makefile
 +++ b/package/firmware/trusted-firmware-a/Makefile
-@@ -5,8 +5,8 @@
+@@ -5,8 +5,9 @@
  PKG_NAME:=trusted-firmware-a
  PKG_RELEASE:=1
  
--PKG_SOURCE_URL:=https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
--PKG_SOURCE_URL+=https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
-+PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz
-+PKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v$(PKG_VERSION).tar.gz
+-PKG_SOURCE_URL:=https://mirror2.immortalwrt.org/sources/trusted-firmware-a-\$(PKG_VERSION).tar.gz
+-PKG_SOURCE_URL+=https://mirror.immortalwrt.org/sources/trusted-firmware-a-\$(PKG_VERSION).tar.gz
++PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v\$(PKG_VERSION).tar.gz
++PKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v\$(PKG_VERSION).tar.gz
  PKG_HASH:=skip
  
  PKG_LICENSE:=BSD-3-Clause
 EOF
-    log "  ✅ 创建 trusted-firmware-a 下载源修复补丁"
+        log "  ✅ 创建基础修复补丁"
+    fi
     
-    # 修复 libxml2 下载源
-    find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
-        if [ -f "$dir/Makefile" ]; then
-            cp "$dir/Makefile" "$dir/Makefile.bak"
-            sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
-            sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
-            log "  ✅ 修复 libxml2 下载源"
-        fi
-    done
+    # 修复所有失效的下载源（智能替换）
+    log "  🔧 智能修复所有失效下载源..."
     
-    # 修复所有 mirror.immortalwrt.org 源
-    find . -name "*.mk" -o -name "Makefile" | while read file; do
-        if grep -q "mirror2.immortalwrt.org\|mirror.immortalwrt.org\|sources-cdn.immortalwrt.org" "$file" 2>/dev/null; then
-            cp "$file" "$file.bak"
-            sed -i 's|mirror2.immortalwrt.org|github.com|g' "$file"
-            sed -i 's|mirror.immortalwrt.org|github.com|g' "$file"
-            sed -i 's|sources-cdn.immortalwrt.org|github.com|g' "$file"
-            log "  ✅ 修复: $file"
+    # 定义需要检查的失效域名
+    local broken_domains=(
+        "mirror2.immortalwrt.org"
+        "mirror.immortalwrt.org"
+        "sources-cdn.immortalwrt.org"
+        "downloads.openwrt.org"
+        "archive.openwrt.org"
+    )
+    
+    # 自动测试并替换失效的下载源
+    find . -type f \( -name "*.mk" -o -name "Makefile" \) 2>/dev/null | while read file; do
+        local modified=0
+        for domain in "${broken_domains[@]}"; do
+            if grep -q "$domain" "$file" 2>/dev/null; then
+                # 尝试找到可用的替代域名
+                local alt_domain=""
+                local test_url=""
+                
+                # 尝试多个替代源
+                local alt_domains=(
+                    "github.com"
+                    "mirror.ghproxy.com/https://github.com"
+                )
+                
+                for alt in "${alt_domains[@]}"; do
+                    test_url=$(echo "$domain" | sed "s|$domain|$alt|g")
+                    if test_url "https://$alt"; then
+                        alt_domain="$alt"
+                        break
+                    fi
+                done
+                
+                if [ -n "$alt_domain" ]; then
+                    cp "$file" "$file.bak.$(date +%s)"
+                    sed -i "s|$domain|$alt_domain|g" "$file"
+                    log "    ✅ 修复: $(basename "$file") ($domain -> $alt_domain)"
+                    modified=1
+                fi
+            fi
+        done
+        
+        if [ $modified -eq 0 ] && [[ "$file" == *"openssl"* ]] && grep -q "PKG_SOURCE_URL" "$file" 2>/dev/null; then
+            # 特别处理 openssl
+            cp "$file" "$file.bak.$(date +%s)"
+            local version=$(grep "^PKG_VERSION:=" "$file" | cut -d'=' -f2 | tr -d ' ')
+            
+            local urls=""
+            local first=1
+            for mirror in "${AVAILABLE_MIRRORS[@]}"; do
+                local mirror_url="${mirror#*:}"
+                if [ $first -eq 1 ]; then
+                    urls="PKG_SOURCE_URL:="
+                    first=0
+                else
+                    urls="$urls \\\\\\\nPKG_SOURCE_URL+="
+                fi
+                urls="$urls\"$mirror_url/openssl/openssl/releases/download/openssl-\$(PKG_VERSION)/openssl-\$(PKG_VERSION).tar.gz\""
+            done
+            urls="$urls \\\\\\\nPKG_SOURCE_URL+=https://www.openssl.org/source/openssl-\$(PKG_VERSION).tar.gz"
+            
+            sed -i "/^PKG_SOURCE_URL:/c\\$urls" "$file"
+            log "    ✅ 修复: $(basename "$file") (openssl 使用 ${#AVAILABLE_MIRRORS[@]} 个镜像)"
         fi
     done
     
@@ -1062,7 +1244,7 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
         log "🔧 ImmortalWrt 源码特殊处理：修复补丁兼容性"
         
-        # 删除有问题的补丁文件（直接删除，不是重命名）
+        # 删除有问题的补丁文件
         local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
         
         if [ -f "$problem_patch" ]; then
@@ -1070,7 +1252,6 @@ EOF
             rm -f "$problem_patch"
         fi
         
-        # 也删除任何 .disabled 版本
         if [ -f "$problem_patch.disabled" ]; then
             log "  🗑️ 删除 disabled 补丁: $problem_patch.disabled"
             rm -f "$problem_patch.disabled"
@@ -1094,6 +1275,8 @@ EOF
             log "ℹ️ TurboACC feed 已存在"
         fi
     fi
+    
+    log "✅ 下载源修复完成，使用 ${#AVAILABLE_MIRRORS[@]} 个可用镜像"
 }
 #【build_firmware_main.sh-08-end】
 
@@ -3259,101 +3442,152 @@ verify_compiler_files() {
 #【build_firmware_main.sh-19-end】
 
 #【build_firmware_main.sh-20】
-check_compiler_invocation() {
-    log "=== 检查编译器调用状态（增强版）==="
+# ============================================
+# 步骤20: 修复网络环境（增强版 - 自动检测可用源）
+# 对应 firmware-build.yml 步骤20
+# ============================================
+workflow_step20_fix_network() {
+    log "=== 步骤20: 修复网络环境（增强版 - 自动检测可用源） ==="
     
-    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-        log "🔍 检查预构建编译器调用..."
-        
-        log "📋 当前PATH环境变量:"
-        echo "$PATH" | tr ':' '\n' | grep -E "(compiler|gcc|toolchain)" | head -10 | while read path_item; do
-            log "  📍 $path_item"
-        done
-        
-        log "🔧 查找可用编译器:"
-        which gcc g++ 2>/dev/null | while read compiler_path; do
-            log "  ⚙️ $(basename "$compiler_path"): $compiler_path"
-            
-            if [[ "$compiler_path" == *"$COMPILER_DIR"* ]]; then
-                log "    🎯 来自预构建目录: 是"
-            else
-                log "    🔄 来自其他位置: 否"
-            fi
-        done
-        
-        if [ -d "$BUILD_DIR/staging_dir" ]; then
-            log "📁 检查 staging_dir 中的编译器..."
-            
-            local used_compiler=$(find "$BUILD_DIR/staging_dir" -maxdepth 5 -type f -executable \
-              -name "*gcc" \
-              ! -name "*gcc-ar" \
-              ! -name "*gcc-ranlib" \
-              ! -name "*gcc-nm" \
-              ! -path "*dummy-tools*" \
-              ! -path "*scripts*" \
-              2>/dev/null | head -1)
-            
-            if [ -n "$used_compiler" ]; then
-                log "  ✅ 找到正在使用的真正的GCC编译器: $(basename "$used_compiler")"
-                log "     路径: $used_compiler"
-                
-                local version=$("$used_compiler" --version 2>&1 | head -1)
-                log "     版本: $version"
-                
-                if [[ "$used_compiler" == *"$COMPILER_DIR"* ]]; then
-                    log "  🎯 编译器来自预构建目录: 是"
-                    log "  📌 成功调用了预构建的编译器文件"
-                else
-                    log "  🔄 编译器来自其他位置: 否"
-                    log "  📌 使用的是OpenWrt自动构建的编译器"
-                fi
-            else
-                log "  ℹ️ 未找到真正的GCC编译器（当前未构建）"
-                
-                log "  🔍 检查SDK编译器:"
-                if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
-                    local sdk_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
-                      -name "*gcc" \
-                      ! -name "*gcc-ar" \
-                      ! -name "*gcc-ranlib" \
-                      ! -name "*gcc-nm" \
-                      ! -path "*dummy-tools*" \
-                      ! -path "*scripts*" \
-                      2>/dev/null | head -1)
-                    
-                    if [ -n "$sdk_gcc" ]; then
-                        log "    ✅ SDK编译器存在: $(basename "$sdk_gcc")"
-                        local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
-                        log "       版本: $sdk_version"
-                        log "    📌 将使用下载的SDK编译器进行构建"
-                    else
-                        log "    ⚠️ SDK目录中未找到真正的GCC编译器"
-                    fi
-                fi
-            fi
+    trap 'echo "⚠️ 步骤20 修复过程中出现错误，继续执行..."' ERR
+    
+    cd $BUILD_DIR
+    
+    # ============================================
+    # 自动检测可用下载源
+    # ============================================
+    log "🔧 自动检测可用下载源..."
+    
+    test_url() {
+        local url="$1"
+        local timeout=3
+        curl -s -o /dev/null -I -L --connect-timeout $timeout --max-time $timeout "$url" 2>/dev/null && return 0 || return 1
+    }
+    
+    # 定义可能的镜像源列表
+    local mirror_candidates=(
+        "https://github.com"
+        "https://mirror.ghproxy.com/https://github.com"
+        "https://ghproxy.net/https://github.com"
+        "https://gh.api.99988866.xyz/https://github.com"
+        "https://gitclone.com/github.com"
+        "https://hub.fastgit.xyz"
+        "https://kgithub.com"
+    )
+    
+    # 测试可用的镜像源
+    local available_mirrors=()
+    for mirror in "${mirror_candidates[@]}"; do
+        local test_url="${mirror}/ARM-software/arm-trusted-firmware"
+        if test_url "$test_url" 2>/dev/null; then
+            available_mirrors+=("$mirror")
+            log "  ✅ 可用: $mirror"
         fi
-    else
-        log "ℹ️ 未设置预构建编译器目录，将使用自动构建的编译器"
+    done
+    
+    # 如果都没有，使用官方源
+    if [ ${#available_mirrors[@]} -eq 0 ]; then
+        log "  ⚠️ 没有检测到可用镜像，将使用 GitHub 官方源"
+        available_mirrors=("https://github.com")
     fi
     
-    log "💻 系统编译器检查:"
-    if command -v gcc >/dev/null 2>&1; then
-        local sys_gcc=$(which gcc)
-        local sys_version=$(gcc --version 2>&1 | head -1)
-        log "  ✅ 系统GCC: $sys_gcc"
-        log "     版本: $sys_version"
-        
-        local major_version=$(echo "$sys_version" | grep -o "[0-9]\+" | head -1)
-        if [ -n "$major_version" ] && [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
-            log "     ✅ 系统GCC $major_version.x 版本兼容"
-        else
-            log "     ⚠️ 系统GCC版本可能不兼容"
+    log "  📊 共检测到 ${#available_mirrors[@]} 个可用镜像"
+    
+    # ============================================
+    # 动态生成下载源修复
+    # ============================================
+    log "🔧 动态修复下载源..."
+    
+    # 查找并修复所有 Makefile
+    find . -type f \( -name "*.mk" -o -name "Makefile" \) 2>/dev/null | while read file; do
+        if grep -q "PKG_SOURCE_URL" "$file" 2>/dev/null; then
+            local modified=0
+            local backup_file="$file.bak.$(date +%s)"
+            
+            # 检查是否有失效的域名
+            if grep -q "mirror2.immortalwrt.org\|mirror.immortalwrt.org\|sources-cdn.immortalwrt.org" "$file" 2>/dev/null; then
+                cp "$file" "$backup_file"
+                
+                # 使用第一个可用镜像替换
+                local primary_mirror="${available_mirrors[0]}"
+                sed -i "s|mirror2.immortalwrt.org|${primary_mirror#https://}|g" "$file"
+                sed -i "s|mirror.immortalwrt.org|${primary_mirror#https://}|g" "$file"
+                sed -i "s|sources-cdn.immortalwrt.org|${primary_mirror#https://}|g" "$file"
+                modified=1
+            fi
+            
+            if [ $modified -eq 1 ]; then
+                log "    ✅ 修复: $(basename "$file")"
+            fi
         fi
-    else
-        log "  ❌ 系统GCC未找到"
+    done
+    
+    # ============================================
+    # 智能重试下载函数
+    # ============================================
+    smart_download() {
+        local url_template="$1"
+        local output_file="$2"
+        local max_retries=3
+        
+        for retry in $(seq 1 $max_retries); do
+            for mirror in "${available_mirrors[@]}"; do
+                local url=$(echo "$url_template" | sed "s|{MIRROR}|$mirror|g")
+                log "    尝试下载: $url"
+                if curl -f -L --connect-timeout 10 --max-time 60 -o "$output_file" "$url" 2>/dev/null; then
+                    return 0
+                fi
+            done
+            sleep $((retry * 2))
+        done
+        return 1
+    }
+    
+    # ============================================
+    # 修复 libssl 依赖
+    # ============================================
+    log "🔧 修复 libssl 依赖..."
+    
+    # 安装系统依赖
+    sudo apt-get update > /dev/null 2>&1 || true
+    sudo apt-get install -y libssl-dev pkg-config ca-certificates > /dev/null 2>&1 || true
+    
+    # 设置 PKG_CONFIG_PATH
+    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$BUILD_DIR/staging_dir/target-aarch64_cortex-a53_musl/usr/lib/pkgconfig:$PKG_CONFIG_PATH"
+    
+    # 创建 libssl.pc 如果不存在
+    if [ ! -f "/usr/lib/x86_64-linux-gnu/pkgconfig/libssl.pc" ] && [ -f "/usr/lib/x86_64-linux-gnu/libssl.so" ]; then
+        mkdir -p /usr/lib/x86_64-linux-gnu/pkgconfig
+        cat > /usr/lib/x86_64-linux-gnu/pkgconfig/libssl.pc << 'EOF'
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib/x86_64-linux-gnu
+includedir=${prefix}/include
+
+Name: OpenSSL
+Description: Secure Sockets Layer and cryptography libraries
+Version: 3.0.2
+Requires:
+Libs: -L${libdir} -lssl -lcrypto
+Cflags: -I${includedir}
+EOF
+        log "  ✅ 创建 libssl.pc 文件"
     fi
     
-    log "✅ 编译器调用状态检查完成"
+    # ============================================
+    # 调用原有网络修复
+    # ============================================
+    fix_network
+    
+    # ============================================
+    # 重新更新 feeds
+    # ============================================
+    log "🔄 重新更新 feeds..."
+    ./scripts/feeds update -a > /tmp/build-logs/feeds_update_fixed.log 2>&1 || {
+        log "⚠️ feeds更新有警告，继续..."
+    }
+    
+    log "✅ 步骤20 完成，使用 ${#available_mirrors[@]} 个可用镜像"
 }
 #【build_firmware_main.sh-20-end】
 
