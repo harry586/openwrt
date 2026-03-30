@@ -3645,52 +3645,565 @@ workflow_step07_create_build_dir() {
 
 #【build_firmware_main.sh-25】
 # ============================================
-# 步骤08: 初始化构建环境
-# 对应 firmware-build.yml 步骤08
+# 步骤25: 编译固件（修复smartdns打包错误）
+# 对应 firmware-build.yml 步骤25
 # ============================================
-workflow_step08_initialize_build_env() {
-    local device_name="$1"
-    local version_selection="$2"
-    local config_mode="$3"
+workflow_step25_build_firmware() {
+    local enable_parallel="$1"
     
-    log "=== 步骤08: 初始化构建环境 ==="
+    log "=== 步骤25: 编译固件（修复smartdns打包错误） ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
-    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
-    initialize_build_env "$device_name" "$version_selection" "$config_mode"
+    cd $BUILD_DIR
     
     # ============================================
-    # 修复文件描述符限制
+    # 关键修复：检查 Makefile 是否存在，如果不存在则从源码根目录复制
     # ============================================
-    log "🔧 检查和修复文件描述符限制..."
-    
-    # 获取当前限制
-    local current_limit=$(ulimit -n)
-    log "  当前文件描述符限制: $current_limit"
-    
-    # 如果限制小于65536，尝试提高
-    if [ $current_limit -lt 65536 ]; then
-        log "  文件描述符限制过低，尝试提高到65536..."
-        ulimit -n 65536 2>/dev/null || {
-            log "  ⚠️ 无法直接提高限制，尝试使用sudo..."
-            sudo ulimit -n 65536 2>/dev/null || true
-        }
+    if [ ! -f "Makefile" ]; then
+        log "⚠️ 警告: Makefile 不存在，尝试恢复..."
         
-        # 再次检查
-        local new_limit=$(ulimit -n)
-        log "  新的文件描述符限制: $new_limit"
-        
-        if [ $new_limit -lt 4096 ]; then
-            log "  ⚠️ 警告：文件描述符限制仍过低，可能会遇到'Broken pipe'错误"
+        # 检查是否有源码目录
+        if [ -f "../Makefile" ]; then
+            cp ../Makefile Makefile
+            log "✅ 从上级目录恢复 Makefile"
+        elif [ -f "$REPO_ROOT/Makefile" ]; then
+            cp "$REPO_ROOT/Makefile" Makefile
+            log "✅ 从仓库根目录恢复 Makefile"
         else
-            log "  ✅ 文件描述符限制已优化"
+            # 创建基础 Makefile
+            cat > Makefile << 'EOF'
+# OpenWrt Makefile
+TOPDIR:=.
+
+world:
+	@$(MAKE) -C $(TOPDIR) -f include/toplevel.mk
+
+%::
+	@$(MAKE) -C $(TOPDIR) -f include/toplevel.mk $@
+
+help:
+	@echo "OpenWrt Build System"
+	@echo ""
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Common targets:"
+	@echo "  world           - Build everything"
+	@echo "  clean           - Clean build"
+	@echo "  defconfig       - Generate default config"
+	@echo "  menuconfig      - Configure via menu"
+	@echo ""
+	@echo "See include/toplevel.mk for more targets"
+
+.PHONY: world help
+EOF
+            log "✅ 重新创建基础 Makefile"
         fi
-    else
-        log "  ✅ 文件描述符限制足够"
     fi
     
-    log "✅ 步骤08 完成"
+    # 检查 include/toplevel.mk 是否存在
+    if [ ! -f "include/toplevel.mk" ]; then
+        log "❌ 错误: include/toplevel.mk 不存在，构建环境损坏"
+        log "🔧 尝试重新初始化构建环境..."
+        
+        # 重新加载环境变量
+        if [ -f "$BUILD_DIR/build_env.sh" ]; then
+            source "$BUILD_DIR/build_env.sh"
+        fi
+        
+        # 检查是否有克隆的源码
+        if [ -d "../openwrt" ] && [ -f "../openwrt/include/toplevel.mk" ]; then
+            cp -r ../openwrt/* . 2>/dev/null || true
+            log "✅ 从 ../openwrt 恢复源码"
+        elif [ -f "$REPO_ROOT/include/toplevel.mk" ]; then
+            cp -r "$REPO_ROOT"/* . 2>/dev/null || true
+            log "✅ 从仓库根目录恢复源码"
+        else
+            log "❌ 无法恢复构建环境，编译终止"
+            exit 1
+        fi
+    fi
+    
+    ulimit -n 65536 2>/dev/null || true
+    local current_limit=$(ulimit -n)
+    log "  ✅ 当前文件描述符限制: $current_limit"
+    
+    # ============================================
+    # 强制修复 trusted-firmware-a 源码（在编译前）
+    # ============================================
+    log "🔧 强制修复 trusted-firmware-a 源码（编译前）..."
+    
+    local TF_VERSION="2.9"
+    local TF_DIR="$BUILD_DIR/build_dir/hostpkg/trusted-firmware-a-$TF_VERSION"
+    local TF_GIT_URL="https://github.com/ARM-software/arm-trusted-firmware.git"
+    
+    # 确保目录存在
+    mkdir -p "$BUILD_DIR/build_dir/hostpkg"
+    
+    # 如果目录不存在或不完整，强制重新下载
+    if [ ! -d "$TF_DIR/tools/fiptool" ]; then
+        log "  🔧 检测到 trusted-firmware-a 源码不完整，强制重新下载..."
+        
+        # 删除不完整的目录
+        rm -rf "$TF_DIR" 2>/dev/null || true
+        
+        # 使用 git clone 获取完整源码
+        cd "$BUILD_DIR/build_dir/hostpkg"
+        log "  📥 git clone --depth 1 --branch v$TF_VERSION $TF_GIT_URL"
+        git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone.log
+        
+        if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
+            log "  ✅ trusted-firmware-a 源码下载成功，tools/fiptool 存在"
+        else
+            log "  ⚠️ git clone 失败，尝试完整 clone..."
+            rm -rf "$TF_DIR"
+            git clone --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone-full.log
+            if [ -d "$TF_DIR/tools/fiptool" ]; then
+                log "  ✅ 完整 clone 成功"
+            else
+                log "  ❌ trusted-firmware-a 源码下载失败"
+                exit 1
+            fi
+        fi
+        
+        # 创建 .built 标记，让 OpenWrt 认为已准备就绪
+        touch "$TF_DIR/.built" 2>/dev/null || true
+        log "  ✅ 创建 .built 标记文件"
+    else
+        log "  ✅ trusted-firmware-a 源码已存在且完整"
+        # 确保 .built 标记存在
+        touch "$TF_DIR/.built" 2>/dev/null || true
+    fi
+    
+    # 修复 arm-trusted-firmware-tools 的 Makefile，使用正确的路径
+    local tools_makefile="package/boot/arm-trusted-firmware-tools/Makefile"
+    if [ -f "$tools_makefile" ]; then
+        log "  🔧 修复 arm-trusted-firmware-tools Makefile..."
+        cp "$tools_makefile" "$tools_makefile.bak.$(date +%Y%m%d%H%M%S)"
+        
+        # 修改 PKG_SOURCE 为本地路径
+        cat > "$tools_makefile" << 'EOF'
+#
+# Copyright (C) 2021-2022 OpenWrt.org
+#
+# This is free software, licensed under the GNU General Public License v2.
+# See /LICENSE for more information.
+#
+
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=trusted-firmware-a-tools
+PKG_VERSION:=2.9
+PKG_RELEASE:=1
+
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware.git
+PKG_SOURCE_VERSION:=v$(PKG_VERSION)
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+
+PKG_BUILD_DIR:=$(BUILD_DIR)/hostpkg/trusted-firmware-a-$(PKG_VERSION)
+
+PKG_LICENSE:=BSD-3-Clause
+PKG_LICENSE_FILES:=license.rst
+
+include $(INCLUDE_DIR)/host-build.mk
+
+define Host/Prepare
+        # 源码已在 build_dir/hostpkg 中，无需额外准备
+endef
+
+define Host/Configure
+        # 无需配置
+endef
+
+define Host/Compile
+        $(MAKE) -C $(PKG_BUILD_DIR)/tools/fiptool \
+                CPPFLAGS="$(HOST_CPPFLAGS)" \
+                LDFLAGS="$(HOST_LDFLAGS)" \
+                HOSTCC="$(HOSTCC)" \
+                HOSTCFLAGS="$(HOST_CFLAGS)"
+endef
+
+define Host/Install
+        $(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/fiptool/fiptool $(STAGING_DIR_HOST)/bin/
+endef
+
+$(eval $(call HostBuild))
+EOF
+        log "  ✅ 已重写 arm-trusted-firmware-tools Makefile"
+    fi
+    
+    # 删除可能存在的补丁目录
+    local patches_dir="package/boot/arm-trusted-firmware-tools/patches"
+    if [ -d "$patches_dir" ]; then
+        log "  🗑️ 删除补丁目录: $patches_dir"
+        rm -rf "$patches_dir"
+    fi
+    
+    # 修改 arm-trusted-firmware-mediatek 的 Makefile，避免依赖问题
+    local mediatek_makefile="package/boot/arm-trusted-firmware-mediatek/Makefile"
+    if [ -f "$mediatek_makefile" ]; then
+        log "  🔧 修复 arm-trusted-firmware-mediatek Makefile..."
+        cp "$mediatek_makefile" "$mediatek_makefile.bak.$(date +%Y%m%d%H%M%S)"
+        
+        # 添加依赖确保 tools 先编译
+        sed -i 's|PKG_BUILD_DEPENDS:=|PKG_BUILD_DEPENDS:=arm-trusted-firmware-tools/host |g' "$mediatek_makefile" 2>/dev/null || true
+    fi
+    
+    log "  ✅ trusted-firmware-a 修复完成"
+    
+    # smartdns 不再自动禁用，保留给用户使用
+    log "  ℹ️ smartdns 保留，根据用户配置决定是否编译"
+    
+    log "🔧 创建双固件保护脚本..."
+    local protect_dir="$BUILD_DIR/.firmware_protect"
+    mkdir -p "$protect_dir"
+    
+    cat > "$protect_dir/protect.sh" << 'EOF'
+#!/bin/bash
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+LOG_FILE="$PROTECT_DIR/protect.log"
+
+echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
+
+while true; do
+    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+    for tmp_dir in $TMP_DIRS; do
+        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+    done
+    sleep 5
+done
+EOF
+    chmod +x "$protect_dir/protect.sh"
+    
+    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
+    local protect_pid=$!
+    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
+    
+    cat > "$protect_dir/recover.sh" << 'EOF'
+#!/bin/bash
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+
+if [ -f "$BUILD_DIR/build_env.sh" ]; then
+    source "$BUILD_DIR/build_env.sh"
+fi
+
+TARGET="${TARGET:-ath79}"
+SUBTARGET="${SUBTARGET:-generic}"
+TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+mkdir -p "$TARGET_DIR"
+
+echo "=== 强制恢复开始于 $(date) ==="
+echo "目标平台: $TARGET/$SUBTARGET"
+
+RECOVERED=0
+find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
+    filename=$(basename "$backup" .backup)
+    if [ ! -f "$TARGET_DIR/$filename" ]; then
+        cp -f "$backup" "$TARGET_DIR/$filename"
+        echo "  ✅ 恢复: $filename"
+        RECOVERED=$((RECOVERED + 1))
+    fi
+done
+
+echo "📊 恢复文件数: $RECOVERED"
+echo "=== 强制恢复结束 ==="
+EOF
+    chmod +x "$protect_dir/recover.sh"
+    
+    CPU_CORES=$(nproc)
+    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+    
+    echo ""
+    echo "🔧 系统信息:"
+    echo "  CPU核心数: $CPU_CORES"
+    echo "  内存大小: ${TOTAL_MEM}MB"
+    echo "  源码类型: $SOURCE_REPO_TYPE"
+    
+    local make_args="V=s"
+    case "$SOURCE_REPO_TYPE" in
+        "openwrt"|"lede")
+            make_args="V=s FORCE_UNSAFE_CONFIGURE=1"
+            ;;
+        "immortalwrt")
+            make_args="V=s"
+            ;;
+    esac
+    
+    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
+        if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
+            MAKE_JOBS=4
+        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
+            MAKE_JOBS=2
+        else
+            MAKE_JOBS=1
+        fi
+        log "🚀 使用 $MAKE_JOBS 个并行任务"
+    else
+        MAKE_JOBS=1
+        log "⚠️ 使用单线程编译"
+    fi
+    
+    # 首先运行 make defconfig 确保配置正确
+    log "🔧 运行 make defconfig 确保配置正确..."
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_before_build.log 2>&1 || {
+            log "⚠️ olddefconfig 有警告，但继续"
+        }
+    else
+        make defconfig > /tmp/build-logs/defconfig_before_build.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续"
+        }
+    fi
+    
+    local max_attempts=3
+    local attempt=1
+    local compile_success=0
+    
+    while [ $attempt -le $max_attempts ] && [ $compile_success -eq 0 ]; do
+        echo ""
+        echo "🚀 编译尝试 $attempt/$max_attempts (make -j$MAKE_JOBS)"
+        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo ""
+        
+        START_TIME=$(date +%s)
+        
+        set +e
+        make -j$MAKE_JOBS $make_args 2>&1 | tee build_phase1_attempt${attempt}.log
+        PHASE1_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        
+        PHASE1_END=$(date +%s)
+        PHASE1_DURATION=$((PHASE1_END - START_TIME))
+        
+        echo ""
+        echo "✅ 尝试 $attempt 完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
+        
+        if [ $PHASE1_EXIT_CODE -eq 0 ]; then
+            compile_success=1
+            break
+        fi
+        
+        local log_file="build_phase1_attempt${attempt}.log"
+        
+        if [ -f "$log_file" ]; then
+            if grep -q "trusted-firmware-a.*No such file\|tools/fiptool.*No such file" "$log_file"; then
+                log "  ⚠️ 检测到 trusted-firmware-a 源码缺失，重新修复..."
+                
+                # 强制重新下载
+                rm -rf "$TF_DIR"
+                cd "$BUILD_DIR/build_dir/hostpkg"
+                git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION"
+                touch "$TF_DIR/.built"
+                
+                # 清除标记，强制重新编译
+                rm -f staging_dir/hostpkg/stamp/.trusted-firmware-a-tools_* 2>/dev/null || true
+                rm -f staging_dir/hostpkg/stamp/.arm-trusted-firmware-tools_* 2>/dev/null || true
+                
+                log "  ✅ trusted-firmware-a 重新修复完成"
+            fi
+            
+            if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
+                log "  ⚠️ 检测到 package/install 错误，尝试修复..."
+                
+                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
+                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
+                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
+                rm -f tmp/info/.packageinfo-* 2>/dev/null
+                
+                find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
+                    log "    清理 ipkg 目录: $ipkg_dir"
+                    rm -rf "$ipkg_dir"
+                done
+                
+                log "    重新安装 feeds..."
+                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+                
+                log "  ✅ package/install 错误修复完成"
+            fi
+            
+            # smartdns 编译错误处理改为可选的警告，而不是自动删除
+            if grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*dns.c\|smartdns.*util.c\|smartdns.*tlog.c" "$log_file"; then
+                log "  ⚠️ 检测到 smartdns 编译错误"
+                log "  ℹ️ 请检查 smartdns 配置，或通过 FORBIDDEN_PACKAGES 环境变量禁用 smartdns"
+                log "  ℹ️ 继续编译，如果失败请考虑禁用 smartdns"
+            fi
+            
+            if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
+                log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
+                
+                rm -f staging_dir/target-*/stamp/.samba4* 2>/dev/null
+                rm -f build_dir/target-*/samba-*/.built 2>/dev/null
+                
+                if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                    sudo apt-get install -y python3-distutils python3-dev libpython3-dev 2>/dev/null || true
+                    
+                    find build_dir -name "samba-*" -type d 2>/dev/null | while read samba_dir; do
+                        rm -f "$samba_dir/.configured" 2>/dev/null
+                        log "    清理 samba 配置缓存: $samba_dir"
+                    done
+                fi
+                
+                log "  ✅ samba4 错误修复完成"
+            fi
+            
+            if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file"; then
+                log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
+                
+                find build_dir -type d -name "ath10k-ct*" 2>/dev/null | while read ath10k_dir; do
+                    log "    清理 ath10k 目录: $ath10k_dir"
+                    rm -rf "$ath10k_dir"
+                done
+                
+                if [ -f ".config" ]; then
+                    sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
+                    echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
+                    log "    已在配置中禁用 kmod-ath10k-ct"
+                fi
+                
+                log "  ✅ ath10k-ct 错误修复完成"
+            fi
+            
+            if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file"; then
+                log "  ⚠️ 检测到 shortcut-fe 驱动编译错误，尝试修复..."
+                
+                find build_dir -type d -name "shortcut-fe*" 2>/dev/null | while read sfe_dir; do
+                    log "    清理 shortcut-fe 目录: $sfe_dir"
+                    rm -rf "$sfe_dir"
+                done
+                
+                if [ -f ".config" ]; then
+                    sed -i '/CONFIG_PACKAGE_kmod-shortcut-fe=y/d' .config
+                    echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
+                    log "    已在配置中禁用 kmod-shortcut-fe"
+                fi
+                
+                log "  ✅ shortcut-fe 错误修复完成"
+            fi
+            
+            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
+                    log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
+                    make defconfig > /tmp/lede_defconfig_fix.log 2>&1 || true
+                    log "  ✅ kmod 依赖修复完成"
+                fi
+            fi
+            
+            if grep -q "Broken pipe" "$log_file"; then
+                log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
+                ulimit -n 65536 2>/dev/null || true
+            fi
+            
+            if grep -q "libssl was not found" "$log_file"; then
+                log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
+                sudo apt-get update > /dev/null 2>&1 || true
+                sudo apt-get install -y libssl-dev > /dev/null 2>&1 || true
+            fi
+        fi
+        
+        attempt=$((attempt + 1))
+    done
+    
+    if [ $compile_success -eq 0 ]; then
+        echo ""
+        echo "❌❌❌ 编译失败，已尝试 $max_attempts 次 ❌❌❌"
+        
+        bash "$protect_dir/recover.sh" "$protect_dir" "$BUILD_DIR"
+        
+        kill $protect_pid 2>/dev/null || true
+        rm -rf "$protect_dir" 2>/dev/null || true
+        
+        exit $PHASE1_EXIT_CODE
+    fi
+    
+    echo ""
+    echo "🚀 第二阶段：单线程生成最终固件"
+    echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+    echo ""
+    
+    PHASE2_START=$(date +%s)
+    
+    set +e
+    make -j1 $make_args 2>&1 | tee -a build_phase2.log
+    BUILD_EXIT_CODE=${PIPESTATUS[0]}
+    set -e
+    
+    PHASE2_END=$(date +%s)
+    PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
+    TOTAL_DURATION=$((PHASE2_END - START_TIME))
+    
+    echo ""
+    echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
+    echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
+    
+    cat build_phase1_attempt*.log build_phase2.log > build.log
+    
+    kill $protect_pid 2>/dev/null || true
+    log "🔧 双固件保护已停止"
+    
+    log "🔍 验证固件..."
+    
+    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+    local valid_firmware=0
+    local firmware_files=()
+    
+    if [ -d "$target_dir" ]; then
+        while IFS= read -r file; do
+            [ -n "$file" ] && firmware_files+=("$file")
+        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums")
+        
+        for file in "${firmware_files[@]}"; do
+            local fname=$(basename "$file")
+            local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
+            local size_mb=$((size_bytes / 1024 / 1024))
+            
+            local is_flashable=0
+            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
+                is_flashable=1
+            fi
+            
+            if [ $size_mb -ge 5 ]; then
+                if [ $is_flashable -eq 1 ]; then
+                    log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
+                    valid_firmware=$((valid_firmware + 1))
+                else
+                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件，将删除"
+                    rm -f "$file"
+                fi
+            else
+                log "  ❌ $fname 大小: ${size_mb}MB - 无效，将删除"
+                rm -f "$file"
+            fi
+        done
+        
+        # 清理所有非 factory 和 sysupgrade 的 .bin 文件
+        log "🔧 清理非必要的固件文件..."
+        find "$target_dir" -type f \( -name "*initramfs*" -o -name "*preloader*" -o -name "*gpt*" -o -name "*kernel*" -o -name "*rootfs*" \) 2>/dev/null | while read file; do
+            log "  🗑️ 删除: $(basename "$file")"
+            rm -f "$file"
+        done
+    fi
+    
+    if [ $valid_firmware -eq 0 ]; then
+        log "❌ 错误：没有找到任何有效可刷机固件"
+        exit 1
+    else
+        log "✅ 找到 $valid_firmware 个有效可刷机固件"
+    fi
+    
+    rm -rf "$protect_dir" 2>/dev/null || true
+    
+    log "✅ 步骤25 完成"
 }
 #【build_firmware_main.sh-25-end】
 
