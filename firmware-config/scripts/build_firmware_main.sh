@@ -1060,11 +1060,9 @@ add_turboacc_support() {
     for makefile in $curl_makefiles; do
         if [ -f "$makefile" ]; then
             cp "$makefile" "$makefile.bak"
-            # 添加 OpenSSL 头文件路径
             if [ -n "$openssl_include" ]; then
                 sed -i "s|TARGET_CFLAGS +=|TARGET_CFLAGS += -I$openssl_include|g" "$makefile"
             fi
-            # 设置 PKG_CONFIG_PATH
             sed -i 's|CONFIGURE_VARS +=|CONFIGURE_VARS += PKG_CONFIG_PATH="$(STAGING_DIR)/usr/lib/pkgconfig"|g' "$makefile"
             log "  ✅ 修复 curl Makefile: $makefile"
         fi
@@ -1083,33 +1081,27 @@ add_turboacc_support() {
     done
     
     # ============================================
-    # 修复 smartdns 编译问题（可选，保留但不过度干预）
+    # 修复 smartdns 编译问题
     # ============================================
     log "🔧 修复 smartdns 编译问题..."
     
-    # 查找 smartdns 源码目录
     local smartdns_dirs=$(find feeds -type d -name "*smartdns*" 2>/dev/null)
     for smartdns_dir in $smartdns_dirs; do
         if [ -f "$smartdns_dir/Makefile" ]; then
             cp "$smartdns_dir/Makefile" "$smartdns_dir/Makefile.bak"
-            # 添加缺失的头文件路径
             sed -i 's|TARGET_CFLAGS +=|TARGET_CFLAGS += -D_GNU_SOURCE|g' "$smartdns_dir/Makefile"
             log "  ✅ 修复 smartdns Makefile: $smartdns_dir"
         fi
         
-        # 如果有源码目录，修复源码中的问题
         if [ -d "$smartdns_dir/src" ]; then
-            # 修复 dns.c 中的问题
             if [ -f "$smartdns_dir/src/dns.c" ]; then
                 sed -i 's|#include <openssl/des.h>|#include <openssl/des.h>\n#include <time.h>|g' "$smartdns_dir/src/dns.c" 2>/dev/null || true
                 log "  ✅ 修复 smartdns dns.c"
             fi
-            # 修复 util.c
             if [ -f "$smartdns_dir/src/util.c" ]; then
                 sed -i 's|#include <openssl/evp.h>|#include <openssl/evp.h>\n#include <sys/time.h>|g' "$smartdns_dir/src/util.c" 2>/dev/null || true
                 log "  ✅ 修复 smartdns util.c"
             fi
-            # 修复 tlog.c
             if [ -f "$smartdns_dir/src/tlog.c" ]; then
                 sed -i 's|#include <time.h>|#include <time.h>\n#include <sys/time.h>|g' "$smartdns_dir/src/tlog.c" 2>/dev/null || true
                 log "  ✅ 修复 smartdns tlog.c"
@@ -1118,11 +1110,28 @@ add_turboacc_support() {
     done
     
     # ============================================
-    # 彻底修复所有下载源（关键修复）
+    # 修复 trusted-firmware-a 补丁问题（关键修复）
     # ============================================
-    log "🔧 彻底修复所有下载源..."
+    log "🔧 修复 trusted-firmware-a 补丁问题..."
     
-    # 修复 trusted-firmware-a 下载源 - 使用多个备用源
+    # 删除有问题的补丁（源码结构变化导致补丁无法应用）
+    local bad_patch="package/boot/arm-trusted-firmware-tools/patches/001-respect-LDFLAGS.patch"
+    if [ -f "$bad_patch" ]; then
+        log "  🗑️ 删除有问题的补丁: $bad_patch"
+        rm -f "$bad_patch"
+    fi
+    
+    # 查找并删除所有 trusted-firmware-a 相关的补丁
+    find package/boot/arm-trusted-firmware-tools/patches -name "*.patch" 2>/dev/null | while read patch; do
+        log "  🗑️ 删除补丁: $patch"
+        rm -f "$patch"
+    done
+    
+    # 创建空的 patches 目录（避免后续问题）
+    mkdir -p package/boot/arm-trusted-firmware-tools/patches
+    touch package/boot/arm-trusted-firmware-tools/patches/.keep
+    
+    # 修复 trusted-firmware-a 下载源
     mkdir -p package/firmware/trusted-firmware-a/patches
     
     cat > package/firmware/trusted-firmware-a/patches/001-fix-download-url.patch << 'EOF'
@@ -1143,7 +1152,7 @@ add_turboacc_support() {
 EOF
     log "  ✅ 创建 trusted-firmware-a 下载源修复补丁"
     
-    # 直接修改 Makefile 文件（更可靠）
+    # 直接修改 Makefile 文件
     local tf_makefile="package/firmware/trusted-firmware-a/Makefile"
     if [ -f "$tf_makefile" ]; then
         cp "$tf_makefile" "$tf_makefile.bak.$(date +%Y%m%d%H%M%S)"
@@ -1218,6 +1227,15 @@ configure_feeds() {
     
     log "=== 配置Feeds ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
+    
+    log "🔧 清理可能冲突的构建缓存..."
+    
+    # 清理 trusted-firmware-a 相关的构建缓存
+    rm -rf build_dir/hostpkg/trusted-firmware-a-* 2>/dev/null || true
+    rm -rf build_dir/target-*/arm-trusted-firmware-* 2>/dev/null || true
+    rm -rf staging_dir/target-*/root-*/trusted-firmware-* 2>/dev/null || true
+    
+    log "  ✅ 已清理 trusted-firmware-a 构建缓存"
     
     log "🔧 预创建所有可能缺失的文件..."
     
@@ -1331,7 +1349,6 @@ EOF
     
     log "=== 删除有问题的包（在安装前） ==="
     
-    # 只删除 vsftpd-alt（冲突的包），保留 smartdns
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 LEDE源码：删除有依赖问题的 vsftpd-alt 包"
         
@@ -1356,10 +1373,8 @@ EOF
         log "⚠️ feeds安装有警告，尝试继续..."
     }
     
-    # 修复 smartdns 安装后的依赖
     log "🔧 修复 smartdns 依赖..."
     if [ -d "feeds/packages/net/smartdns" ]; then
-        # 添加缺失的依赖包
         ./scripts/feeds install libopenssl 2>/dev/null || true
         ./scripts/feeds install libpthread 2>/dev/null || true
         log "  ✅ 安装 smartdns 依赖"
@@ -3370,14 +3385,39 @@ workflow_step20_fix_network() {
         log "  ✅ 已替换为南京大学镜像源"
     fi
     
-    # 修复trusted-firmware-a下载源（关键修复）
-    log "  🔧 修复trusted-firmware-a下载源..."
+    # ============================================
+    # 修复 trusted-firmware-a 补丁问题（关键修复）
+    # ============================================
+    log "  🔧 修复 trusted-firmware-a 补丁问题..."
     
-    # 创建补丁目录
+    # 删除有问题的补丁
+    local bad_patch="package/boot/arm-trusted-firmware-tools/patches/001-respect-LDFLAGS.patch"
+    if [ -f "$bad_patch" ]; then
+        log "    🗑️ 删除有问题的补丁: $bad_patch"
+        rm -f "$bad_patch"
+    fi
+    
+    # 删除所有 trusted-firmware-tools 补丁
+    find package/boot/arm-trusted-firmware-tools/patches -name "*.patch" 2>/dev/null | while read patch; do
+        log "    🗑️ 删除补丁: $patch"
+        rm -f "$patch"
+    done
+    
+    # 确保 patches 目录存在
+    mkdir -p package/boot/arm-trusted-firmware-tools/patches
+    touch package/boot/arm-trusted-firmware-tools/patches/.keep
+    
+    # 清理构建缓存
+    log "  🔧 清理 trusted-firmware-a 构建缓存..."
+    rm -rf build_dir/hostpkg/trusted-firmware-a-* 2>/dev/null || true
+    rm -rf build_dir/target-*/arm-trusted-firmware-* 2>/dev/null || true
+    rm -rf staging_dir/target-*/root-*/trusted-firmware-* 2>/dev/null || true
+    log "    ✅ 构建缓存已清理"
+    
+    # 修复trusted-firmware-a下载源
     local patch_dir="package/firmware/trusted-firmware-a/patches"
     mkdir -p "$patch_dir"
     
-    # 创建补丁文件，替换下载源
     cat > "$patch_dir/001-fix-download-url.patch" << 'EOF'
 --- a/package/firmware/trusted-firmware-a/Makefile
 +++ b/package/firmware/trusted-firmware-a/Makefile
@@ -3396,7 +3436,7 @@ workflow_step20_fix_network() {
 EOF
     log "  ✅ 已创建trusted-firmware-a下载源修复补丁"
     
-    # 直接修改 Makefile（更可靠）
+    # 直接修改 Makefile
     local tf_makefile="package/firmware/trusted-firmware-a/Makefile"
     if [ -f "$tf_makefile" ]; then
         cp "$tf_makefile" "$tf_makefile.bak.$(date +%Y%m%d%H%M%S)"
