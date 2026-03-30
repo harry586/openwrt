@@ -7,6 +7,7 @@
 
 
 
+
 ## 📁 项目结构
 
 ```
@@ -39,7 +40,7 @@
 │   │   │   ├── vsftpd.sh
 │   │   │   └── wechatpush.sh
 │   │   ├── luci-app-opkg-other_1.0_all.ipk
-│   │   └── 注意，自定义文件名要求（纯英文），方便复制、运行
+│   │   └── readme.md
 │   └── scripts/
 │       ├── build_firmware_main.sh
 │       └── custom-files-install.sh
@@ -52,4 +53,4 @@
 
 注意，自定义文件名是英文的，方便复制、运行
 
-> 最后更新时间: 2026-03-23 09:48:46
+> 最后更新时间: 2026-03-30 09:58:11
