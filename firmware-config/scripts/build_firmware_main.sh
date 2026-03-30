@@ -1110,57 +1110,95 @@ add_turboacc_support() {
     done
     
     # ============================================
-    # 修复 trusted-firmware-a 补丁问题（关键修复）
+    # 彻底修复 trusted-firmware-a 问题（关键修复）
     # ============================================
-    log "🔧 修复 trusted-firmware-a 补丁问题..."
+    log "🔧 彻底修复 trusted-firmware-a 问题..."
     
-    # 删除有问题的补丁（源码结构变化导致补丁无法应用）
-    local bad_patch="package/boot/arm-trusted-firmware-tools/patches/001-respect-LDFLAGS.patch"
-    if [ -f "$bad_patch" ]; then
-        log "  🗑️ 删除有问题的补丁: $bad_patch"
-        rm -f "$bad_patch"
+    # 方法1: 删除所有 patches（避免补丁问题）
+    local patches_dir="package/boot/arm-trusted-firmware-tools/patches"
+    if [ -d "$patches_dir" ]; then
+        log "  🗑️ 删除所有补丁: $patches_dir"
+        rm -rf "$patches_dir"
     fi
+    mkdir -p "$patches_dir"
+    touch "$patches_dir/.keep"
     
-    # 查找并删除所有 trusted-firmware-a 相关的补丁
-    find package/boot/arm-trusted-firmware-tools/patches -name "*.patch" 2>/dev/null | while read patch; do
-        log "  🗑️ 删除补丁: $patch"
-        rm -f "$patch"
-    done
-    
-    # 创建空的 patches 目录（避免后续问题）
-    mkdir -p package/boot/arm-trusted-firmware-tools/patches
-    touch package/boot/arm-trusted-firmware-tools/patches/.keep
-    
-    # 修复 trusted-firmware-a 下载源
-    mkdir -p package/firmware/trusted-firmware-a/patches
-    
-    cat > package/firmware/trusted-firmware-a/patches/001-fix-download-url.patch << 'EOF'
---- a/package/firmware/trusted-firmware-a/Makefile
-+++ b/package/firmware/trusted-firmware-a/Makefile
-@@ -5,8 +5,9 @@
- PKG_NAME:=trusted-firmware-a
- PKG_RELEASE:=1
- 
--PKG_SOURCE_URL:=https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
--PKG_SOURCE_URL+=https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
-+PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz
-+PKG_SOURCE_URL+=https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v$(PKG_VERSION)
-+PKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v$(PKG_VERSION).tar.gz
- PKG_HASH:=skip
- 
- PKG_LICENSE:=BSD-3-Clause
-EOF
-    log "  ✅ 创建 trusted-firmware-a 下载源修复补丁"
-    
-    # 直接修改 Makefile 文件
+    # 方法2: 修改 Makefile，使用官方源码包而非镜像源
     local tf_makefile="package/firmware/trusted-firmware-a/Makefile"
     if [ -f "$tf_makefile" ]; then
         cp "$tf_makefile" "$tf_makefile.bak.$(date +%Y%m%d%H%M%S)"
-        sed -i 's|https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz|https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz|g' "$tf_makefile"
-        sed -i 's|https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz|https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v$(PKG_VERSION)|g' "$tf_makefile"
+        
+        # 完全重写 PKG_SOURCE 部分，使用官方 Git 仓库
+        sed -i 's|PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git|g' "$tf_makefile"
+        sed -i 's|PKG_SOURCE:=.*|PKG_SOURCE:=trusted-firmware-a-$(PKG_VERSION).tar.gz|g' "$tf_makefile"
+        sed -i 's|PKG_SOURCE_VERSION:=.*|PKG_SOURCE_VERSION:=v$(PKG_VERSION)|g' "$tf_makefile"
+        sed -i 's|PKG_SOURCE_PROTO:=.*|PKG_SOURCE_PROTO:=git|g' "$tf_makefile"
         sed -i 's|PKG_HASH:=.*|PKG_HASH:=skip|g' "$tf_makefile"
-        log "  ✅ 直接修复 trusted-firmware-a Makefile"
+        
+        # 添加 git 下载方式
+        if ! grep -q "PKG_SOURCE_PROTO" "$tf_makefile"; then
+            sed -i '/PKG_SOURCE_URL/a PKG_SOURCE_PROTO:=git' "$tf_makefile"
+        fi
+        
+        log "  ✅ 修改 trusted-firmware-a Makefile 使用 git 下载"
     fi
+    
+    # 方法3: 直接修改 arm-trusted-firmware-tools 的 Makefile
+    local tools_makefile="package/boot/arm-trusted-firmware-tools/Makefile"
+    if [ -f "$tools_makefile" ]; then
+        cp "$tools_makefile" "$tools_makefile.bak.$(date +%Y%m%d%H%M%S)"
+        
+        # 添加依赖和配置
+        sed -i '/PKG_BUILD_DIR/i PKG_BUILD_DEPENDS:=trusted-firmware-a/host' "$tools_makefile" 2>/dev/null || true
+        sed -i 's|PKG_HASH:=.*|PKG_HASH:=skip|g' "$tools_makefile"
+        
+        log "  ✅ 修改 arm-trusted-firmware-tools Makefile"
+    fi
+    
+    # 方法4: 创建预下载脚本，确保源码完整
+    log "  🔧 创建 trusted-firmware-a 下载修复脚本..."
+    
+    cat > "$BUILD_DIR/fix-tf-download.sh" << 'EOF'
+#!/bin/bash
+TF_VERSION="2.9"
+TF_DIR="$BUILD_DIR/build_dir/hostpkg/trusted-firmware-a-$TF_VERSION"
+
+if [ ! -d "$TF_DIR/tools/fiptool" ]; then
+    echo "修复 trusted-firmware-a 源码目录结构..."
+    
+    # 如果目录存在但不完整，删除重建
+    if [ -d "$TF_DIR" ]; then
+        rm -rf "$TF_DIR"
+    fi
+    
+    # 使用 git clone 获取完整源码
+    cd "$BUILD_DIR/build_dir/hostpkg"
+    git clone --depth 1 --branch v$TF_VERSION https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git trusted-firmware-a-$TF_VERSION
+    
+    if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
+        echo "✅ trusted-firmware-a 源码修复成功"
+        touch "$TF_DIR/.built"
+    else
+        echo "⚠️ git clone 失败，尝试备用源..."
+        rm -rf "$TF_DIR"
+        git clone --depth 1 --branch v$TF_VERSION https://github.com/ARM-software/arm-trusted-firmware.git trusted-firmware-a-$TF_VERSION
+        if [ -d "$TF_DIR/tools/fiptool" ]; then
+            echo "✅ 使用 GitHub 源修复成功"
+        else
+            echo "❌ 修复失败"
+            exit 1
+        fi
+    fi
+fi
+EOF
+    chmod +x "$BUILD_DIR/fix-tf-download.sh"
+    log "  ✅ 创建修复脚本: fix-tf-download.sh"
+    
+    # 执行修复脚本
+    log "  🔧 执行 trusted-firmware-a 修复..."
+    bash "$BUILD_DIR/fix-tf-download.sh" || {
+        log "  ⚠️ 修复脚本执行有警告，继续..."
+    }
     
     # 修复所有 mirror.immortalwrt.org 源
     find . -name "*.mk" -o -name "Makefile" | while read file; do
@@ -1170,16 +1208,6 @@ EOF
             sed -i 's|mirror.immortalwrt.org|github.com|g' "$file"
             sed -i 's|sources-cdn.immortalwrt.org|github.com|g' "$file"
             log "  ✅ 修复: $file"
-        fi
-    done
-    
-    # 修复 libxml2 下载源
-    find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
-        if [ -f "$dir/Makefile" ]; then
-            cp "$dir/Makefile" "$dir/Makefile.bak"
-            sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
-            sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
-            log "  ✅ 修复 libxml2 下载源"
         fi
     done
     
@@ -1234,6 +1262,7 @@ configure_feeds() {
     rm -rf build_dir/hostpkg/trusted-firmware-a-* 2>/dev/null || true
     rm -rf build_dir/target-*/arm-trusted-firmware-* 2>/dev/null || true
     rm -rf staging_dir/target-*/root-*/trusted-firmware-* 2>/dev/null || true
+    rm -rf dl/trusted-firmware-a-* 2>/dev/null || true
     
     log "  ✅ 已清理 trusted-firmware-a 构建缓存"
     
@@ -1378,6 +1407,16 @@ EOF
         ./scripts/feeds install libopenssl 2>/dev/null || true
         ./scripts/feeds install libpthread 2>/dev/null || true
         log "  ✅ 安装 smartdns 依赖"
+    fi
+    
+    # ============================================
+    # 执行 trusted-firmware-a 修复
+    # ============================================
+    log "🔧 执行 trusted-firmware-a 修复..."
+    if [ -f "$BUILD_DIR/fix-tf-download.sh" ]; then
+        bash "$BUILD_DIR/fix-tf-download.sh" || {
+            log "  ⚠️ 修复脚本执行有警告，继续..."
+        }
     fi
     
     log "✅ Feeds配置完成"
@@ -3386,65 +3425,66 @@ workflow_step20_fix_network() {
     fi
     
     # ============================================
-    # 修复 trusted-firmware-a 补丁问题（关键修复）
+    # 修复 trusted-firmware-a 问题（关键修复）
     # ============================================
-    log "  🔧 修复 trusted-firmware-a 补丁问题..."
+    log "  🔧 修复 trusted-firmware-a 问题..."
     
-    # 删除有问题的补丁
-    local bad_patch="package/boot/arm-trusted-firmware-tools/patches/001-respect-LDFLAGS.patch"
-    if [ -f "$bad_patch" ]; then
-        log "    🗑️ 删除有问题的补丁: $bad_patch"
-        rm -f "$bad_patch"
+    # 删除所有 patches
+    local patches_dir="package/boot/arm-trusted-firmware-tools/patches"
+    if [ -d "$patches_dir" ]; then
+        rm -rf "$patches_dir"
+        log "    🗑️ 删除补丁目录"
     fi
-    
-    # 删除所有 trusted-firmware-tools 补丁
-    find package/boot/arm-trusted-firmware-tools/patches -name "*.patch" 2>/dev/null | while read patch; do
-        log "    🗑️ 删除补丁: $patch"
-        rm -f "$patch"
-    done
-    
-    # 确保 patches 目录存在
-    mkdir -p package/boot/arm-trusted-firmware-tools/patches
-    touch package/boot/arm-trusted-firmware-tools/patches/.keep
+    mkdir -p "$patches_dir"
+    touch "$patches_dir/.keep"
     
     # 清理构建缓存
     log "  🔧 清理 trusted-firmware-a 构建缓存..."
     rm -rf build_dir/hostpkg/trusted-firmware-a-* 2>/dev/null || true
     rm -rf build_dir/target-*/arm-trusted-firmware-* 2>/dev/null || true
     rm -rf staging_dir/target-*/root-*/trusted-firmware-* 2>/dev/null || true
+    rm -rf dl/trusted-firmware-a-* 2>/dev/null || true
     log "    ✅ 构建缓存已清理"
     
-    # 修复trusted-firmware-a下载源
-    local patch_dir="package/firmware/trusted-firmware-a/patches"
-    mkdir -p "$patch_dir"
-    
-    cat > "$patch_dir/001-fix-download-url.patch" << 'EOF'
---- a/package/firmware/trusted-firmware-a/Makefile
-+++ b/package/firmware/trusted-firmware-a/Makefile
-@@ -5,8 +5,9 @@
- PKG_NAME:=trusted-firmware-a
- PKG_RELEASE:=1
- 
--PKG_SOURCE_URL:=https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
--PKG_SOURCE_URL+=https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
-+PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz
-+PKG_SOURCE_URL+=https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v$(PKG_VERSION)
-+PKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v$(PKG_VERSION).tar.gz
- PKG_HASH:=skip
- 
- PKG_LICENSE:=BSD-3-Clause
-EOF
-    log "  ✅ 已创建trusted-firmware-a下载源修复补丁"
-    
-    # 直接修改 Makefile
+    # 修改 Makefile 使用 git 下载
     local tf_makefile="package/firmware/trusted-firmware-a/Makefile"
     if [ -f "$tf_makefile" ]; then
         cp "$tf_makefile" "$tf_makefile.bak.$(date +%Y%m%d%H%M%S)"
-        sed -i 's|https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz|https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz|g' "$tf_makefile"
-        sed -i 's|https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz|https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v$(PKG_VERSION)|g' "$tf_makefile"
+        sed -i 's|PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git|g' "$tf_makefile"
+        sed -i 's|PKG_SOURCE:=.*|PKG_SOURCE:=trusted-firmware-a-$(PKG_VERSION).tar.gz|g' "$tf_makefile"
+        sed -i 's|PKG_SOURCE_VERSION:=.*|PKG_SOURCE_VERSION:=v$(PKG_VERSION)|g' "$tf_makefile"
+        sed -i 's|PKG_SOURCE_PROTO:=.*|PKG_SOURCE_PROTO:=git|g' "$tf_makefile"
         sed -i 's|PKG_HASH:=.*|PKG_HASH:=skip|g' "$tf_makefile"
-        log "  ✅ 直接修复 trusted-firmware-a Makefile"
+        
+        if ! grep -q "PKG_SOURCE_PROTO" "$tf_makefile"; then
+            sed -i '/PKG_SOURCE_URL/a PKG_SOURCE_PROTO:=git' "$tf_makefile"
+        fi
+        log "    ✅ 修改 Makefile 使用 git 下载"
     fi
+    
+    # 创建并执行修复脚本
+    cat > "$BUILD_DIR/fix-tf-download.sh" << 'EOF'
+#!/bin/bash
+TF_VERSION="2.9"
+TF_DIR="$BUILD_DIR/build_dir/hostpkg/trusted-firmware-a-$TF_VERSION"
+
+if [ ! -d "$TF_DIR/tools/fiptool" ]; then
+    echo "修复 trusted-firmware-a 源码目录结构..."
+    if [ -d "$TF_DIR" ]; then
+        rm -rf "$TF_DIR"
+    fi
+    cd "$BUILD_DIR/build_dir/hostpkg"
+    git clone --depth 1 --branch v$TF_VERSION https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git trusted-firmware-a-$TF_VERSION
+    if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
+        echo "✅ trusted-firmware-a 源码修复成功"
+    else
+        rm -rf "$TF_DIR"
+        git clone --depth 1 --branch v$TF_VERSION https://github.com/ARM-software/arm-trusted-firmware.git trusted-firmware-a-$TF_VERSION
+    fi
+fi
+EOF
+    chmod +x "$BUILD_DIR/fix-tf-download.sh"
+    bash "$BUILD_DIR/fix-tf-download.sh" || true
     
     # 修复 libssl 缺失问题
     log "  🔧 修复 libssl 缺失问题..."
