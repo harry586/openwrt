@@ -5181,6 +5181,130 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
+    # ============================================
+    # 强制修复 trusted-firmware-a 源码（在编译前）
+    # ============================================
+    log "🔧 强制修复 trusted-firmware-a 源码（编译前）..."
+    
+    local TF_VERSION="2.9"
+    local TF_DIR="$BUILD_DIR/build_dir/hostpkg/trusted-firmware-a-$TF_VERSION"
+    local TF_GIT_URL="https://github.com/ARM-software/arm-trusted-firmware.git"
+    
+    # 确保目录存在
+    mkdir -p "$BUILD_DIR/build_dir/hostpkg"
+    
+    # 如果目录不存在或不完整，强制重新下载
+    if [ ! -d "$TF_DIR/tools/fiptool" ]; then
+        log "  🔧 检测到 trusted-firmware-a 源码不完整，强制重新下载..."
+        
+        # 删除不完整的目录
+        rm -rf "$TF_DIR" 2>/dev/null || true
+        
+        # 使用 git clone 获取完整源码
+        cd "$BUILD_DIR/build_dir/hostpkg"
+        log "  📥 git clone --depth 1 --branch v$TF_VERSION $TF_GIT_URL"
+        git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone.log
+        
+        if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
+            log "  ✅ trusted-firmware-a 源码下载成功，tools/fiptool 存在"
+        else
+            log "  ⚠️ git clone 失败，尝试完整 clone..."
+            rm -rf "$TF_DIR"
+            git clone --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone-full.log
+            if [ -d "$TF_DIR/tools/fiptool" ]; then
+                log "  ✅ 完整 clone 成功"
+            else
+                log "  ❌ trusted-firmware-a 源码下载失败"
+                exit 1
+            fi
+        fi
+        
+        # 创建 .built 标记，让 OpenWrt 认为已准备就绪
+        touch "$TF_DIR/.built" 2>/dev/null || true
+        log "  ✅ 创建 .built 标记文件"
+    else
+        log "  ✅ trusted-firmware-a 源码已存在且完整"
+        # 确保 .built 标记存在
+        touch "$TF_DIR/.built" 2>/dev/null || true
+    fi
+    
+    # 修复 arm-trusted-firmware-tools 的 Makefile，使用正确的路径
+    local tools_makefile="package/boot/arm-trusted-firmware-tools/Makefile"
+    if [ -f "$tools_makefile" ]; then
+        log "  🔧 修复 arm-trusted-firmware-tools Makefile..."
+        cp "$tools_makefile" "$tools_makefile.bak.$(date +%Y%m%d%H%M%S)"
+        
+        # 修改 PKG_SOURCE 为本地路径
+        cat > "$tools_makefile" << 'EOF'
+#
+# Copyright (C) 2021-2022 OpenWrt.org
+#
+# This is free software, licensed under the GNU General Public License v2.
+# See /LICENSE for more information.
+#
+
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=trusted-firmware-a-tools
+PKG_VERSION:=2.9
+PKG_RELEASE:=1
+
+PKG_SOURCE_PROTO:=git
+PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware.git
+PKG_SOURCE_VERSION:=v$(PKG_VERSION)
+PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
+
+PKG_BUILD_DIR:=$(BUILD_DIR)/hostpkg/trusted-firmware-a-$(PKG_VERSION)
+
+PKG_LICENSE:=BSD-3-Clause
+PKG_LICENSE_FILES:=license.rst
+
+include $(INCLUDE_DIR)/host-build.mk
+
+define Host/Prepare
+        # 源码已在 build_dir/hostpkg 中，无需额外准备
+endef
+
+define Host/Configure
+        # 无需配置
+endef
+
+define Host/Compile
+        $(MAKE) -C $(PKG_BUILD_DIR)/tools/fiptool \
+                CPPFLAGS="$(HOST_CPPFLAGS)" \
+                LDFLAGS="$(HOST_LDFLAGS)" \
+                HOSTCC="$(HOSTCC)" \
+                HOSTCFLAGS="$(HOST_CFLAGS)"
+endef
+
+define Host/Install
+        $(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/fiptool/fiptool $(STAGING_DIR_HOST)/bin/
+endef
+
+$(eval $(call HostBuild))
+EOF
+        log "  ✅ 已重写 arm-trusted-firmware-tools Makefile"
+    fi
+    
+    # 删除可能存在的补丁目录
+    local patches_dir="package/boot/arm-trusted-firmware-tools/patches"
+    if [ -d "$patches_dir" ]; then
+        log "  🗑️ 删除补丁目录: $patches_dir"
+        rm -rf "$patches_dir"
+    fi
+    
+    # 修改 arm-trusted-firmware-mediatek 的 Makefile，避免依赖问题
+    local mediatek_makefile="package/boot/arm-trusted-firmware-mediatek/Makefile"
+    if [ -f "$mediatek_makefile" ]; then
+        log "  🔧 修复 arm-trusted-firmware-mediatek Makefile..."
+        cp "$mediatek_makefile" "$mediatek_makefile.bak.$(date +%Y%m%d%H%M%S)"
+        
+        # 添加依赖确保 tools 先编译
+        sed -i 's|PKG_BUILD_DEPENDS:=|PKG_BUILD_DEPENDS:=arm-trusted-firmware-tools/host |g' "$mediatek_makefile" 2>/dev/null || true
+    fi
+    
+    log "  ✅ trusted-firmware-a 修复完成"
+    
     # smartdns 不再自动禁用，保留给用户使用
     log "  ℹ️ smartdns 保留，根据用户配置决定是否编译"
     
@@ -5312,6 +5436,22 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
+            if grep -q "trusted-firmware-a.*No such file\|tools/fiptool.*No such file" "$log_file"; then
+                log "  ⚠️ 检测到 trusted-firmware-a 源码缺失，重新修复..."
+                
+                # 强制重新下载
+                rm -rf "$TF_DIR"
+                cd "$BUILD_DIR/build_dir/hostpkg"
+                git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION"
+                touch "$TF_DIR/.built"
+                
+                # 清除标记，强制重新编译
+                rm -f staging_dir/hostpkg/stamp/.trusted-firmware-a-tools_* 2>/dev/null || true
+                rm -f staging_dir/hostpkg/stamp/.arm-trusted-firmware-tools_* 2>/dev/null || true
+                
+                log "  ✅ trusted-firmware-a 重新修复完成"
+            fi
+            
             if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
                 
