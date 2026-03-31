@@ -3662,6 +3662,8 @@ workflow_step25_build_firmware() {
     # ============================================
     # 关键修复：检查 Makefile 是否存在
     # ============================================
+    log "🔧 检查构建环境完整性..."
+    
     if [ ! -f "Makefile" ]; then
         log "⚠️ 警告: Makefile 不存在，尝试恢复..."
         
@@ -3671,7 +3673,7 @@ workflow_step25_build_firmware() {
         elif [ -f "$REPO_ROOT/Makefile" ]; then
             cp "$REPO_ROOT/Makefile" Makefile
             log "✅ 从仓库根目录恢复 Makefile"
-        else
+        elif [ -f "include/toplevel.mk" ]; then
             cat > Makefile << 'EOF'
 TOPDIR:=.
 world:
@@ -3681,7 +3683,12 @@ world:
 .PHONY: world
 EOF
             log "✅ 重新创建基础 Makefile"
+        else
+            log "❌ 无法恢复 Makefile，编译终止"
+            exit 1
         fi
+    else
+        log "✅ Makefile 存在"
     fi
     
     if [ ! -f "include/toplevel.mk" ]; then
@@ -3700,14 +3707,20 @@ EOF
             log "✅ 从仓库根目录恢复源码"
         else
             log "❌ 无法恢复构建环境，编译终止"
+            ls -la
             exit 1
         fi
+    else
+        log "✅ include/toplevel.mk 存在"
     fi
     
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
+    # ============================================
+    # 强制修复 trusted-firmware-a 源码（在编译前）
+    # ============================================
     log "🔧 强制修复 trusted-firmware-a 源码（编译前）..."
     
     local TF_VERSION="2.9"
@@ -3726,9 +3739,17 @@ EOF
         if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
             log "  ✅ trusted-firmware-a 源码下载成功"
         else
+            log "  ⚠️ git clone 失败，尝试完整 clone..."
             rm -rf "$TF_DIR"
             git clone --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone-full.log
+            if [ -d "$TF_DIR/tools/fiptool" ]; then
+                log "  ✅ 完整 clone 成功"
+            else
+                log "  ❌ trusted-firmware-a 源码下载失败"
+                exit 1
+            fi
         fi
+        
         touch "$TF_DIR/.built" 2>/dev/null || true
         log "  ✅ 创建 .built 标记文件"
     else
