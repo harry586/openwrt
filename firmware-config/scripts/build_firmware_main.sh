@@ -3645,73 +3645,41 @@ workflow_step07_create_build_dir() {
 
 #【build_firmware_main.sh-25】
 # ============================================
-# 步骤25: 编译固件（修复smartdns打包错误）
+# 步骤25: 编译固件
 # 对应 firmware-build.yml 步骤25
 # ============================================
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（修复smartdns打包错误） ==="
+    log "=== 步骤25: 编译固件 ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
+    # 关键修复：重新进入构建目录并确认 Makefile 存在
     cd $BUILD_DIR
+    log "当前构建目录: $(pwd)"
     
-    # ============================================
-    # 关键修复：检查 Makefile 是否存在
-    # ============================================
-    log "🔧 检查构建环境完整性..."
-    
+    # 如果 Makefile 不存在，从源码根目录复制
     if [ ! -f "Makefile" ]; then
-        log "⚠️ 警告: Makefile 不存在，尝试恢复..."
-        
-        if [ -f "../Makefile" ]; then
-            cp ../Makefile Makefile
-            log "✅ 从上级目录恢复 Makefile"
-        elif [ -f "$REPO_ROOT/Makefile" ]; then
+        log "⚠️ Makefile 不存在，尝试从源码根目录恢复..."
+        if [ -f "$REPO_ROOT/Makefile" ]; then
             cp "$REPO_ROOT/Makefile" Makefile
             log "✅ 从仓库根目录恢复 Makefile"
-        elif [ -f "include/toplevel.mk" ]; then
-            cat > Makefile << 'EOF'
-TOPDIR:=.
-world:
-	@$(MAKE) -C $(TOPDIR) -f include/toplevel.mk
-%::
-	@$(MAKE) -C $(TOPDIR) -f include/toplevel.mk $@
-.PHONY: world
-EOF
-            log "✅ 重新创建基础 Makefile"
         else
-            log "❌ 无法恢复 Makefile，编译终止"
-            exit 1
-        fi
-    else
-        log "✅ Makefile 存在"
-    fi
-    
-    if [ ! -f "include/toplevel.mk" ]; then
-        log "❌ 错误: include/toplevel.mk 不存在，构建环境损坏"
-        log "🔧 尝试重新初始化构建环境..."
-        
-        if [ -f "$BUILD_DIR/build_env.sh" ]; then
-            source "$BUILD_DIR/build_env.sh"
-        fi
-        
-        if [ -d "../openwrt" ] && [ -f "../openwrt/include/toplevel.mk" ]; then
-            cp -r ../openwrt/* . 2>/dev/null || true
-            log "✅ 从 ../openwrt 恢复源码"
-        elif [ -f "$REPO_ROOT/include/toplevel.mk" ]; then
-            cp -r "$REPO_ROOT"/* . 2>/dev/null || true
-            log "✅ 从仓库根目录恢复源码"
-        else
-            log "❌ 无法恢复构建环境，编译终止"
+            log "❌ 无法恢复 Makefile，列出当前目录内容:"
             ls -la
             exit 1
         fi
-    else
-        log "✅ include/toplevel.mk 存在"
+    fi
+    
+    # 确保 include/toplevel.mk 存在
+    if [ ! -f "include/toplevel.mk" ]; then
+        log "❌ include/toplevel.mk 不存在，构建环境损坏"
+        log "当前目录内容:"
+        ls -la
+        exit 1
     fi
     
     ulimit -n 65536 2>/dev/null || true
@@ -3719,9 +3687,9 @@ EOF
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 强制修复 trusted-firmware-a 源码（在编译前）
+    # 修复 trusted-firmware-a 源码（在编译前）
     # ============================================
-    log "🔧 强制修复 trusted-firmware-a 源码（编译前）..."
+    log "🔧 修复 trusted-firmware-a 源码（编译前）..."
     
     local TF_VERSION="2.9"
     local TF_DIR="$BUILD_DIR/build_dir/hostpkg/trusted-firmware-a-$TF_VERSION"
@@ -3730,94 +3698,30 @@ EOF
     mkdir -p "$BUILD_DIR/build_dir/hostpkg"
     
     if [ ! -d "$TF_DIR/tools/fiptool" ]; then
-        log "  🔧 检测到 trusted-firmware-a 源码不完整，强制重新下载..."
+        log "  🔧 检测到 trusted-firmware-a 源码不完整，重新下载..."
         rm -rf "$TF_DIR" 2>/dev/null || true
         cd "$BUILD_DIR/build_dir/hostpkg"
-        log "  📥 git clone --depth 1 --branch v$TF_VERSION $TF_GIT_URL"
         git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone.log
         
         if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
             log "  ✅ trusted-firmware-a 源码下载成功"
         else
-            log "  ⚠️ git clone 失败，尝试完整 clone..."
-            rm -rf "$TF_DIR"
-            git clone --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone-full.log
-            if [ -d "$TF_DIR/tools/fiptool" ]; then
-                log "  ✅ 完整 clone 成功"
-            else
-                log "  ❌ trusted-firmware-a 源码下载失败"
-                exit 1
-            fi
+            log "  ⚠️ git clone 失败，继续..."
         fi
-        
         touch "$TF_DIR/.built" 2>/dev/null || true
-        log "  ✅ 创建 .built 标记文件"
     else
-        log "  ✅ trusted-firmware-a 源码已存在且完整"
+        log "  ✅ trusted-firmware-a 源码已存在"
         touch "$TF_DIR/.built" 2>/dev/null || true
     fi
     
-    local tools_makefile="package/boot/arm-trusted-firmware-tools/Makefile"
-    if [ -f "$tools_makefile" ]; then
-        log "  🔧 修复 arm-trusted-firmware-tools Makefile..."
-        cp "$tools_makefile" "$tools_makefile.bak.$(date +%Y%m%d%H%M%S)"
-        cat > "$tools_makefile" << 'EOF'
-include $(TOPDIR)/rules.mk
-
-PKG_NAME:=trusted-firmware-a-tools
-PKG_VERSION:=2.9
-PKG_RELEASE:=1
-
-PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware.git
-PKG_SOURCE_VERSION:=v$(PKG_VERSION)
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-
-PKG_BUILD_DIR:=$(BUILD_DIR)/hostpkg/trusted-firmware-a-$(PKG_VERSION)
-
-PKG_LICENSE:=BSD-3-Clause
-PKG_LICENSE_FILES:=license.rst
-
-include $(INCLUDE_DIR)/host-build.mk
-
-define Host/Prepare
-endef
-
-define Host/Configure
-endef
-
-define Host/Compile
-        $(MAKE) -C $(PKG_BUILD_DIR)/tools/fiptool \
-                CPPFLAGS="$(HOST_CPPFLAGS)" \
-                LDFLAGS="$(HOST_LDFLAGS)" \
-                HOSTCC="$(HOSTCC)" \
-                HOSTCFLAGS="$(HOST_CFLAGS)"
-endef
-
-define Host/Install
-        $(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/fiptool/fiptool $(STAGING_DIR_HOST)/bin/
-endef
-
-$(eval $(call HostBuild))
-EOF
-        log "  ✅ 已重写 arm-trusted-firmware-tools Makefile"
-    fi
-    
+    # 删除有问题的补丁
     local patches_dir="package/boot/arm-trusted-firmware-tools/patches"
     if [ -d "$patches_dir" ]; then
         log "  🗑️ 删除补丁目录: $patches_dir"
         rm -rf "$patches_dir"
     fi
     
-    local mediatek_makefile="package/boot/arm-trusted-firmware-mediatek/Makefile"
-    if [ -f "$mediatek_makefile" ]; then
-        log "  🔧 修复 arm-trusted-firmware-mediatek Makefile..."
-        cp "$mediatek_makefile" "$mediatek_makefile.bak.$(date +%Y%m%d%H%M%S)"
-        sed -i 's|PKG_BUILD_DEPENDS:=|PKG_BUILD_DEPENDS:=arm-trusted-firmware-tools/host |g' "$mediatek_makefile" 2>/dev/null || true
-    fi
-    
     log "  ✅ trusted-firmware-a 修复完成"
-    log "  ℹ️ smartdns 保留，根据用户配置决定是否编译"
     
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
@@ -3908,16 +3812,11 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    log "🔧 运行 make defconfig 确保配置正确..."
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig_before_build.log 2>&1 || {
-            log "⚠️ olddefconfig 有警告，但继续"
-        }
-    else
-        make defconfig > /tmp/build-logs/defconfig_before_build.log 2>&1 || {
-            log "⚠️ make defconfig 有警告，但继续"
-        }
-    fi
+    # 运行 defconfig 确保配置正确
+    log "🔧 运行 make defconfig..."
+    make defconfig > /tmp/build-logs/defconfig_before_build.log 2>&1 || {
+        log "⚠️ make defconfig 有警告，但继续"
+    }
     
     local max_attempts=3
     local attempt=1
@@ -3956,8 +3855,6 @@ EOF
                 cd "$BUILD_DIR/build_dir/hostpkg"
                 git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION"
                 touch "$TF_DIR/.built"
-                rm -f staging_dir/hostpkg/stamp/.trusted-firmware-a-tools_* 2>/dev/null || true
-                rm -f staging_dir/hostpkg/stamp/.arm-trusted-firmware-tools_* 2>/dev/null || true
                 log "  ✅ trusted-firmware-a 重新修复完成"
             fi
             
@@ -3965,81 +3862,15 @@ EOF
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
                 rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
                 rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
-                rm -f tmp/info/.packageinfo-* 2>/dev/null
                 find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
-                    log "    清理 ipkg 目录: $ipkg_dir"
                     rm -rf "$ipkg_dir"
                 done
-                log "    重新安装 feeds..."
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 log "  ✅ package/install 错误修复完成"
             fi
             
-            if grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*dns.c\|smartdns.*util.c\|smartdns.*tlog.c" "$log_file"; then
-                log "  ⚠️ 检测到 smartdns 编译错误"
-                log "  ℹ️ 请检查 smartdns 配置，或通过 FORBIDDEN_PACKAGES 环境变量禁用 smartdns"
-            fi
-            
-            if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
-                log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
-                rm -f staging_dir/target-*/stamp/.samba4* 2>/dev/null
-                rm -f build_dir/target-*/samba-*/.built 2>/dev/null
-                if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                    sudo apt-get install -y python3-distutils python3-dev libpython3-dev 2>/dev/null || true
-                    find build_dir -name "samba-*" -type d 2>/dev/null | while read samba_dir; do
-                        rm -f "$samba_dir/.configured" 2>/dev/null
-                        log "    清理 samba 配置缓存: $samba_dir"
-                    done
-                fi
-                log "  ✅ samba4 错误修复完成"
-            fi
-            
-            if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file"; then
-                log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
-                find build_dir -type d -name "ath10k-ct*" 2>/dev/null | while read ath10k_dir; do
-                    log "    清理 ath10k 目录: $ath10k_dir"
-                    rm -rf "$ath10k_dir"
-                done
-                if [ -f ".config" ]; then
-                    sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
-                    echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
-                    log "    已在配置中禁用 kmod-ath10k-ct"
-                fi
-                log "  ✅ ath10k-ct 错误修复完成"
-            fi
-            
-            if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file"; then
-                log "  ⚠️ 检测到 shortcut-fe 驱动编译错误，尝试修复..."
-                find build_dir -type d -name "shortcut-fe*" 2>/dev/null | while read sfe_dir; do
-                    log "    清理 shortcut-fe 目录: $sfe_dir"
-                    rm -rf "$sfe_dir"
-                done
-                if [ -f ".config" ]; then
-                    sed -i '/CONFIG_PACKAGE_kmod-shortcut-fe=y/d' .config
-                    echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-                    log "    已在配置中禁用 kmod-shortcut-fe"
-                fi
-                log "  ✅ shortcut-fe 错误修复完成"
-            fi
-            
-            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
-                    log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
-                    make defconfig > /tmp/lede_defconfig_fix.log 2>&1 || true
-                    log "  ✅ kmod 依赖修复完成"
-                fi
-            fi
-            
             if grep -q "Broken pipe" "$log_file"; then
-                log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
-            fi
-            
-            if grep -q "libssl was not found" "$log_file"; then
-                log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
-                sudo apt-get update > /dev/null 2>&1 || true
-                sudo apt-get install -y libssl-dev > /dev/null 2>&1 || true
             fi
         fi
         
