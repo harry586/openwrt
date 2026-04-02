@@ -53,46 +53,15 @@ load_build_config() {
     # 检查文件描述符限制（修复Broken pipe）
     # ============================================
     log "🔧 检查文件描述符限制..."
-    
-    # 获取当前限制
     local current_limit=$(ulimit -n)
     log "  当前文件描述符限制: $current_limit"
     
-    # 如果限制小于65536，尝试提高
     if [ $current_limit -lt 65536 ]; then
         log "  文件描述符限制过低，尝试提高到65536..."
-        
-        # 尝试使用 ulimit 提高
-        ulimit -n 65536 2>/dev/null || true
-        
-        # 如果还是不够，尝试设置系统范围限制
+        ulimit -n 65536 2>/dev/null || sudo ulimit -n 65536 2>/dev/null || true
         local new_limit=$(ulimit -n)
-        if [ $new_limit -lt 65536 ]; then
-            log "  ⚠️ 无法直接提高限制，尝试修改系统配置..."
-            echo "fs.file-max = 65536" | sudo tee -a /etc/sysctl.conf > /dev/null 2>&1
-            echo "root soft nofile 65536" | sudo tee -a /etc/security/limits.conf > /dev/null 2>&1
-            echo "root hard nofile 65536" | sudo tee -a /etc/security/limits.conf > /dev/null 2>&1
-            sudo sysctl -p > /dev/null 2>&1 || true
-            ulimit -n 65536 2>/dev/null || true
-        fi
-        
-        local final_limit=$(ulimit -n)
-        log "  新的文件描述符限制: $final_limit"
-        
-        if [ $final_limit -lt 4096 ]; then
-            log "  ⚠️ 警告：文件描述符限制仍过低，可能会遇到'Broken pipe'错误"
-        else
-            log "  ✅ 文件描述符限制已优化"
-        fi
-    else
-        log "  ✅ 文件描述符限制足够"
+        log "  新的文件描述符限制: $new_limit"
     fi
-    
-    # 导出文件描述符限制到子进程
-    export OPENWRT_ULIMIT=$(ulimit -n)
-    
-    # 设置 PKG_CONFIG_PATH 解决 OpenSSL 找不到问题
-    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$BUILD_DIR/staging_dir/target-*/usr/lib/pkgconfig:$PKG_CONFIG_PATH"
     
     log "✅ 配置加载完成，当前源码仓库类型: $SOURCE_REPO_TYPE"
 }
@@ -1041,164 +1010,40 @@ add_turboacc_support() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
-    # 修复 OpenSSL 头文件路径问题
+    # 彻底修复所有下载源
     # ============================================
-    log "🔧 修复 OpenSSL 头文件路径问题..."
+    log "🔧 彻底修复所有下载源..."
     
-    # 查找 OpenSSL 头文件位置
-    local openssl_include=""
-    if [ -d "$BUILD_DIR/staging_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/usr/include/openssl" ]; then
-        openssl_include="$BUILD_DIR/staging_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/usr/include"
-        log "  ✅ 找到 ARM OpenSSL 头文件: $openssl_include"
-    elif [ -d "$BUILD_DIR/staging_dir/target-aarch64_cortex-a53_musl/usr/include/openssl" ]; then
-        openssl_include="$BUILD_DIR/staging_dir/target-aarch64_cortex-a53_musl/usr/include"
-        log "  ✅ 找到 ARM64 OpenSSL 头文件: $openssl_include"
-    fi
+    # 创建补丁目录
+    mkdir -p package/firmware/trusted-firmware-a/patches
     
-    # 修复 curl 的 OpenSSL 检测
-    local curl_makefiles=$(find feeds -name "Makefile" -path "*/curl/*" 2>/dev/null)
-    for makefile in $curl_makefiles; do
-        if [ -f "$makefile" ]; then
-            cp "$makefile" "$makefile.bak"
-            if [ -n "$openssl_include" ]; then
-                sed -i "s|TARGET_CFLAGS +=|TARGET_CFLAGS += -I$openssl_include|g" "$makefile"
-            fi
-            sed -i 's|CONFIGURE_VARS +=|CONFIGURE_VARS += PKG_CONFIG_PATH="$(STAGING_DIR)/usr/lib/pkgconfig"|g' "$makefile"
-            log "  ✅ 修复 curl Makefile: $makefile"
-        fi
-    done
-    
-    # 修复 wget-ssl 的 OpenSSL 检测
-    local wget_makefiles=$(find feeds -name "Makefile" -path "*/wget*" 2>/dev/null)
-    for makefile in $wget_makefiles; do
-        if [ -f "$makefile" ]; then
-            cp "$makefile" "$makefile.bak"
-            if [ -n "$openssl_include" ]; then
-                sed -i "s|TARGET_CFLAGS +=|TARGET_CFLAGS += -I$openssl_include|g" "$makefile"
-            fi
-            log "  ✅ 修复 wget Makefile: $makefile"
-        fi
-    done
-    
-    # ============================================
-    # 修复 smartdns 编译问题
-    # ============================================
-    log "🔧 修复 smartdns 编译问题..."
-    
-    local smartdns_dirs=$(find feeds -type d -name "*smartdns*" 2>/dev/null)
-    for smartdns_dir in $smartdns_dirs; do
-        if [ -f "$smartdns_dir/Makefile" ]; then
-            cp "$smartdns_dir/Makefile" "$smartdns_dir/Makefile.bak"
-            sed -i 's|TARGET_CFLAGS +=|TARGET_CFLAGS += -D_GNU_SOURCE|g' "$smartdns_dir/Makefile"
-            log "  ✅ 修复 smartdns Makefile: $smartdns_dir"
-        fi
-        
-        if [ -d "$smartdns_dir/src" ]; then
-            if [ -f "$smartdns_dir/src/dns.c" ]; then
-                sed -i 's|#include <openssl/des.h>|#include <openssl/des.h>\n#include <time.h>|g' "$smartdns_dir/src/dns.c" 2>/dev/null || true
-                log "  ✅ 修复 smartdns dns.c"
-            fi
-            if [ -f "$smartdns_dir/src/util.c" ]; then
-                sed -i 's|#include <openssl/evp.h>|#include <openssl/evp.h>\n#include <sys/time.h>|g' "$smartdns_dir/src/util.c" 2>/dev/null || true
-                log "  ✅ 修复 smartdns util.c"
-            fi
-            if [ -f "$smartdns_dir/src/tlog.c" ]; then
-                sed -i 's|#include <time.h>|#include <time.h>\n#include <sys/time.h>|g' "$smartdns_dir/src/tlog.c" 2>/dev/null || true
-                log "  ✅ 修复 smartdns tlog.c"
-            fi
-        fi
-    done
-    
-    # ============================================
-    # 彻底修复 trusted-firmware-a 问题（关键修复）
-    # ============================================
-    log "🔧 彻底修复 trusted-firmware-a 问题..."
-    
-    # 方法1: 删除所有 patches（避免补丁问题）
-    local patches_dir="package/boot/arm-trusted-firmware-tools/patches"
-    if [ -d "$patches_dir" ]; then
-        log "  🗑️ 删除所有补丁: $patches_dir"
-        rm -rf "$patches_dir"
-    fi
-    mkdir -p "$patches_dir"
-    touch "$patches_dir/.keep"
-    
-    # 方法2: 修改 Makefile，使用官方源码包而非镜像源
-    local tf_makefile="package/firmware/trusted-firmware-a/Makefile"
-    if [ -f "$tf_makefile" ]; then
-        cp "$tf_makefile" "$tf_makefile.bak.$(date +%Y%m%d%H%M%S)"
-        
-        # 完全重写 PKG_SOURCE 部分，使用官方 Git 仓库
-        sed -i 's|PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git|g' "$tf_makefile"
-        sed -i 's|PKG_SOURCE:=.*|PKG_SOURCE:=trusted-firmware-a-$(PKG_VERSION).tar.gz|g' "$tf_makefile"
-        sed -i 's|PKG_SOURCE_VERSION:=.*|PKG_SOURCE_VERSION:=v$(PKG_VERSION)|g' "$tf_makefile"
-        sed -i 's|PKG_SOURCE_PROTO:=.*|PKG_SOURCE_PROTO:=git|g' "$tf_makefile"
-        sed -i 's|PKG_HASH:=.*|PKG_HASH:=skip|g' "$tf_makefile"
-        
-        # 添加 git 下载方式
-        if ! grep -q "PKG_SOURCE_PROTO" "$tf_makefile"; then
-            sed -i '/PKG_SOURCE_URL/a PKG_SOURCE_PROTO:=git' "$tf_makefile"
-        fi
-        
-        log "  ✅ 修改 trusted-firmware-a Makefile 使用 git 下载"
-    fi
-    
-    # 方法3: 直接修改 arm-trusted-firmware-tools 的 Makefile
-    local tools_makefile="package/boot/arm-trusted-firmware-tools/Makefile"
-    if [ -f "$tools_makefile" ]; then
-        cp "$tools_makefile" "$tools_makefile.bak.$(date +%Y%m%d%H%M%S)"
-        
-        # 添加依赖和配置
-        sed -i '/PKG_BUILD_DIR/i PKG_BUILD_DEPENDS:=trusted-firmware-a/host' "$tools_makefile" 2>/dev/null || true
-        sed -i 's|PKG_HASH:=.*|PKG_HASH:=skip|g' "$tools_makefile"
-        
-        log "  ✅ 修改 arm-trusted-firmware-tools Makefile"
-    fi
-    
-    # 方法4: 创建预下载脚本，确保源码完整
-    log "  🔧 创建 trusted-firmware-a 下载修复脚本..."
-    
-    cat > "$BUILD_DIR/fix-tf-download.sh" << 'EOF'
-#!/bin/bash
-TF_VERSION="2.9"
-TF_DIR="$BUILD_DIR/build_dir/hostpkg/trusted-firmware-a-$TF_VERSION"
-
-if [ ! -d "$TF_DIR/tools/fiptool" ]; then
-    echo "修复 trusted-firmware-a 源码目录结构..."
-    
-    # 如果目录存在但不完整，删除重建
-    if [ -d "$TF_DIR" ]; then
-        rm -rf "$TF_DIR"
-    fi
-    
-    # 使用 git clone 获取完整源码
-    cd "$BUILD_DIR/build_dir/hostpkg"
-    git clone --depth 1 --branch v$TF_VERSION https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git trusted-firmware-a-$TF_VERSION
-    
-    if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
-        echo "✅ trusted-firmware-a 源码修复成功"
-        touch "$TF_DIR/.built"
-    else
-        echo "⚠️ git clone 失败，尝试备用源..."
-        rm -rf "$TF_DIR"
-        git clone --depth 1 --branch v$TF_VERSION https://github.com/ARM-software/arm-trusted-firmware.git trusted-firmware-a-$TF_VERSION
-        if [ -d "$TF_DIR/tools/fiptool" ]; then
-            echo "✅ 使用 GitHub 源修复成功"
-        else
-            echo "❌ 修复失败"
-            exit 1
-        fi
-    fi
-fi
+    # 创建补丁文件，替换所有失效的下载源
+    cat > package/firmware/trusted-firmware-a/patches/001-fix-download-url.patch << 'EOF'
+--- a/package/firmware/trusted-firmware-a/Makefile
++++ b/package/firmware/trusted-firmware-a/Makefile
+@@ -5,8 +5,8 @@
+ PKG_NAME:=trusted-firmware-a
+ PKG_RELEASE:=1
+ 
+-PKG_SOURCE_URL:=https://mirror2.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
+-PKG_SOURCE_URL+=https://mirror.immortalwrt.org/sources/trusted-firmware-a-$(PKG_VERSION).tar.gz
++PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v$(PKG_VERSION).tar.gz
++PKG_SOURCE_URL+=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v$(PKG_VERSION).tar.gz
+ PKG_HASH:=skip
+ 
+ PKG_LICENSE:=BSD-3-Clause
 EOF
-    chmod +x "$BUILD_DIR/fix-tf-download.sh"
-    log "  ✅ 创建修复脚本: fix-tf-download.sh"
+    log "  ✅ 创建 trusted-firmware-a 下载源修复补丁"
     
-    # 执行修复脚本
-    log "  🔧 执行 trusted-firmware-a 修复..."
-    bash "$BUILD_DIR/fix-tf-download.sh" || {
-        log "  ⚠️ 修复脚本执行有警告，继续..."
-    }
+    # 修复 libxml2 下载源
+    find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
+        if [ -f "$dir/Makefile" ]; then
+            cp "$dir/Makefile" "$dir/Makefile.bak"
+            sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
+            sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
+            log "  ✅ 修复 libxml2 下载源"
+        fi
+    done
     
     # 修复所有 mirror.immortalwrt.org 源
     find . -name "*.mk" -o -name "Makefile" | while read file; do
@@ -1211,10 +1056,13 @@ EOF
         fi
     done
     
-    # 修复补丁兼容性问题
+    # ============================================
+    # 修复补丁兼容性问题（区分源码类型）
+    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
         log "🔧 ImmortalWrt 源码特殊处理：修复补丁兼容性"
         
+        # 删除有问题的补丁文件（直接删除，不是重命名）
         local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
         
         if [ -f "$problem_patch" ]; then
@@ -1222,6 +1070,7 @@ EOF
             rm -f "$problem_patch"
         fi
         
+        # 也删除任何 .disabled 版本
         if [ -f "$problem_patch.disabled" ]; then
             log "  🗑️ 删除 disabled 补丁: $problem_patch.disabled"
             rm -f "$problem_patch.disabled"
@@ -1255,16 +1104,6 @@ configure_feeds() {
     
     log "=== 配置Feeds ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
-    
-    log "🔧 清理可能冲突的构建缓存..."
-    
-    # 清理 trusted-firmware-a 相关的构建缓存
-    rm -rf build_dir/hostpkg/trusted-firmware-a-* 2>/dev/null || true
-    rm -rf build_dir/target-*/arm-trusted-firmware-* 2>/dev/null || true
-    rm -rf staging_dir/target-*/root-*/trusted-firmware-* 2>/dev/null || true
-    rm -rf dl/trusted-firmware-a-* 2>/dev/null || true
-    
-    log "  ✅ 已清理 trusted-firmware-a 构建缓存"
     
     log "🔧 预创建所有可能缺失的文件..."
     
@@ -1379,45 +1218,50 @@ EOF
     log "=== 删除有问题的包（在安装前） ==="
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码：删除有依赖问题的 vsftpd-alt 包"
+        log "🔧 LEDE源码：删除有依赖问题的 vsftpd 相关包"
         
-        find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        find package/feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
             log "  🗑️ 删除 package/feeds 目录: $dir"
             rm -rf "$dir"
         done
         
-        find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        find feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
             log "  🗑️ 删除 feeds 目录: $dir"
             rm -rf "$dir"
         done
         
-        find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        find package -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
             log "  🗑️ 删除 package 目录: $dir"
             rm -rf "$dir"
         done
+        
+        log "🔧 LEDE源码：删除有问题的 smartdns 包（ipq40xx/mediatek 平台）"
+        case "$TARGET" in
+            ipq40xx|ipq806x|qcom|mediatek|ramips)
+                log "  平台 $TARGET，删除 smartdns"
+                find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    🗑️ 删除 smartdns 目录: $dir"
+                    rm -rf "$dir"
+                done
+                find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    🗑️ 删除 feeds smartdns 目录: $dir"
+                    rm -rf "$dir"
+                done
+                find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    🗑️ 删除 package smartdns 目录: $dir"
+                    rm -rf "$dir"
+                done
+                ;;
+            *)
+                log "  平台 $TARGET，保留 smartdns"
+                ;;
+        esac
     fi
     
     log "=== 安装Feeds ==="
     ./scripts/feeds install -a || {
         log "⚠️ feeds安装有警告，尝试继续..."
     }
-    
-    log "🔧 修复 smartdns 依赖..."
-    if [ -d "feeds/packages/net/smartdns" ]; then
-        ./scripts/feeds install libopenssl 2>/dev/null || true
-        ./scripts/feeds install libpthread 2>/dev/null || true
-        log "  ✅ 安装 smartdns 依赖"
-    fi
-    
-    # ============================================
-    # 执行 trusted-firmware-a 修复
-    # ============================================
-    log "🔧 执行 trusted-firmware-a 修复..."
-    if [ -f "$BUILD_DIR/fix-tf-download.sh" ]; then
-        bash "$BUILD_DIR/fix-tf-download.sh" || {
-            log "  ⚠️ 修复脚本执行有警告，继续..."
-        }
-    fi
     
     log "✅ Feeds配置完成"
 }
@@ -2185,8 +2029,34 @@ EOF
         rm -rf "$dir"
     done
     
-    # smartdns 不再自动禁用，保留给用户使用
-    log "  ℹ️ smartdns 保留，根据用户配置决定是否编译"
+    log "🔧 特别处理：根据平台决定是否禁用 smartdns"
+    local disable_smartdns=0
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom|mediatek|ramips)
+            log "  ⚠️ 平台 $TARGET 已知 smartdns 编译问题，将禁用 smartdns"
+            disable_smartdns=1
+            ;;
+        *)
+            log "  ✅ 平台 $TARGET 支持 smartdns，保留"
+            disable_smartdns=0
+            ;;
+    esac
+    
+    if [ $disable_smartdns -eq 1 ]; then
+        log "  🔧 彻底删除 smartdns 源文件..."
+        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 smartdns 目录: $dir"
+            rm -rf "$dir"
+        done
+        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 package smartdns 目录: $dir"
+            rm -rf "$dir"
+        done
+        find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 feeds smartdns 目录: $dir"
+            rm -rf "$dir"
+        done
+    fi
     
     log "📋 第二轮：在 .config 中禁用所有相关包..."
     
@@ -2197,7 +2067,12 @@ EOF
     
     echo "vsftpd-alt" >> "$disable_temp"
     
-    # smartdns 不再自动添加到禁用列表
+    if [ $disable_smartdns -eq 1 ]; then
+        echo "smartdns" >> "$disable_temp"
+        echo "luci-app-smartdns" >> "$disable_temp"
+        echo "luci-i18n-smartdns-zh-cn" >> "$disable_temp"
+        echo "luci-i18n-smartdns-en" >> "$disable_temp"
+    fi
     
     sort -u "$disable_temp" > "$disable_temp.sorted"
     
@@ -2221,7 +2096,10 @@ EOF
     sed -i "/vsftpd-alt/d" .config
     sed -i "/VSFTPD-ALT/d" .config
     
-    # smartdns 相关配置不再删除
+    if [ $disable_smartdns -eq 1 ]; then
+        sed -i "/smartdns/d" .config
+        sed -i "/SMARTDNS/d" .config
+    fi
     
     log "🔧 特别处理 DDNS 相关配置..."
     sed -i '/ddns/d' .config
@@ -2260,7 +2138,9 @@ EOF
     
     echo "vsftpd-alt" >> "$check_temp"
     
-    # smartdns 不再检查残留
+    if [ $disable_smartdns -eq 1 ]; then
+        echo "smartdns" >> "$check_temp"
+    fi
     
     sort -u "$check_temp" > "$check_temp.sorted"
     
@@ -2322,7 +2202,14 @@ EOF
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
-    # smartdns 不再验证是否禁用
+    if [ $disable_smartdns -eq 1 ]; then
+        if grep -q "^CONFIG_PACKAGE_smartdns=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-smartdns=y" .config; then
+            log "  ❌ smartdns 仍被启用"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ smartdns 已禁用"
+        fi
+    fi
     
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
@@ -2753,28 +2640,6 @@ download_dependencies() {
     local existing_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "现有依赖包数量: $existing_deps 个"
     
-    # 预先下载 trusted-firmware-a（避免后续404错误）
-    log "🔧 预先下载 trusted-firmware-a..."
-    local tf_version="2.9"
-    local tf_urls=(
-        "https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v${tf_version}.tar.gz"
-        "https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v${tf_version}"
-        "https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v${tf_version}.tar.gz"
-    )
-    
-    for url in "${tf_urls[@]}"; do
-        if [ ! -f "dl/trusted-firmware-a-${tf_version}.tar.gz" ]; then
-            log "  尝试下载: $url"
-            curl -L --connect-timeout 30 --retry 3 -o "dl/trusted-firmware-a-${tf_version}.tar.gz" "$url" 2>/dev/null && {
-                log "  ✅ trusted-firmware-a 下载成功"
-                break
-            }
-        else
-            log "  ✅ trusted-firmware-a 已存在"
-            break
-        fi
-    done
-    
     log "开始下载依赖包..."
     make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
     
@@ -2856,7 +2721,6 @@ integrate_custom_files() {
     local other_count=0
     local english_count=0
     local non_english_count=0
-    local space_warning=0
     
     echo ""
     log "📋 详细文件列表:"
@@ -2869,12 +2733,7 @@ integrate_custom_files() {
         local file_name=$(basename "$file")
         local file_size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "未知")
         
-        # 检查文件名是否包含空格
-        if echo "$file_name" | grep -q ' '; then
-            local name_status="⚠️ 包含空格"
-            non_english_count=$((non_english_count + 1))
-            space_warning=$((space_warning + 1))
-        elif is_english_filename "$file_name"; then
+        if is_english_filename "$file_name"; then
             local name_status="✅ 英文"
             english_count=$((english_count + 1))
         else
@@ -2896,12 +2755,7 @@ integrate_custom_files() {
             other_count=$((other_count + 1))
         fi
         
-        # 对包含空格的文件名加引号显示
-        if echo "$rel_path" | grep -q ' '; then
-            printf '"%-48s" %-10s %-15s %s\n' "$rel_path" "$file_size" "$type_desc" "$name_status"
-        else
-            printf "%-50s %-10s %-15s %s\n" "$rel_path" "$file_size" "$type_desc" "$name_status"
-        fi
+        printf "%-50s %-10s %-15s %s\n" "$rel_path" "$file_size" "$type_desc" "$name_status"
         
     done <<< "$all_files"
     
@@ -2915,22 +2769,13 @@ integrate_custom_files() {
     log "  ⚙️ 配置文件: $config_count 个"
     log "  📁 其他文件: $other_count 个"
     log "  ✅ 英文文件名: $english_count 个"
-    log "  ⚠️ 非英文或含空格文件名: $non_english_count 个"
-    
-    if [ $space_warning -gt 0 ]; then
-        echo ""
-        log "⚠️ 文件名空格警告:"
-        log "  发现 $space_warning 个文件名包含空格"
-        log "  包含空格的文件名在脚本中可能无法正确执行"
-        log "  建议将文件名中的空格替换为下划线 _"
-    fi
+    log "  ⚠️ 非英文文件名: $non_english_count 个"
     
     if [ $non_english_count -gt 0 ]; then
         echo ""
         log "💡 文件名建议:"
         log "  为了更好的兼容性，方便复制、运行，建议使用英文文件名"
-        log "  文件名中不要包含空格，用下划线 _ 或连字符 - 代替"
-        log "  当前系统会自动处理，但英文名有更好的兼容性"
+        log "  当前系统会自动处理非英文文件名，但英文名有更好的兼容性"
     fi
     
     echo ""
@@ -3179,9 +3024,7 @@ if [ -d "$CUSTOM_DIR" ]; then
     echo "  总文件数: $TOTAL_FILES 个" >> $LOG_FILE
     echo "  成功处理: $TOTAL_SUCCESS 个" >> $LOG_FILE
     echo "  失败处理: $TOTAL_FAILED 个" >> $LOG_FILE
-    if [ $((TOTAL_SUCCESS + TOTAL_FAILED)) -gt 0 ]; then
-        echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE
-    fi
+    echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE
     echo "" >> $LOG_FILE
     
     echo "📋 详细分类统计:" >> $LOG_FILE
@@ -3235,7 +3078,6 @@ echo ""
 
 ENGLISH_COUNT=0
 NON_ENGLISH_COUNT=0
-SPACE_COUNT=0
 TOTAL_FILES=0
 
 FILE_LIST=$(mktemp)
@@ -3246,11 +3088,7 @@ while IFS= read -r file; do
     file_name=$(basename "$file")
     rel_path="${file#$CUSTOM_DIR/}"
     
-    if echo "$file_name" | grep -q ' '; then
-        SPACE_COUNT=$((SPACE_COUNT + 1))
-        NON_ENGLISH_COUNT=$((NON_ENGLISH_COUNT + 1))
-        echo "⚠️ $rel_path (文件名包含空格)"
-    elif echo "$file_name" | grep -q '^[a-zA-Z0-9_.-]*$'; then
+    if echo "$file_name" | grep -q '^[a-zA-Z0-9_.-]*$'; then
         ENGLISH_COUNT=$((ENGLISH_COUNT + 1))
         echo "✅ $rel_path"
     else
@@ -3266,15 +3104,7 @@ echo "📊 检查结果:"
 echo "  总文件数: $TOTAL_FILES 个"
 echo "  英文文件名: $ENGLISH_COUNT 个"
 echo "  非英文文件名: $NON_ENGLISH_COUNT 个"
-echo "  包含空格的文件名: $SPACE_COUNT 个"
 echo ""
-
-if [ $SPACE_COUNT -gt 0 ]; then
-    echo "⚠️ 文件名包含空格警告:"
-    echo "  文件名中的空格会导致脚本无法正确执行"
-    echo "  建议将文件名中的空格替换为下划线 _"
-    echo ""
-fi
 
 if [ $NON_ENGLISH_COUNT -gt 0 ]; then
     echo "💡 建议:"
@@ -3299,18 +3129,12 @@ EOF
     log "  📁 其他文件: $other_count 个"
     log "  总文件数: $file_count 个"
     log "  ✅ 英文文件名: $english_count 个"
-    log "  ⚠️ 非英文或含空格文件名: $non_english_count 个"
-    
-    if [ $space_warning -gt 0 ]; then
-        log "⚠️ 文件名空格警告:"
-        log "  发现 $space_warning 个文件名包含空格"
-        log "  建议将文件名中的空格替换为下划线 _"
-    fi
+    log "  ⚠️ 非英文文件名: $non_english_count 个"
     
     if [ $non_english_count -gt 0 ]; then
         log "💡 文件名兼容性提示:"
-        log "  当前有 $non_english_count 个文件使用非英文文件名或包含空格"
-        log "  建议改为英文文件名并使用下划线 _ 或连字符 - 代替空格"
+        log "  当前有 $non_english_count 个文件使用非英文文件名"
+        log "  建议改为英文文件名以获得更好的兼容性"
     fi
     
     CUSTOM_FILE_STATS="/tmp/custom_file_stats.txt"
@@ -3322,7 +3146,6 @@ CUSTOM_CONFIG_COUNT=$config_count
 CUSTOM_OTHER_COUNT=$other_count
 CUSTOM_ENGLISH_COUNT=$english_count
 CUSTOM_NON_ENGLISH_COUNT=$non_english_count
-CUSTOM_SPACE_COUNT=$space_warning
 EOF
     
     log "✅ 自定义文件集成完成"
@@ -3394,177 +3217,131 @@ verify_compiler_files() {
 #【build_firmware_main.sh-19-end】
 
 #【build_firmware_main.sh-20】
-# ============================================
-# 步骤20: 修复网络环境（增强版 - 修复下载失败）
-# 对应 firmware-build.yml 步骤20
-# ============================================
-workflow_step20_fix_network() {
-    log "=== 步骤20: 修复网络环境（增强版 - 修复下载失败） ==="
+check_compiler_invocation() {
+    log "=== 检查编译器调用状态（增强版）==="
     
-    trap 'echo "⚠️ 步骤20 修复过程中出现错误，继续执行..."' ERR
-    
-    cd $BUILD_DIR
-    
-    # ============================================
-    # 修复下载源（针对401/404错误）
-    # ============================================
-    log "🔧 修复下载源（针对401/404错误）..."
-    
-    # 备份原文件
-    if [ -f "feeds.conf.default" ]; then
-        cp "feeds.conf.default" "feeds.conf.default.bak"
-        log "  ✅ 备份 feeds.conf.default"
-    fi
-    
-    # 修复ImmortalWrt下载源
-    if grep -q "mirror2.immortalwrt.org" feeds.conf.default 2>/dev/null; then
-        log "  🔧 替换失效的ImmortalWrt镜像源..."
-        sed -i 's|mirror2.immortalwrt.org|mirror.nju.edu.cn/immortalwrt|g' feeds.conf.default
-        sed -i 's|mirror.immortalwrt.org|mirror.nju.edu.cn/immortalwrt|g' feeds.conf.default
-        log "  ✅ 已替换为南京大学镜像源"
-    fi
-    
-    # ============================================
-    # 修复 trusted-firmware-a 问题（关键修复）
-    # ============================================
-    log "  🔧 修复 trusted-firmware-a 问题..."
-    
-    # 删除所有 patches
-    local patches_dir="package/boot/arm-trusted-firmware-tools/patches"
-    if [ -d "$patches_dir" ]; then
-        rm -rf "$patches_dir"
-        log "    🗑️ 删除补丁目录"
-    fi
-    mkdir -p "$patches_dir"
-    touch "$patches_dir/.keep"
-    
-    # 清理构建缓存
-    log "  🔧 清理 trusted-firmware-a 构建缓存..."
-    rm -rf build_dir/hostpkg/trusted-firmware-a-* 2>/dev/null || true
-    rm -rf build_dir/target-*/arm-trusted-firmware-* 2>/dev/null || true
-    rm -rf staging_dir/target-*/root-*/trusted-firmware-* 2>/dev/null || true
-    rm -rf dl/trusted-firmware-a-* 2>/dev/null || true
-    log "    ✅ 构建缓存已清理"
-    
-    # 修改 Makefile 使用 git 下载
-    local tf_makefile="package/firmware/trusted-firmware-a/Makefile"
-    if [ -f "$tf_makefile" ]; then
-        cp "$tf_makefile" "$tf_makefile.bak.$(date +%Y%m%d%H%M%S)"
-        sed -i 's|PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git|g' "$tf_makefile"
-        sed -i 's|PKG_SOURCE:=.*|PKG_SOURCE:=trusted-firmware-a-$(PKG_VERSION).tar.gz|g' "$tf_makefile"
-        sed -i 's|PKG_SOURCE_VERSION:=.*|PKG_SOURCE_VERSION:=v$(PKG_VERSION)|g' "$tf_makefile"
-        sed -i 's|PKG_SOURCE_PROTO:=.*|PKG_SOURCE_PROTO:=git|g' "$tf_makefile"
-        sed -i 's|PKG_HASH:=.*|PKG_HASH:=skip|g' "$tf_makefile"
+    if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+        log "🔍 检查预构建编译器调用..."
         
-        if ! grep -q "PKG_SOURCE_PROTO" "$tf_makefile"; then
-            sed -i '/PKG_SOURCE_URL/a PKG_SOURCE_PROTO:=git' "$tf_makefile"
+        log "📋 当前PATH环境变量:"
+        echo "$PATH" | tr ':' '\n' | grep -E "(compiler|gcc|toolchain)" | head -10 | while read path_item; do
+            log "  📍 $path_item"
+        done
+        
+        log "🔧 查找可用编译器:"
+        which gcc g++ 2>/dev/null | while read compiler_path; do
+            log "  ⚙️ $(basename "$compiler_path"): $compiler_path"
+            
+            if [[ "$compiler_path" == *"$COMPILER_DIR"* ]]; then
+                log "    🎯 来自预构建目录: 是"
+            else
+                log "    🔄 来自其他位置: 否"
+            fi
+        done
+        
+        if [ -d "$BUILD_DIR/staging_dir" ]; then
+            log "📁 检查 staging_dir 中的编译器..."
+            
+            local used_compiler=$(find "$BUILD_DIR/staging_dir" -maxdepth 5 -type f -executable \
+              -name "*gcc" \
+              ! -name "*gcc-ar" \
+              ! -name "*gcc-ranlib" \
+              ! -name "*gcc-nm" \
+              ! -path "*dummy-tools*" \
+              ! -path "*scripts*" \
+              2>/dev/null | head -1)
+            
+            if [ -n "$used_compiler" ]; then
+                log "  ✅ 找到正在使用的真正的GCC编译器: $(basename "$used_compiler")"
+                log "     路径: $used_compiler"
+                
+                local version=$("$used_compiler" --version 2>&1 | head -1)
+                log "     版本: $version"
+                
+                if [[ "$used_compiler" == *"$COMPILER_DIR"* ]]; then
+                    log "  🎯 编译器来自预构建目录: 是"
+                    log "  📌 成功调用了预构建的编译器文件"
+                else
+                    log "  🔄 编译器来自其他位置: 否"
+                    log "  📌 使用的是OpenWrt自动构建的编译器"
+                fi
+            else
+                log "  ℹ️ 未找到真正的GCC编译器（当前未构建）"
+                
+                log "  🔍 检查SDK编译器:"
+                if [ -n "$COMPILER_DIR" ] && [ -d "$COMPILER_DIR" ]; then
+                    local sdk_gcc=$(find "$COMPILER_DIR" -maxdepth 5 -type f -executable \
+                      -name "*gcc" \
+                      ! -name "*gcc-ar" \
+                      ! -name "*gcc-ranlib" \
+                      ! -name "*gcc-nm" \
+                      ! -path "*dummy-tools*" \
+                      ! -path "*scripts*" \
+                      2>/dev/null | head -1)
+                    
+                    if [ -n "$sdk_gcc" ]; then
+                        log "    ✅ SDK编译器存在: $(basename "$sdk_gcc")"
+                        local sdk_version=$("$sdk_gcc" --version 2>&1 | head -1)
+                        log "       版本: $sdk_version"
+                        log "    📌 将使用下载的SDK编译器进行构建"
+                    else
+                        log "    ⚠️ SDK目录中未找到真正的GCC编译器"
+                    fi
+                fi
+            fi
         fi
-        log "    ✅ 修改 Makefile 使用 git 下载"
-    fi
-    
-    # 创建并执行修复脚本
-    cat > "$BUILD_DIR/fix-tf-download.sh" << 'EOF'
-#!/bin/bash
-TF_VERSION="2.9"
-TF_DIR="$BUILD_DIR/build_dir/hostpkg/trusted-firmware-a-$TF_VERSION"
-
-if [ ! -d "$TF_DIR/tools/fiptool" ]; then
-    echo "修复 trusted-firmware-a 源码目录结构..."
-    if [ -d "$TF_DIR" ]; then
-        rm -rf "$TF_DIR"
-    fi
-    cd "$BUILD_DIR/build_dir/hostpkg"
-    git clone --depth 1 --branch v$TF_VERSION https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git trusted-firmware-a-$TF_VERSION
-    if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
-        echo "✅ trusted-firmware-a 源码修复成功"
     else
-        rm -rf "$TF_DIR"
-        git clone --depth 1 --branch v$TF_VERSION https://github.com/ARM-software/arm-trusted-firmware.git trusted-firmware-a-$TF_VERSION
+        log "ℹ️ 未设置预构建编译器目录，将使用自动构建的编译器"
     fi
-fi
-EOF
-    chmod +x "$BUILD_DIR/fix-tf-download.sh"
-    bash "$BUILD_DIR/fix-tf-download.sh" || true
     
-    # 修复 libssl 缺失问题
-    log "  🔧 修复 libssl 缺失问题..."
-    sudo apt-get update > /dev/null 2>&1 || true
-    sudo apt-get install -y libssl-dev pkg-config 2>/dev/null || true
+    log "💻 系统编译器检查:"
+    if command -v gcc >/dev/null 2>&1; then
+        local sys_gcc=$(which gcc)
+        local sys_version=$(gcc --version 2>&1 | head -1)
+        log "  ✅ 系统GCC: $sys_gcc"
+        log "     版本: $sys_version"
+        
+        local major_version=$(echo "$sys_version" | grep -o "[0-9]\+" | head -1)
+        if [ -n "$major_version" ] && [ "$major_version" -ge 8 ] && [ "$major_version" -le 15 ]; then
+            log "     ✅ 系统GCC $major_version.x 版本兼容"
+        else
+            log "     ⚠️ 系统GCC版本可能不兼容"
+        fi
+    else
+        log "  ❌ 系统GCC未找到"
+    fi
     
-    # 设置 PKG_CONFIG_PATH
-    local pkg_config_path="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$BUILD_DIR/staging_dir/target-*/usr/lib/pkgconfig"
-    export PKG_CONFIG_PATH="$pkg_config_path"
-    echo "PKG_CONFIG_PATH=$pkg_config_path" >> $GITHUB_ENV 2>/dev/null || true
-    
-    # 调用原有的网络修复函数
-    fix_network
-    
-    # 重新更新feeds
-    log "🔄 重新更新feeds（使用修复后的源）..."
-    ./scripts/feeds update -a > /tmp/build-logs/feeds_update_fixed.log 2>&1 || {
-        log "⚠️ feeds更新有警告，继续..."
-    }
-    
-    log "✅ 步骤20 完成"
+    log "✅ 编译器调用状态检查完成"
 }
 #【build_firmware_main.sh-20-end】
 
 #【build_firmware_main.sh-21】
-download_dependencies() {
-    cd $BUILD_DIR || handle_error "进入构建目录失败"
+cleanup() {
+    log "=== 清理构建目录 ==="
     
-    log "=== 下载依赖包 ==="
-    
-    if [ ! -d "dl" ]; then
-        mkdir -p dl
-        log "创建依赖包目录: dl"
-    fi
-    
-    # 使用 -name 条件，不加括号
-    local existing_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
-    log "现有依赖包数量: $existing_deps 个"
-    
-    # 预先下载 trusted-firmware-a（避免后续404错误）
-    log "🔧 预先下载 trusted-firmware-a..."
-    local tf_version="2.9"
-    local tf_urls=(
-        "https://github.com/ARM-software/arm-trusted-firmware/archive/refs/tags/v${tf_version}.tar.gz"
-        "https://codeload.github.com/ARM-software/arm-trusted-firmware/tar.gz/refs/tags/v${tf_version}"
-        "https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/snapshot/v${tf_version}.tar.gz"
-    )
-    
-    for url in "${tf_urls[@]}"; do
-        if [ ! -f "dl/trusted-firmware-a-${tf_version}.tar.gz" ]; then
-            log "  尝试下载: $url"
-            curl -L --connect-timeout 30 --retry 3 -o "dl/trusted-firmware-a-${tf_version}.tar.gz" "$url" 2>/dev/null && {
-                log "  ✅ trusted-firmware-a 下载成功"
-                break
-            }
-        else
-            log "  ✅ trusted-firmware-a 已存在"
-            break
+    if [ -d "$BUILD_DIR" ]; then
+        log "检查是否有需要保留的文件..."
+        
+        if [ -f "$BUILD_DIR/.config" ]; then
+            log "备份配置文件..."
+            mkdir -p $BACKUP_DIR
+            local backup_file="$BACKUP_DIR/config_$(date +%Y%m%d_%H%M%S).config"
+            cp "$BUILD_DIR/.config" "$backup_file"
+            log "✅ 配置文件备份到: $backup_file"
         fi
-    done
-    
-    log "开始下载依赖包..."
-    make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
-    
-    # 使用 -name 条件，不加括号
-    local downloaded_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
-    log "下载后依赖包数量: $downloaded_deps 个"
-    
-    if [ $downloaded_deps -gt $existing_deps ]; then
-        log "✅ 成功下载了 $((downloaded_deps - existing_deps)) 个新依赖包"
+        
+        if [ -f "$BUILD_DIR/build.log" ]; then
+            log "备份编译日志..."
+            mkdir -p $BACKUP_DIR
+            cp "$BUILD_DIR/build.log" "$BACKUP_DIR/build_$(date +%Y%m%d_%H%M%S).log"
+        fi
+        
+        log "清理构建目录: $BUILD_DIR"
+        sudo rm -rf $BUILD_DIR || log "⚠️ 清理构建目录失败"
+        log "✅ 构建目录已清理"
     else
-        log "ℹ️ 没有下载新的依赖包"
+        log "ℹ️ 构建目录不存在，无需清理"
     fi
-    
-    if grep -q "ERROR|Failed|404" download.log 2>/dev/null; then
-        log "⚠️ 下载过程中发现错误:"
-        grep -E "ERROR|Failed|404" download.log | head -10
-    fi
-    
-    log "✅ 依赖包下载完成"
 }
 #【build_firmware_main.sh-21-end】
 
@@ -3645,324 +3422,52 @@ workflow_step07_create_build_dir() {
 
 #【build_firmware_main.sh-25】
 # ============================================
-# 步骤25: 编译固件
-# 对应 firmware-build.yml 步骤25
+# 步骤08: 初始化构建环境
+# 对应 firmware-build.yml 步骤08
 # ============================================
-workflow_step25_build_firmware() {
-    local enable_parallel="$1"
+workflow_step08_initialize_build_env() {
+    local device_name="$1"
+    local version_selection="$2"
+    local config_mode="$3"
     
-    log "=== 步骤25: 编译固件 ==="
-    log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "=== 步骤08: 初始化构建环境 ==="
     
     set -e
-    trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
     
-    # 关键修复：重新进入构建目录并确认 Makefile 存在
-    cd $BUILD_DIR
-    log "当前构建目录: $(pwd)"
+    initialize_build_env "$device_name" "$version_selection" "$config_mode"
     
-    # 如果 Makefile 不存在，从源码根目录复制
-    if [ ! -f "Makefile" ]; then
-        log "⚠️ Makefile 不存在，尝试从源码根目录恢复..."
-        if [ -f "$REPO_ROOT/Makefile" ]; then
-            cp "$REPO_ROOT/Makefile" Makefile
-            log "✅ 从仓库根目录恢复 Makefile"
-        else
-            log "❌ 无法恢复 Makefile，列出当前目录内容:"
-            ls -la
-            exit 1
-        fi
-    fi
+    # ============================================
+    # 修复文件描述符限制
+    # ============================================
+    log "🔧 检查和修复文件描述符限制..."
     
-    # 确保 include/toplevel.mk 存在
-    if [ ! -f "include/toplevel.mk" ]; then
-        log "❌ include/toplevel.mk 不存在，构建环境损坏"
-        log "当前目录内容:"
-        ls -la
-        exit 1
-    fi
-    
-    ulimit -n 65536 2>/dev/null || true
+    # 获取当前限制
     local current_limit=$(ulimit -n)
-    log "  ✅ 当前文件描述符限制: $current_limit"
+    log "  当前文件描述符限制: $current_limit"
     
-    # ============================================
-    # 修复 trusted-firmware-a 源码（在编译前）
-    # ============================================
-    log "🔧 修复 trusted-firmware-a 源码（编译前）..."
-    
-    local TF_VERSION="2.9"
-    local TF_DIR="$BUILD_DIR/build_dir/hostpkg/trusted-firmware-a-$TF_VERSION"
-    local TF_GIT_URL="https://github.com/ARM-software/arm-trusted-firmware.git"
-    
-    mkdir -p "$BUILD_DIR/build_dir/hostpkg"
-    
-    if [ ! -d "$TF_DIR/tools/fiptool" ]; then
-        log "  🔧 检测到 trusted-firmware-a 源码不完整，重新下载..."
-        rm -rf "$TF_DIR" 2>/dev/null || true
-        cd "$BUILD_DIR/build_dir/hostpkg"
-        git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone.log
+    # 如果限制小于65536，尝试提高
+    if [ $current_limit -lt 65536 ]; then
+        log "  文件描述符限制过低，尝试提高到65536..."
+        ulimit -n 65536 2>/dev/null || {
+            log "  ⚠️ 无法直接提高限制，尝试使用sudo..."
+            sudo ulimit -n 65536 2>/dev/null || true
+        }
         
-        if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
-            log "  ✅ trusted-firmware-a 源码下载成功"
+        # 再次检查
+        local new_limit=$(ulimit -n)
+        log "  新的文件描述符限制: $new_limit"
+        
+        if [ $new_limit -lt 4096 ]; then
+            log "  ⚠️ 警告：文件描述符限制仍过低，可能会遇到'Broken pipe'错误"
         else
-            log "  ⚠️ git clone 失败，继续..."
+            log "  ✅ 文件描述符限制已优化"
         fi
-        touch "$TF_DIR/.built" 2>/dev/null || true
     else
-        log "  ✅ trusted-firmware-a 源码已存在"
-        touch "$TF_DIR/.built" 2>/dev/null || true
+        log "  ✅ 文件描述符限制足够"
     fi
     
-    # 删除有问题的补丁
-    local patches_dir="package/boot/arm-trusted-firmware-tools/patches"
-    if [ -d "$patches_dir" ]; then
-        log "  🗑️ 删除补丁目录: $patches_dir"
-        rm -rf "$patches_dir"
-    fi
-    
-    log "  ✅ trusted-firmware-a 修复完成"
-    
-    log "🔧 创建双固件保护脚本..."
-    local protect_dir="$BUILD_DIR/.firmware_protect"
-    mkdir -p "$protect_dir"
-    
-    cat > "$protect_dir/protect.sh" << 'EOF'
-#!/bin/bash
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-LOG_FILE="$PROTECT_DIR/protect.log"
-echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
-while true; do
-    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
-    for tmp_dir in $TMP_DIRS; do
-        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
-            if [ -f "$file" ]; then
-                backup="$PROTECT_DIR/$(basename "$file").backup"
-                cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份 $(basename "$file")" >> "$LOG_FILE"
-            fi
-        done
-    done
-    sleep 5
-done
-EOF
-    chmod +x "$protect_dir/protect.sh"
-    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
-    local protect_pid=$!
-    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
-    
-    cat > "$protect_dir/recover.sh" << 'EOF'
-#!/bin/bash
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-if [ -f "$BUILD_DIR/build_env.sh" ]; then
-    source "$BUILD_DIR/build_env.sh"
-fi
-TARGET="${TARGET:-ath79}"
-SUBTARGET="${SUBTARGET:-generic}"
-TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-mkdir -p "$TARGET_DIR"
-echo "=== 强制恢复开始于 $(date) ==="
-echo "目标平台: $TARGET/$SUBTARGET"
-RECOVERED=0
-find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
-    filename=$(basename "$backup" .backup)
-    if [ ! -f "$TARGET_DIR/$filename" ]; then
-        cp -f "$backup" "$TARGET_DIR/$filename"
-        echo "  ✅ 恢复: $filename"
-        RECOVERED=$((RECOVERED + 1))
-    fi
-done
-echo "📊 恢复文件数: $RECOVERED"
-echo "=== 强制恢复结束 ==="
-EOF
-    chmod +x "$protect_dir/recover.sh"
-    
-    CPU_CORES=$(nproc)
-    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
-    
-    echo ""
-    echo "🔧 系统信息:"
-    echo "  CPU核心数: $CPU_CORES"
-    echo "  内存大小: ${TOTAL_MEM}MB"
-    echo "  源码类型: $SOURCE_REPO_TYPE"
-    
-    local make_args="V=s"
-    case "$SOURCE_REPO_TYPE" in
-        "openwrt"|"lede")
-            make_args="V=s FORCE_UNSAFE_CONFIGURE=1"
-            ;;
-        "immortalwrt")
-            make_args="V=s"
-            ;;
-    esac
-    
-    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
-        if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
-            MAKE_JOBS=4
-        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
-            MAKE_JOBS=2
-        else
-            MAKE_JOBS=1
-        fi
-        log "🚀 使用 $MAKE_JOBS 个并行任务"
-    else
-        MAKE_JOBS=1
-        log "⚠️ 使用单线程编译"
-    fi
-    
-    # 运行 defconfig 确保配置正确
-    log "🔧 运行 make defconfig..."
-    make defconfig > /tmp/build-logs/defconfig_before_build.log 2>&1 || {
-        log "⚠️ make defconfig 有警告，但继续"
-    }
-    
-    local max_attempts=3
-    local attempt=1
-    local compile_success=0
-    
-    while [ $attempt -le $max_attempts ] && [ $compile_success -eq 0 ]; do
-        echo ""
-        echo "🚀 编译尝试 $attempt/$max_attempts (make -j$MAKE_JOBS)"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        START_TIME=$(date +%s)
-        
-        set +e
-        make -j$MAKE_JOBS $make_args 2>&1 | tee build_phase1_attempt${attempt}.log
-        PHASE1_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
-        
-        PHASE1_END=$(date +%s)
-        PHASE1_DURATION=$((PHASE1_END - START_TIME))
-        
-        echo ""
-        echo "✅ 尝试 $attempt 完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
-        
-        if [ $PHASE1_EXIT_CODE -eq 0 ]; then
-            compile_success=1
-            break
-        fi
-        
-        local log_file="build_phase1_attempt${attempt}.log"
-        
-        if [ -f "$log_file" ]; then
-            if grep -q "trusted-firmware-a.*No such file\|tools/fiptool.*No such file" "$log_file"; then
-                log "  ⚠️ 检测到 trusted-firmware-a 源码缺失，重新修复..."
-                rm -rf "$TF_DIR"
-                cd "$BUILD_DIR/build_dir/hostpkg"
-                git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION"
-                touch "$TF_DIR/.built"
-                log "  ✅ trusted-firmware-a 重新修复完成"
-            fi
-            
-            if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
-                log "  ⚠️ 检测到 package/install 错误，尝试修复..."
-                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
-                find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
-                    rm -rf "$ipkg_dir"
-                done
-                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
-                log "  ✅ package/install 错误修复完成"
-            fi
-            
-            if grep -q "Broken pipe" "$log_file"; then
-                ulimit -n 65536 2>/dev/null || true
-            fi
-        fi
-        
-        attempt=$((attempt + 1))
-    done
-    
-    if [ $compile_success -eq 0 ]; then
-        echo ""
-        echo "❌❌❌ 编译失败，已尝试 $max_attempts 次 ❌❌❌"
-        bash "$protect_dir/recover.sh" "$protect_dir" "$BUILD_DIR"
-        kill $protect_pid 2>/dev/null || true
-        rm -rf "$protect_dir" 2>/dev/null || true
-        exit $PHASE1_EXIT_CODE
-    fi
-    
-    echo ""
-    echo "🚀 第二阶段：单线程生成最终固件"
-    echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-    echo ""
-    
-    PHASE2_START=$(date +%s)
-    
-    set +e
-    make -j1 $make_args 2>&1 | tee -a build_phase2.log
-    BUILD_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
-    
-    PHASE2_END=$(date +%s)
-    PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
-    TOTAL_DURATION=$((PHASE2_END - START_TIME))
-    
-    echo ""
-    echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
-    echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
-    
-    cat build_phase1_attempt*.log build_phase2.log > build.log
-    
-    kill $protect_pid 2>/dev/null || true
-    log "🔧 双固件保护已停止"
-    
-    log "🔍 验证固件..."
-    
-    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-    local valid_firmware=0
-    local firmware_files=()
-    
-    if [ -d "$target_dir" ]; then
-        while IFS= read -r file; do
-            [ -n "$file" ] && firmware_files+=("$file")
-        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums")
-        
-        for file in "${firmware_files[@]}"; do
-            local fname=$(basename "$file")
-            local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
-            local size_mb=$((size_bytes / 1024 / 1024))
-            
-            local is_flashable=0
-            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
-                is_flashable=1
-            fi
-            
-            if [ $size_mb -ge 5 ]; then
-                if [ $is_flashable -eq 1 ]; then
-                    log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
-                    valid_firmware=$((valid_firmware + 1))
-                else
-                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件，将删除"
-                    rm -f "$file"
-                fi
-            else
-                log "  ❌ $fname 大小: ${size_mb}MB - 无效，将删除"
-                rm -f "$file"
-            fi
-        done
-        
-        log "🔧 清理非必要的固件文件..."
-        find "$target_dir" -type f \( -name "*initramfs*" -o -name "*preloader*" -o -name "*gpt*" -o -name "*kernel*" -o -name "*rootfs*" \) 2>/dev/null | while read file; do
-            log "  🗑️ 删除: $(basename "$file")"
-            rm -f "$file"
-        done
-    fi
-    
-    if [ $valid_firmware -eq 0 ]; then
-        log "❌ 错误：没有找到任何有效可刷机固件"
-        exit 1
-    else
-        log "✅ 找到 $valid_firmware 个有效可刷机固件"
-    fi
-    
-    rm -rf "$protect_dir" 2>/dev/null || true
-    
-    log "✅ 步骤25 完成"
+    log "✅ 步骤08 完成"
 }
 #【build_firmware_main.sh-25-end】
 
@@ -5453,132 +4958,50 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # ============================================
-    # 强制修复 trusted-firmware-a 源码（在编译前）
-    # ============================================
-    log "🔧 强制修复 trusted-firmware-a 源码（编译前）..."
+    log "🔧 根据平台决定 smartdns 处理策略..."
+    local disable_smartdns=0
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom|mediatek|ramips)
+            log "  ⚠️ 平台 $TARGET 已知 smartdns 编译问题，将彻底删除 smartdns"
+            disable_smartdns=1
+            ;;
+        *)
+            log "  ✅ 平台 $TARGET 支持 smartdns，保留"
+            disable_smartdns=0
+            ;;
+    esac
     
-    local TF_VERSION="2.9"
-    local TF_DIR="$BUILD_DIR/build_dir/hostpkg/trusted-firmware-a-$TF_VERSION"
-    local TF_GIT_URL="https://github.com/ARM-software/arm-trusted-firmware.git"
-    
-    # 确保目录存在
-    mkdir -p "$BUILD_DIR/build_dir/hostpkg"
-    
-    # 如果目录不存在或不完整，强制重新下载
-    if [ ! -d "$TF_DIR/tools/fiptool" ]; then
-        log "  🔧 检测到 trusted-firmware-a 源码不完整，强制重新下载..."
+    if [ $disable_smartdns -eq 1 ]; then
+        log "🔧 彻底删除 smartdns 源文件和构建目录..."
+        find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 package/feeds: $dir"
+            rm -rf "$dir"
+        done
+        find package -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 package: $dir"
+            rm -rf "$dir"
+        done
+        find feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 feeds: $dir"
+            rm -rf "$dir"
+        done
+        find build_dir -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 build_dir: $dir"
+            rm -rf "$dir"
+        done
         
-        # 删除不完整的目录
-        rm -rf "$TF_DIR" 2>/dev/null || true
-        
-        # 使用 git clone 获取完整源码
-        cd "$BUILD_DIR/build_dir/hostpkg"
-        log "  📥 git clone --depth 1 --branch v$TF_VERSION $TF_GIT_URL"
-        git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone.log
-        
-        if [ $? -eq 0 ] && [ -d "$TF_DIR/tools/fiptool" ]; then
-            log "  ✅ trusted-firmware-a 源码下载成功，tools/fiptool 存在"
-        else
-            log "  ⚠️ git clone 失败，尝试完整 clone..."
-            rm -rf "$TF_DIR"
-            git clone --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION" 2>&1 | tee /tmp/tf-clone-full.log
-            if [ -d "$TF_DIR/tools/fiptool" ]; then
-                log "  ✅ 完整 clone 成功"
-            else
-                log "  ❌ trusted-firmware-a 源码下载失败"
-                exit 1
-            fi
+        log "  🔧 在 .config 中禁用 smartdns..."
+        if [ -f ".config" ]; then
+            sed -i '/CONFIG_PACKAGE_smartdns/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-smartdns/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-i18n-smartdns/d' .config
+            echo "# CONFIG_PACKAGE_smartdns is not set" >> .config
+            echo "# CONFIG_PACKAGE_luci-app-smartdns is not set" >> .config
+            sort -u .config -o .config
         fi
         
-        # 创建 .built 标记，让 OpenWrt 认为已准备就绪
-        touch "$TF_DIR/.built" 2>/dev/null || true
-        log "  ✅ 创建 .built 标记文件"
-    else
-        log "  ✅ trusted-firmware-a 源码已存在且完整"
-        # 确保 .built 标记存在
-        touch "$TF_DIR/.built" 2>/dev/null || true
+        log "  ✅ smartdns 已彻底删除"
     fi
-    
-    # 修复 arm-trusted-firmware-tools 的 Makefile，使用正确的路径
-    local tools_makefile="package/boot/arm-trusted-firmware-tools/Makefile"
-    if [ -f "$tools_makefile" ]; then
-        log "  🔧 修复 arm-trusted-firmware-tools Makefile..."
-        cp "$tools_makefile" "$tools_makefile.bak.$(date +%Y%m%d%H%M%S)"
-        
-        # 修改 PKG_SOURCE 为本地路径
-        cat > "$tools_makefile" << 'EOF'
-#
-# Copyright (C) 2021-2022 OpenWrt.org
-#
-# This is free software, licensed under the GNU General Public License v2.
-# See /LICENSE for more information.
-#
-
-include $(TOPDIR)/rules.mk
-
-PKG_NAME:=trusted-firmware-a-tools
-PKG_VERSION:=2.9
-PKG_RELEASE:=1
-
-PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/ARM-software/arm-trusted-firmware.git
-PKG_SOURCE_VERSION:=v$(PKG_VERSION)
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-
-PKG_BUILD_DIR:=$(BUILD_DIR)/hostpkg/trusted-firmware-a-$(PKG_VERSION)
-
-PKG_LICENSE:=BSD-3-Clause
-PKG_LICENSE_FILES:=license.rst
-
-include $(INCLUDE_DIR)/host-build.mk
-
-define Host/Prepare
-        # 源码已在 build_dir/hostpkg 中，无需额外准备
-endef
-
-define Host/Configure
-        # 无需配置
-endef
-
-define Host/Compile
-        $(MAKE) -C $(PKG_BUILD_DIR)/tools/fiptool \
-                CPPFLAGS="$(HOST_CPPFLAGS)" \
-                LDFLAGS="$(HOST_LDFLAGS)" \
-                HOSTCC="$(HOSTCC)" \
-                HOSTCFLAGS="$(HOST_CFLAGS)"
-endef
-
-define Host/Install
-        $(INSTALL_BIN) $(PKG_BUILD_DIR)/tools/fiptool/fiptool $(STAGING_DIR_HOST)/bin/
-endef
-
-$(eval $(call HostBuild))
-EOF
-        log "  ✅ 已重写 arm-trusted-firmware-tools Makefile"
-    fi
-    
-    # 删除可能存在的补丁目录
-    local patches_dir="package/boot/arm-trusted-firmware-tools/patches"
-    if [ -d "$patches_dir" ]; then
-        log "  🗑️ 删除补丁目录: $patches_dir"
-        rm -rf "$patches_dir"
-    fi
-    
-    # 修改 arm-trusted-firmware-mediatek 的 Makefile，避免依赖问题
-    local mediatek_makefile="package/boot/arm-trusted-firmware-mediatek/Makefile"
-    if [ -f "$mediatek_makefile" ]; then
-        log "  🔧 修复 arm-trusted-firmware-mediatek Makefile..."
-        cp "$mediatek_makefile" "$mediatek_makefile.bak.$(date +%Y%m%d%H%M%S)"
-        
-        # 添加依赖确保 tools 先编译
-        sed -i 's|PKG_BUILD_DEPENDS:=|PKG_BUILD_DEPENDS:=arm-trusted-firmware-tools/host |g' "$mediatek_makefile" 2>/dev/null || true
-    fi
-    
-    log "  ✅ trusted-firmware-a 修复完成"
-    
-    # smartdns 不再自动禁用，保留给用户使用
-    log "  ℹ️ smartdns 保留，根据用户配置决定是否编译"
     
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
@@ -5595,7 +5018,7 @@ echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
 while true; do
     TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
     for tmp_dir in $TMP_DIRS; do
-        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.itb" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
                 backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
@@ -5708,22 +5131,6 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            if grep -q "trusted-firmware-a.*No such file\|tools/fiptool.*No such file" "$log_file"; then
-                log "  ⚠️ 检测到 trusted-firmware-a 源码缺失，重新修复..."
-                
-                # 强制重新下载
-                rm -rf "$TF_DIR"
-                cd "$BUILD_DIR/build_dir/hostpkg"
-                git clone --depth 1 --branch "v$TF_VERSION" "$TF_GIT_URL" "trusted-firmware-a-$TF_VERSION"
-                touch "$TF_DIR/.built"
-                
-                # 清除标记，强制重新编译
-                rm -f staging_dir/hostpkg/stamp/.trusted-firmware-a-tools_* 2>/dev/null || true
-                rm -f staging_dir/hostpkg/stamp/.arm-trusted-firmware-tools_* 2>/dev/null || true
-                
-                log "  ✅ trusted-firmware-a 重新修复完成"
-            fi
-            
             if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
                 
@@ -5743,11 +5150,27 @@ EOF
                 log "  ✅ package/install 错误修复完成"
             fi
             
-            # smartdns 编译错误处理改为可选的警告，而不是自动删除
-            if grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*dns.c\|smartdns.*util.c\|smartdns.*tlog.c" "$log_file"; then
-                log "  ⚠️ 检测到 smartdns 编译错误"
-                log "  ℹ️ 请检查 smartdns 配置，或通过 FORBIDDEN_PACKAGES 环境变量禁用 smartdns"
-                log "  ℹ️ 继续编译，如果失败请考虑禁用 smartdns"
+            if [ $disable_smartdns -eq 1 ] && grep -q "smartdns.*No such file\|smartdns.*cannot stat\|smartdns.*dns.c\|smartdns.*util.c\|smartdns.*tlog.c" "$log_file"; then
+                log "  ⚠️ 检测到 smartdns 编译错误，强制删除..."
+                
+                find build_dir -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    删除 smartdns 构建目录: $dir"
+                    rm -rf "$dir"
+                done
+                
+                find package/feeds -type d -name "*smartdns*" 2>/dev/null | while read dir; do
+                    log "    删除 smartdns 源码目录: $dir"
+                    rm -rf "$dir"
+                done
+                
+                if [ -f ".config" ]; then
+                    sed -i '/CONFIG_PACKAGE_smartdns/d' .config
+                    sed -i '/CONFIG_PACKAGE_luci-app-smartdns/d' .config
+                    echo "# CONFIG_PACKAGE_smartdns is not set" >> .config
+                    sort -u .config -o .config
+                fi
+                
+                log "  ✅ smartdns 已删除，将继续编译"
             fi
             
             if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
@@ -5871,7 +5294,7 @@ EOF
     if [ -d "$target_dir" ]; then
         while IFS= read -r file; do
             [ -n "$file" ] && firmware_files+=("$file")
-        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums")
+        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | grep -v "sha256sums")
         
         for file in "${firmware_files[@]}"; do
             local fname=$(basename "$file")
@@ -5879,7 +5302,7 @@ EOF
             local size_mb=$((size_bytes / 1024 / 1024))
             
             local is_flashable=0
-            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
+            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]] || [[ "$fname" == *".itb" && "$fname" != *"initramfs"* ]]; then
                 is_flashable=1
             fi
             
@@ -5888,20 +5311,12 @@ EOF
                     log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
                     valid_firmware=$((valid_firmware + 1))
                 else
-                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件，将删除"
-                    rm -f "$file"
+                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
                 fi
             else
-                log "  ❌ $fname 大小: ${size_mb}MB - 无效，将删除"
+                log "  ❌ $fname 大小: ${size_mb}MB - 无效"
                 rm -f "$file"
             fi
-        done
-        
-        # 清理所有非 factory 和 sysupgrade 的 .bin 文件
-        log "🔧 清理非必要的固件文件..."
-        find "$target_dir" -type f \( -name "*initramfs*" -o -name "*preloader*" -o -name "*gpt*" -o -name "*kernel*" -o -name "*rootfs*" \) 2>/dev/null | while read file; do
-            log "  🗑️ 删除: $(basename "$file")"
-            rm -f "$file"
         done
     fi
     
@@ -5940,11 +5355,15 @@ workflow_step26_check_artifacts() {
         echo "=========================================="
         
         local sysupgrade_count=0
+        local initramfs_count=0
         local factory_count=0
+        local itb_count=0
+        local preloader_count=0
+        local gpt_count=0
         local other_count=0
         
         # 先收集所有文件，避免管道中的子shell问题
-        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums" | sort)
+        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" -o -name "*.tar" -o -name "*.gz" \) 2>/dev/null | grep -v "sha256sums" | sort)
         
         # 遍历所有文件
         while IFS= read -r file; do
@@ -5954,30 +5373,93 @@ workflow_step26_check_artifacts() {
             FILE_NAME=$(basename "$file")
             FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
             
-            # 只保留 sysupgrade 和 factory 文件
+            # 判断文件类型并添加注释
             if echo "$FILE_NAME" | grep -q "sysupgrade"; then
-                echo "  ✅ $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
-                echo ""
-                sysupgrade_count=$((sysupgrade_count + 1))
+                if echo "$FILE_NAME" | grep -q "\.itb$"; then
+                    echo "  ✅ $FILE_NAME (FIT格式)"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🚀 刷机用 - FIT格式固件，通过 sysupgrade 命令刷入"
+                    echo "    注释: *sysupgrade.itb - 刷机用"
+                    echo ""
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                else
+                    echo "  ✅ $FILE_NAME"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
+                    echo "    注释: *sysupgrade.bin - 刷机用"
+                    echo ""
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                fi
             elif echo "$FILE_NAME" | grep -q "factory"; then
                 echo "  🏭 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
                 echo "    用途: 📦 原厂刷机 - 用于从原厂固件第一次刷入 OpenWrt"
+                echo "    注释: *factory.img/*factory.bin - 原厂刷机用"
                 echo ""
                 factory_count=$((factory_count + 1))
+            elif echo "$FILE_NAME" | grep -q "initramfs"; then
+                if echo "$FILE_NAME" | grep -q "\.itb$"; then
+                    echo "  🔷 $FILE_NAME (FIT格式)"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🆘 FIT格式恢复镜像 - 用于支持FIT的引导加载程序"
+                    echo "    注释: *initramfs-recovery.itb - 恢复用"
+                    itb_count=$((itb_count + 1))
+                else
+                    echo "  🔷 $FILE_NAME"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🆘 恢复用 - 内存启动镜像，不写入闪存"
+                    echo "    注释: *initramfs-kernel.bin - 恢复用"
+                    initramfs_count=$((initramfs_count + 1))
+                fi
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "preloader"; then
+                echo "  ⚙️ $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🔧 预加载器 - 用于启动引导程序"
+                echo "    注释: *preloader.bin - 引导加载程序"
+                echo ""
+                preloader_count=$((preloader_count + 1))
+            elif echo "$FILE_NAME" | grep -q "gpt"; then
+                echo "  💽 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 📋 GPT分区表 - 用于eMMC分区"
+                echo "    注释: *gpt.bin - 分区表"
+                echo ""
+                gpt_count=$((gpt_count + 1))
+            elif echo "$FILE_NAME" | grep -q "kernel"; then
+                echo "  🔶 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🧩 内核镜像 - 仅包含内核，不包含根文件系统"
+                echo ""
+                other_count=$((other_count + 1))
+            elif echo "$FILE_NAME" | grep -q "rootfs"; then
+                echo "  📦 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🗄️ 根文件系统 - 仅包含根文件系统，不包含内核"
+                echo ""
+                other_count=$((other_count + 1))
+            elif echo "$FILE_NAME" | grep -q "sha256sums"; then
+                # 跳过校验和文件
+                continue
+            elif echo "$FILE_NAME" | grep -q "Packages\.gz"; then
+                # 跳过软件包索引文件
+                continue
             else
                 echo "  📄 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
-                echo "    用途: ❓ 其他文件 - 将被删除"
+                echo "    用途: ❓ 其他文件"
                 echo ""
                 other_count=$((other_count + 1))
-                # 删除非必要的文件
-                rm -f "$file"
             fi
         done <<< "$all_files"
         
@@ -5986,8 +5468,12 @@ workflow_step26_check_artifacts() {
         echo "📊 固件统计:"
         echo "----------------------------------------"
         echo "  ✅ sysupgrade固件: $sysupgrade_count 个 - 🚀 **刷机用**"
+        echo "  🔷 initramfs恢复镜像: $initramfs_count 个 - 🆘 **传统恢复用**"
+        echo "  🔷 FIT恢复镜像: $itb_count 个 - 🆘 **FIT格式恢复用**"
         echo "  🏭 factory镜像: $factory_count 个 - 📦 **原厂刷机用**"
-        echo "  🗑️ 已删除其他文件: $other_count 个"
+        echo "  ⚙️ preloader: $preloader_count 个 - 🔧 **引导加载程序**"
+        echo "  💽 GPT分区表: $gpt_count 个 - 📋 **eMMC分区表**"
+        echo "  📦 其他文件: $other_count 个"
         echo "----------------------------------------"
         echo ""
         
@@ -6002,17 +5488,16 @@ workflow_step26_check_artifacts() {
         local total_size_mb=0
         local firmware_list=()
         
-        # 重新扫描，只收集 sysupgrade 和 factory 文件
-        local remaining_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums" | sort)
-        
+        # 收集所有可刷机固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
-            if [[ "$file" == *"sysupgrade"* ]] || [[ "$file" == *"factory"* ]]; then
+            if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"sysupgrade.itb" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
                 local fname=$(basename "$file")
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
                 local fsize_human=$(ls -lh "$file" | awk '{print $5}')
                 
+                # 检查文件类型
                 local ftype=""
                 if [[ "$fname" == *"sysupgrade"* ]]; then
                     ftype="sysupgrade"
@@ -6022,7 +5507,7 @@ workflow_step26_check_artifacts() {
                 
                 firmware_list+=("$ftype:$fname:$fsize_mb:$fsize_human:$file")
             fi
-        done <<< "$remaining_files"
+        done <<< "$all_files"
         
         # 验证固件大小
         echo "📋 固件大小验证结果:"
@@ -6074,8 +5559,12 @@ workflow_step26_check_artifacts() {
         
         # 重要提示
         echo "🔔 固件类型说明:"
-        echo "  ✅ *sysupgrade.bin - **刷机用** (已安装OpenWrt时升级)"
-        echo "  🏭 *factory.img/*.bin - **原厂刷机用** (从原厂固件第一次刷入)"
+        echo "  ✅ *sysupgrade.bin/*.itb - **刷机用** (已安装OpenWrt时升级)"
+        echo "  🔷 *initramfs-*.bin        - **传统恢复用** (内存启动，用于恢复)"
+        echo "  🔷 *initramfs-*.itb        - **FIT格式恢复** (适用于支持FIT的引导程序)"
+        echo "  🏭 *factory.img/*.bin      - **原厂刷机用** (从原厂固件第一次刷入)"
+        echo "  ⚙️ *preloader.bin          - **引导预加载器** (写入特定分区)"
+        echo "  💽 *gpt.bin                - **GPT分区表** (用于eMMC)"
         echo ""
         
         # 检测缺少的固件类型
@@ -6115,10 +5604,23 @@ workflow_step26_check_artifacts() {
                 printf "  📌 %-60s %s %s %s\n" "$fname" "$fsize_human" "$ftype_display" "$status"
                 flashable_count=$((flashable_count + 1))
             fi
-        done
+        done | head -20
+        
+        # 修复：这里不应该再打印"没有找到可刷机的固件文件"
+        # 因为上面已经显示了固件列表
         
         if [ $flashable_count -eq 0 ]; then
             echo "  ⚠️ 没有找到可刷机的固件文件"
+            
+            # 尝试查找initramfs作为替代
+            while IFS= read -r file; do
+                [ -z "$file" ] && continue
+                if [[ "$file" == *"initramfs"* ]]; then
+                    local fname=$(basename "$file")
+                    local fsize=$(ls -lh "$file" | awk '{print $5}')
+                    printf "  🔷 %-60s %s [恢复用]\n" "$fname" "$fsize"
+                fi
+            done <<< "$all_files" | head -5
         fi
         
         echo "----------------------------------------"
@@ -6128,19 +5630,24 @@ workflow_step26_check_artifacts() {
         if [ $valid_sysupgrade -gt 0 ]; then
             echo "📝 刷机建议:"
             echo "   如果您已经安装了OpenWrt，请使用 sysupgrade 固件文件"
-            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin"
+            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin 或 *sysupgrade.itb"
         elif [ $valid_factory -gt 0 ]; then
             echo "📝 刷机建议:"
             echo "   如果您是从原厂固件第一次刷入，请使用 factory.img 文件"
             echo "   通过路由器原厂Web界面刷入"
+        elif [ $initramfs_count -gt 0 ] || [ $itb_count -gt 0 ]; then
+            echo "📝 刷机建议:"
+            echo "   没有找到sysupgrade或factory固件，但找到了initramfs恢复镜像"
+            echo "   initramfs是内存启动镜像，可用于恢复系统，但不能永久刷入"
+            echo "   如需永久刷入，需要先启动initramfs，然后在系统中刷入sysupgrade"
         fi
         
         # 如果是RAX3000M，提供特定说明
         if [[ "$TARGET" == "mediatek" ]] && [[ "$SUBTARGET" == "filogic" ]]; then
             echo ""
             echo "📌 适用于 CMCC RAX3000M 的说明:"
-            echo "   - NAND版本: 使用 sysupgrade.bin 进行刷机"
-            echo "   - eMMC版本: 使用 sysupgrade.bin 进行刷机"
+            echo "   - NAND版本: 使用 nand-preloader.bin 和 sysupgrade.itb"
+            echo "   - eMMC版本: 使用 emmc-gpt.bin, emmc-preloader.bin 和 sysupgrade.itb"
             echo "   - 刷机前请确认您的硬件版本"
         fi
         
@@ -6388,12 +5895,16 @@ quick_error_check() {
                     ftype="sysupgrade"
                 elif [[ "$fname" == *"factory"* ]]; then
                     ftype="factory"
+                elif [[ "$fname" == *"initramfs"* ]]; then
+                    ftype="initramfs"
+                elif [[ "$fname" == *".itb" ]]; then
+                    ftype="fit"
                 else
                     ftype="other"
                 fi
                 
                 local is_flashable=0
-                if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
+                if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]] || [[ "$ftype" == "fit" ]]; then
                     is_flashable=1
                 fi
                 
@@ -6407,7 +5918,7 @@ quick_error_check() {
                 else
                     echo "❌ $fname - ${fsize_human} (${fsize_mb}MB) - 无效(小于5MB)"
                 fi
-            done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums" | sort)
+            done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | grep -v "sha256sums" | sort)
             
             if [ $found_firmware -eq 0 ]; then
                 echo "❌ 未找到任何固件文件"
