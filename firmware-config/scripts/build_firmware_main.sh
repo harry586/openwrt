@@ -711,6 +711,55 @@ add_turboacc_support() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
+    # 修复 OpenWrt 官方源码的内核编译错误
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "🔧 修复 OpenWrt 官方源码的内核编译错误..."
+        
+        # 删除有问题的 mmc/sdhci-msm 补丁
+        local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+        
+        if [ -f "$problem_patch" ]; then
+            log "  🗑️ 删除有问题的补丁: $problem_patch"
+            rm -f "$problem_patch"
+        fi
+        
+        # 也删除任何 .disabled 版本
+        if [ -f "$problem_patch.disabled" ]; then
+            log "  🗑️ 删除 disabled 补丁: $problem_patch.disabled"
+            rm -f "$problem_patch.disabled"
+        fi
+        
+        # 直接修复内核源码中的函数（添加 __maybe_unused 属性）
+        local kernel_file="build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/linux-5.15.198/drivers/mmc/host/sdhci-msm.c"
+        
+        # 如果内核源码已经解压，直接修复
+        if [ -f "$kernel_file" ]; then
+            log "  🔧 修复内核源码: $kernel_file"
+            sed -i 's/static void sdhci_msm_set_clock(/static void __maybe_unused sdhci_msm_set_clock(/' "$kernel_file"
+            log "  ✅ 内核源码已修复"
+        fi
+        
+        log "  ✅ OpenWrt 官方源码内核编译错误修复完成"
+    fi
+    
+    # ============================================
+    # 修复 ImmortalWrt 源码的补丁问题
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
+        log "🔧 修复 ImmortalWrt 源码的补丁问题..."
+        
+        local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+        
+        if [ -f "$problem_patch" ]; then
+            log "  🗑️ 删除有问题的补丁: $problem_patch"
+            rm -f "$problem_patch"
+        fi
+        
+        log "  ✅ ImmortalWrt 补丁修复完成"
+    fi
+    
+    # ============================================
     # 彻底修复所有下载源
     # ============================================
     log "🔧 彻底修复所有下载源..."
@@ -740,7 +789,6 @@ EOF
     find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
         if [ -f "$dir/Makefile" ]; then
             cp "$dir/Makefile" "$dir/Makefile.bak"
-            # 替换为可用的下载源
             sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
             sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
             log "  ✅ 修复 libxml2 下载源"
@@ -893,27 +941,6 @@ EOF
     ./scripts/feeds update -a || {
         log "⚠️ feeds更新有警告，尝试继续..."
     }
-    
-    log "=== 删除有问题的包（在安装前） ==="
-    
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码：删除有依赖问题的 vsftpd 相关包"
-        
-        find package/feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package/feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        find feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        find package -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package 目录: $dir"
-            rm -rf "$dir"
-        done
-    fi
     
     log "=== 安装Feeds ==="
     ./scripts/feeds install -a || {
@@ -5241,7 +5268,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（自动修复补丁问题） ==="
+    log "=== 步骤25: 编译固件（修复版） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -5351,27 +5378,57 @@ EOF
     fi
     
     # ============================================
-    # 预删除已知有问题的补丁
+    # OpenWrt 官方源码特殊处理：修复内核编译错误
     # ============================================
-    log "🔧 预删除已知有问题的 ipq40xx 补丁..."
-    
-    local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
-    if [ -d "$problem_patches_dir" ]; then
-        local problem_patches=(
-            "401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-        )
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "🔧 OpenWrt 官方源码预处理：修复内核编译错误..."
         
-        for patch in "${problem_patches[@]}"; do
-            if [ -f "$problem_patches_dir/$patch" ]; then
-                log "  🗑️ 预删除补丁: $patch"
-                rm -f "$problem_patches_dir/$patch"
+        # 删除有问题的补丁
+        local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+        
+        if [ -f "$problem_patch" ]; then
+            log "  🗑️ 删除有问题的补丁: $problem_patch"
+            rm -f "$problem_patch"
+        fi
+        
+        # 如果内核源码已经存在，直接修复
+        local kernel_dirs=$(find build_dir -path "*/linux-ipq40xx_generic/linux-5.15.*/drivers/mmc/host" -type d 2>/dev/null)
+        for kernel_dir in $kernel_dirs; do
+            local kernel_file="$kernel_dir/sdhci-msm.c"
+            if [ -f "$kernel_file" ]; then
+                log "  🔧 修复内核源码: $kernel_file"
+                sed -i 's/static void sdhci_msm_set_clock(/static void __maybe_unused sdhci_msm_set_clock(/' "$kernel_file"
+                log "  ✅ 内核源码已修复"
             fi
         done
+        
+        log "  ✅ OpenWrt 预处理完成"
     fi
     
     # ============================================
-    # 编译循环 - 自动检测并修复补丁失败
+    # LEDE 特殊预处理
     # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE 预处理：创建必要的目录和文件..."
+        
+        find staging_dir -type d -name "root-*" 2>/dev/null | while read root_dir; do
+            mkdir -p "$root_dir/etc"
+            touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
+        done
+        
+        find build_dir -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
+            mkdir -p "$dir"
+            touch "$dir/Module.symvers" 2>/dev/null || true
+        done
+        
+        find build_dir -path "*/readline-*/ipkg-install/usr/lib" 2>/dev/null | while read lib_dir; do
+            touch "$lib_dir/libreadline.a" 2>/dev/null || true
+            touch "$lib_dir/libhistory.a" 2>/dev/null || true
+        done
+        
+        log "  ✅ LEDE 预处理完成"
+    fi
+    
     local max_attempts=3
     local attempt=1
     local compile_success=0
@@ -5404,55 +5461,32 @@ EOF
         
         if [ -f "$log_file" ]; then
             # ============================================
-            # 检测补丁失败并自动删除问题补丁
+            # OpenWrt 官方源码：检测 sdhci-msm 函数未使用错误
             # ============================================
-            if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
-                log "  ⚠️ 检测到补丁失败，正在自动修复..."
-                
-                # 提取失败的补丁名
-                local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-                
-                if [ -z "$failed_patches" ]; then
-                    failed_patches=$(grep -E "Applying.*\.patch" "$log_file" | grep -A1 "FAILED" | grep "Applying" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-                fi
-                
-                for patch_name in $failed_patches; do
-                    # 在多个可能的目录中查找补丁
-                    local found=0
-                    for patch_dir in target/linux/*/patches-*; do
-                        if [ -f "$patch_dir/$patch_name" ]; then
-                            log "    🗑️ 删除失败补丁: $patch_dir/$patch_name"
-                            rm -f "$patch_dir/$patch_name"
-                            found=1
+            if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+                if grep -q "sdhci_msm_set_clock.*defined but not used" "$log_file"; then
+                    log "  ⚠️ 检测到 sdhci_msm_set_clock 未使用错误，正在修复..."
+                    
+                    # 查找并修复内核源码
+                    local kernel_files=$(find build_dir -path "*/linux-ipq40xx_generic/linux-5.15.*/drivers/mmc/host/sdhci-msm.c" 2>/dev/null)
+                    for kernel_file in $kernel_files; do
+                        if [ -f "$kernel_file" ]; then
+                            log "    修复内核文件: $kernel_file"
+                            sed -i 's/static void sdhci_msm_set_clock(/static void __maybe_unused sdhci_msm_set_clock(/' "$kernel_file"
                         fi
                     done
                     
-                    if [ $found -eq 0 ]; then
-                        # 模糊搜索
-                        find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
-                            log "    🗑️ 删除失败补丁: $patch_file"
-                            rm -f "$patch_file"
-                        done
-                    fi
-                done
-                
-                # 特别处理 ipq40xx 的 mmc 补丁
-                local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                if [ -f "$ipq40xx_patch" ]; then
-                    log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
-                    rm -f "$ipq40xx_patch"
+                    # 清理内核构建目录
+                    log "    清理内核构建目录..."
+                    rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
+                    rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+                    
+                    log "  ✅ sdhci-msm 错误修复完成"
                 fi
-                
-                # 清理内核构建目录
-                log "    🔄 清理内核构建目录..."
-                rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
-                rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-                
-                log "  ✅ 补丁修复完成，将重试编译"
             fi
             
             # ============================================
-            # 检测 package/install 错误
+            # 通用错误处理
             # ============================================
             if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
@@ -5472,9 +5506,24 @@ EOF
                 log "  ✅ package/install 错误修复完成"
             fi
             
-            # ============================================
-            # 检测 samba4 错误
-            # ============================================
+            if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
+                log "  ⚠️ 检测到补丁失败，正在自动修复..."
+                
+                local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+                
+                for patch_name in $failed_patches; do
+                    find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
+                        log "    🗑️ 删除失败补丁: $patch_file"
+                        rm -f "$patch_file"
+                    done
+                done
+                
+                rm -rf build_dir/target-*/linux-* 2>/dev/null || true
+                rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+                
+                log "  ✅ 补丁修复完成"
+            fi
+            
             if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
                 log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
                 
@@ -5493,9 +5542,6 @@ EOF
                 log "  ✅ samba4 错误修复完成"
             fi
             
-            # ============================================
-            # 检测 ath10k 错误
-            # ============================================
             if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file"; then
                 log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
                 
@@ -5513,9 +5559,6 @@ EOF
                 log "  ✅ ath10k-ct 错误修复完成"
             fi
             
-            # ============================================
-            # 检测 shortcut-fe 错误
-            # ============================================
             if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file"; then
                 log "  ⚠️ 检测到 shortcut-fe 驱动编译错误，尝试修复..."
                 
@@ -5533,9 +5576,6 @@ EOF
                 log "  ✅ shortcut-fe 错误修复完成"
             fi
             
-            # ============================================
-            # 检测 LEDE kmod 依赖问题
-            # ============================================
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
                 if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
                     log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
@@ -5544,17 +5584,11 @@ EOF
                 fi
             fi
             
-            # ============================================
-            # 检测 Broken pipe 错误
-            # ============================================
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
             fi
             
-            # ============================================
-            # 检测 libssl 缺失
-            # ============================================
             if grep -q "libssl was not found" "$log_file"; then
                 log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
                 sudo apt-get update > /dev/null 2>&1 || true
