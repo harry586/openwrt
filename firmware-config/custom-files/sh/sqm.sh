@@ -36,9 +36,9 @@ config queue 'eth1'
     option debug_logging '0'
     option verbosity '2'
     option enabled '1'
-    option interface 'eth0'
-    option download '960000'
-    option upload '96000'
+    option interface 'br-lan'
+    option download '96000'
+    option upload '960000'
     option linklayer 'ethernet'
     option overhead '0'
 EOF
@@ -64,8 +64,8 @@ fi
 sqm_start
 
 # Default settings
-UPLINK=${UPLINK:-96000}
-DOWNLINK=${DOWNLINK:-960000}
+UPLINK=${UPLINK:-960000}
+DOWNLINK=${DOWNLINK:-96000}
 
 # Apply CAKE qdisc
 tc qdisc add dev $IFACE root handle 1: cake bandwidth ${UPLINK}kbit
