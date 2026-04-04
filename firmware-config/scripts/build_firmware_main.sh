@@ -5001,15 +5001,52 @@ workflow_step22_integrate_custom_files() {
 #【build_firmware_main.sh-38-end】
 
 #【build_firmware_main.sh-39】
-# ============================================
-# 步骤23: 前置错误检查
-# 对应 firmware-build.yml 步骤23
-# ============================================
 workflow_step23_pre_build_check() {
     log "=== 步骤23: 前置错误检查（使用公共函数） ==="
     
     set -e
     trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
+    
+    cd $BUILD_DIR
+    
+    # ============================================
+    # 在检查前，确保设备配置存在
+    # ============================================
+    log "🔧 确保设备配置存在..."
+    
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 加载环境变量: DEVICE=$DEVICE, TARGET=$TARGET"
+    fi
+    
+    # 直接使用 DEVICE 变量的值，不做任何转换
+    local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+    
+    log "🔧 期望配置: $expected_config"
+    
+    if ! grep -q "^${expected_config}$" .config; then
+        log "⚠️ 设备配置丢失，重新添加: $expected_config"
+        
+        # 删除所有同平台的设备配置
+        sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
+        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
+        
+        # 添加正确的设备配置
+        echo "${expected_config}=y" >> .config
+        
+        # 去重
+        sort -u .config > .config.tmp
+        mv .config.tmp .config
+        
+        # 重新运行 defconfig
+        make defconfig > /tmp/build-logs/defconfig_restore.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续"
+        }
+        
+        log "✅ 设备配置已恢复"
+    else
+        log "✅ 设备配置存在: $expected_config"
+    fi
     
     echo "🔍 检查当前环境..."
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -5042,18 +5079,15 @@ workflow_step23_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        local device_for_config=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_config}=y"
+        # 直接使用 DEVICE 变量的值检查
+        local device_for_check="$DEVICE"
+        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}=y"
         
         if grep -q "^${expected_config}$" .config; then
             echo "   ✅ 设备配置正确: $expected_config"
         else
-            if grep -q "CONFIG_TARGET_.*DEVICE.*${device_for_config}=y" .config; then
-                echo "   ✅ 设备配置正确 (模糊匹配)"
-            else
-                echo "   ❌ 设备配置可能不正确，未找到: $expected_config"
-                error_count=$((error_count + 1))
-            fi
+            echo "   ❌ 设备配置可能不正确，未找到: $expected_config"
+            error_count=$((error_count + 1))
         fi
     else
         echo "   ❌ .config 文件不存在"
@@ -5061,22 +5095,39 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    echo "2. ✅ 源码工具链检查:"
-    echo "   ✅ 源码类型: $SOURCE_REPO_TYPE，使用源码自带工具链"
+    echo "2. ✅ 工具链状态检查:"
     
     if [ -d "$BUILD_DIR/staging_dir" ]; then
-        echo "   ✅ staging_dir目录存在"
+        echo "   ✅ staging_dir 目录存在"
         local staging_size=$(du -sh "$BUILD_DIR/staging_dir" 2>/dev/null | awk '{print $1}')
         echo "   📊 大小: $staging_size"
         
-        local gcc_file=$(find "$BUILD_DIR/staging_dir" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
-        if [ -n "$gcc_file" ]; then
-            echo "   ✅ 找到GCC编译器: $(basename "$gcc_file")"
+        local cross_gcc=$(find "$BUILD_DIR/staging_dir" -type f -executable -path "*/bin/*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+        
+        if [ -n "$cross_gcc" ]; then
+            echo "   ✅ 交叉编译工具链已生成: $(basename "$cross_gcc")"
+            local gcc_version=$("$cross_gcc" --version 2>&1 | head -1)
+            echo "     版本: $gcc_version"
+            
+            if [[ "$cross_gcc" == *"aarch64"* ]]; then
+                echo "     架构: ARM64 (aarch64)"
+            elif [[ "$cross_gcc" == *"arm"* ]]; then
+                echo "     架构: ARM"
+            elif [[ "$cross_gcc" == *"mips"* ]]; then
+                echo "     架构: MIPS"
+            fi
+            
+            echo "   ✅ 工具链状态: 已编译完成"
         else
-            echo "   ℹ️ 工具链将在编译过程中生成"
+            echo "   ⚠️ 未找到交叉编译工具链"
+            if [ -f "$BUILD_DIR/build_dir/target-*/.stamp_target_compile" ]; then
+                echo "     工具链正在编译中"
+            else
+                echo "     工具链尚未编译"
+            fi
         fi
     else
-        echo "   ℹ️ staging_dir将在编译过程中生成"
+        echo "   ⚠️ staging_dir 目录不存在"
     fi
     echo ""
     
