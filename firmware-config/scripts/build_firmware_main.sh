@@ -5253,7 +5253,7 @@ workflow_step15_generate_config() {
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     # ============================================
-    # 设备名解析函数（与generate_config中的逻辑一致）
+    # 设备名解析函数（所有日志输出到 stderr）
     # ============================================
     parse_device_from_mk() {
         local target="$1"
@@ -5418,43 +5418,44 @@ EOF
         
         local result=""
         
-        log "🔍 开始解析正确的设备名..."
-        log "  目标平台: $target/$subtarget"
-        log "  用户输入: $user_device"
+        echo "🔍 开始解析正确的设备名..." >&2
+        echo "  目标平台: $target/$subtarget" >&2
+        echo "  用户输入: $user_device" >&2
         
         result=$(parse_device_from_mk "$target" "$user_device")
         if [ -n "$result" ]; then
-            log "  ✅ MK文件解析成功: $result"
+            echo "  ✅ MK文件解析成功: $result" >&2
             echo "$result"
             return 0
         fi
-        log "  ⚠️ MK文件解析未找到匹配"
+        echo "  ⚠️ MK文件解析未找到匹配" >&2
         
         if [ -f "scripts/config/conf" ]; then
             result=$(query_device_by_targetinfo "$target" "$subtarget" "$user_device")
             if [ -n "$result" ]; then
-                log "  ✅ targetinfo查询成功: $result"
+                echo "  ✅ targetinfo查询成功: $result" >&2
                 echo "$result"
                 return 0
             fi
-            log "  ⚠️ targetinfo查询未找到匹配"
+            echo "  ⚠️ targetinfo查询未找到匹配" >&2
         fi
         
         result=$(match_device_by_weight "$target" "$user_device")
         if [ -n "$result" ]; then
-            log "  ✅ 权重匹配算法成功: $result"
+            echo "  ✅ 权重匹配算法成功: $result" >&2
             echo "$result"
             return 0
         fi
-        log "  ❌ 权重匹配算法也未找到匹配"
+        echo "  ❌ 权重匹配算法也未找到匹配" >&2
         
         local fallback_device=$(echo "$user_device" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-        log "  ⚠️ 使用回退设备名: $fallback_device"
+        echo "  ⚠️ 使用回退设备名: $fallback_device" >&2
         echo "$fallback_device"
         return 1
     }
     
-    local resolved_device=$(resolve_correct_device "$TARGET" "$SUBTARGET" "$DEVICE")
+    local resolved_device=""
+    resolved_device=$(resolve_correct_device "$TARGET" "$SUBTARGET" "$DEVICE")
     log "🔧 解析后的设备名: $resolved_device"
     
     if [ "$resolved_device" != "$DEVICE" ]; then
