@@ -1677,8 +1677,223 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    local correct_device="$DEVICE"
-    log "🔧 使用传入的设备名: $correct_device"
+    # ============================================
+    # 函数1: 从MK文件解析设备名
+    # ============================================
+    parse_device_from_mk() {
+        local target="$1"
+        local search_device="$2"
+        
+        local mk_files=$(find "target/linux/$target" -type f -name "*.mk" 2>/dev/null)
+        local found_device=""
+        
+        for mkfile in $mk_files; do
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^define\ Device/([a-zA-Z0-9_-]+) ]]; then
+                    local dev_name="${BASH_REMATCH[1]}"
+                    if [[ "$dev_name" != *"_common"* ]]; then
+                        if [[ "$dev_name" == "$search_device" ]]; then
+                            found_device="$dev_name"
+                            break 2
+                        fi
+                    fi
+                fi
+            done < "$mkfile"
+        done
+        
+        if [ -n "$found_device" ]; then
+            echo "$found_device"
+            return 0
+        fi
+        
+        for mkfile in $mk_files; do
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^define\ Device/([a-zA-Z0-9_-]+) ]]; then
+                    local dev_name="${BASH_REMATCH[1]}"
+                    if [[ "$dev_name" != *"_common"* ]]; then
+                        if [[ "$dev_name" == *"$search_device" ]]; then
+                            found_device="$dev_name"
+                            break 2
+                        fi
+                    fi
+                fi
+            done < "$mkfile"
+        done
+        
+        if [ -n "$found_device" ]; then
+            echo "$found_device"
+            return 0
+        fi
+        
+        return 1
+    }
+    
+    # ============================================
+    # 函数2: 通过 make targetinfo 查询设备名
+    # ============================================
+    query_device_by_targetinfo() {
+        local target="$1"
+        local subtarget="$2"
+        local search_device="$3"
+        
+        local temp_config=".config.targetinfo.$$"
+        cat > "$temp_config" << EOF
+CONFIG_TARGET_${target}=y
+CONFIG_TARGET_${target}_${subtarget}=y
+EOF
+        cp "$temp_config" .config
+        make defconfig > /dev/null 2>&1
+        
+        local device_list=$(make targetinfo 2>/dev/null | grep "Target-${target}-${subtarget}" | sed 's/.*Device: //' | cut -d' ' -f1 | sort -u)
+        
+        local found_device=""
+        
+        for dev in $device_list; do
+            if [[ "$dev" == "$search_device" ]]; then
+                found_device="$dev"
+                break
+            fi
+        done
+        
+        if [ -z "$found_device" ]; then
+            for dev in $device_list; do
+                if [[ "$dev" == *"$search_device" ]]; then
+                    found_device="$dev"
+                    break
+                fi
+            done
+        fi
+        
+        if [ -z "$found_device" ]; then
+            for dev in $device_list; do
+                if [[ "$search_device" == *"$dev" ]]; then
+                    found_device="$dev"
+                    break
+                fi
+            done
+        fi
+        
+        rm -f "$temp_config"
+        
+        if [ -n "$found_device" ]; then
+            echo "$found_device"
+            return 0
+        fi
+        
+        return 1
+    }
+    
+    # ============================================
+    # 函数3: 权重匹配算法（保留03.28版本）
+    # ============================================
+    match_device_by_weight() {
+        local target="$1"
+        local search_device="$2"
+        
+        local mk_files=$(find "target/linux/$target" -type f -name "*.mk" 2>/dev/null)
+        local device_names=()
+        
+        for mkfile in $mk_files; do
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^define\ Device/([a-zA-Z0-9_-]+) ]]; then
+                    local dev_name="${BASH_REMATCH[1]}"
+                    if [[ "$dev_name" != *"_common"* ]]; then
+                        device_names+=("$dev_name|$mkfile")
+                    fi
+                fi
+            done < "$mkfile"
+        done
+        
+        local best_device=""
+        local best_weight=-1
+        
+        for dev in "${device_names[@]}"; do
+            local name="${dev%%|*}"
+            local weight=0
+            
+            if [ "$name" = "$search_device" ]; then
+                weight=10000
+            elif [[ "$name" == *"$search_device" ]]; then
+                weight=9000
+            elif [[ "$search_device" == *"$name" ]]; then
+                weight=8000
+            elif [[ "$name" == *"$search_device"* ]]; then
+                weight=7000
+            elif [[ "$search_device" == *"$name"* ]]; then
+                weight=6000
+            fi
+            
+            if [ $weight -gt 0 ]; then
+                local name_len=${#name}
+                weight=$((weight + (1000 - name_len)))
+                
+                if [ $weight -gt $best_weight ]; then
+                    best_weight=$weight
+                    best_device="$name"
+                fi
+            fi
+        done
+        
+        if [ -n "$best_device" ]; then
+            echo "$best_device"
+            return 0
+        fi
+        
+        return 1
+    }
+    
+    # ============================================
+    # 主解析逻辑（所有日志输出到 stderr）
+    # ============================================
+    resolve_correct_device() {
+        local target="$1"
+        local subtarget="$2"
+        local user_device="$3"
+        
+        local result=""
+        
+        echo "🔍 开始解析正确的设备名..." >&2
+        echo "  目标平台: $target/$subtarget" >&2
+        echo "  用户输入: $user_device" >&2
+        
+        result=$(parse_device_from_mk "$target" "$user_device")
+        if [ -n "$result" ]; then
+            echo "  ✅ MK文件解析成功: $result" >&2
+            echo "$result"
+            return 0
+        fi
+        echo "  ⚠️ MK文件解析未找到匹配" >&2
+        
+        if [ -f "scripts/config/conf" ]; then
+            result=$(query_device_by_targetinfo "$target" "$subtarget" "$user_device")
+            if [ -n "$result" ]; then
+                echo "  ✅ targetinfo查询成功: $result" >&2
+                echo "$result"
+                return 0
+            fi
+            echo "  ⚠️ targetinfo查询未找到匹配" >&2
+        fi
+        
+        result=$(match_device_by_weight "$target" "$user_device")
+        if [ -n "$result" ]; then
+            echo "  ✅ 权重匹配算法成功: $result" >&2
+            echo "$result"
+            return 0
+        fi
+        echo "  ❌ 权重匹配算法也未找到匹配" >&2
+        
+        local fallback_device=$(echo "$user_device" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+        echo "  ⚠️ 使用回退设备名: $fallback_device" >&2
+        echo "$fallback_device"
+        return 1
+    }
+    
+    # ============================================
+    # 执行设备名解析（只调用一次，保存结果）
+    # ============================================
+    local correct_device=""
+    correct_device=$(resolve_correct_device "$TARGET" "$SUBTARGET" "$DEVICE")
+    log "🔧 最终使用的设备名: $correct_device"
     
     local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}"
     
@@ -4774,149 +4989,9 @@ workflow_step15_generate_config() {
     
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
-    log "🔧 直接调用 generate_config，使用设备名: $DEVICE"
+    log "🔧 调用 generate_config，使用设备名: $DEVICE"
     
     generate_config "$extra_packages" "$DEVICE"
-    
-    local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-    
-    log "🔍 验证设备配置: $expected_config"
-    if grep -q "^${expected_config}$" .config; then
-        log "✅ 设备配置已正确写入"
-    else
-        log "⚠️ 设备配置未找到，尝试手动添加..."
-        echo "$expected_config" >> .config
-        sort -u .config -o .config
-    fi
-    
-    log ""
-    log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
-    
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
-    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
-    
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
-    
-    cp .config .config.before_disable
-    
-    log "🔧 第一轮禁用..."
-    for plugin in "${full_forbidden_list[@]}"; do
-        [ -z "$plugin" ] && continue
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-    done
-    
-    local special_plugins=(
-        "nlbwmon"
-        "luci-app-nlbwmon"
-        "luci-i18n-nlbwmon-zh-cn"
-        "nlbwmon-database"
-        "wol"
-        "luci-app-wol"
-        "luci-i18n-wol-zh-cn"
-        "etherwake"
-    )
-    
-    for plugin in "${special_plugins[@]}"; do
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-    done
-    
-    sed -i '/CONFIG_PACKAGE_luci-app-.*_INCLUDE_/d' .config
-    
-    sort -u .config > .config.tmp && mv .config.tmp .config
-    
-    local max_attempts=2
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
-        make defconfig > /tmp/build-logs/defconfig_disable_attempt${attempt}.log 2>&1 || {
-            log "⚠️ make defconfig 警告，但继续"
-        }
-        
-        local still_enabled=0
-        for plugin in "${BASE_PKGS[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
-                still_enabled=$((still_enabled + 1))
-                log "  ⚠️ 发现残留: $plugin"
-            fi
-        done
-        
-        if [ $still_enabled -eq 0 ]; then
-            log "✅ 第 $attempt 次尝试后所有主插件已成功禁用"
-            break
-        else
-            if [ $attempt -lt $max_attempts ]; then
-                log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
-                for plugin in "${BASE_PKGS[@]}"; do
-                    sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-                    sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=y/d" .config
-                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=m/d" .config
-                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-                    echo "# CONFIG_PACKAGE_luci-app-${plugin} is not set" >> .config
-                done
-                sort -u .config > .config.tmp && mv .config.tmp .config
-            fi
-        fi
-        attempt=$((attempt + 1))
-    done
-    
-    log ""
-    log "📊 最终插件状态验证:"
-    local still_enabled_final=0
-    
-    for plugin in "${BASE_PKGS[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
-            log "  ❌ $plugin 仍然被启用"
-            still_enabled_final=$((still_enabled_final + 1))
-        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            log "  ❌ $plugin 仍然被模块化"
-            still_enabled_final=$((still_enabled_final + 1))
-        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
-            log "  ❌ luci-app-$plugin 仍然被启用"
-            still_enabled_final=$((still_enabled_final + 1))
-        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
-            log "  ❌ luci-app-$plugin 仍然被模块化"
-            still_enabled_final=$((still_enabled_final + 1))
-        else
-            log "  ✅ $plugin 已正确禁用"
-        fi
-    done
-    
-    if [ $still_enabled_final -eq 0 ]; then
-        log "🎉 所有指定插件已成功禁用"
-    else
-        log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
-        
-        log "🔧 执行最终强力禁用..."
-        for plugin in "${BASE_PKGS[@]}"; do
-            sed -i "/${plugin}/d" .config
-            sed -i "/$(echo $plugin | tr '[:lower:]' '[:upper:]')/d" .config
-        done
-        make defconfig > /dev/null 2>&1
-    fi
-    
-    log ""
-    log "📊 配置统计（禁用后）:"
-    log "  总配置行数: $(wc -l < .config)"
-    log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
-    log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
-    
-    local final_check="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-    if grep -q "^${final_check}$" .config; then
-        log "✅ 最终验证: 设备配置存在"
-    else
-        log "⚠️ 最终验证: 设备配置丢失，尝试最后添加"
-        echo "$final_check" >> .config
-        sort -u .config -o .config
-    fi
     
     log "✅ 步骤15 完成"
 }
