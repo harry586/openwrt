@@ -11,6 +11,11 @@
 load_build_config() {
     local config_file="${1:-$REPO_ROOT/build-config.conf}"
     
+    # 如果已经加载过，直接返回
+    if [ -n "$CONFIG_ALREADY_LOADED" ]; then
+        return 0
+    fi
+    
     # 保存当前环境变量中已设置的值
     local current_source_repo="${SOURCE_REPO_TYPE:-${SOURCE_REPO:-}}"
     local current_build_dir="${BUILD_DIR:-}"
@@ -18,23 +23,23 @@ load_build_config() {
     local current_backup_dir="${BACKUP_DIR:-}"
     
     if [ -f "$config_file" ]; then
-        log "📁 加载统一配置文件: $config_file"
+        echo "📁 加载统一配置文件: $config_file"
         source "$config_file"
     else
-        log "⚠️ 未找到配置文件 $config_file，使用脚本内默认值"
+        echo "⚠️ 未找到配置文件 $config_file，使用脚本内默认值"
     fi
     
     # 恢复从 workflow 传入的环境变量（优先级更高）
     if [ -n "$current_source_repo" ]; then
         SOURCE_REPO_TYPE="$current_source_repo"
         export SOURCE_REPO_TYPE
-        log "✅ 使用 workflow 传入的源码仓库类型: $SOURCE_REPO_TYPE"
+        echo "✅ 使用 workflow 传入的源码仓库类型: $SOURCE_REPO_TYPE"
     fi
     
     if [ -n "${SOURCE_REPO:-}" ] && [ -z "$SOURCE_REPO_TYPE" ]; then
         SOURCE_REPO_TYPE="$SOURCE_REPO"
         export SOURCE_REPO_TYPE
-        log "✅ 从 SOURCE_REPO 环境变量设置源码仓库类型: $SOURCE_REPO_TYPE"
+        echo "✅ 从 SOURCE_REPO 环境变量设置源码仓库类型: $SOURCE_REPO_TYPE"
     fi
     
     : ${SOURCE_REPO_TYPE:="immortalwrt"}
@@ -52,18 +57,21 @@ load_build_config() {
     # ============================================
     # 检查文件描述符限制（修复Broken pipe）
     # ============================================
-    log "🔧 检查文件描述符限制..."
+    echo "🔧 检查文件描述符限制..."
     local current_limit=$(ulimit -n)
-    log "  当前文件描述符限制: $current_limit"
+    echo "  当前文件描述符限制: $current_limit"
     
     if [ $current_limit -lt 65536 ]; then
-        log "  文件描述符限制过低，尝试提高到65536..."
+        echo "  文件描述符限制过低，尝试提高到65536..."
         ulimit -n 65536 2>/dev/null || sudo ulimit -n 65536 2>/dev/null || true
         local new_limit=$(ulimit -n)
-        log "  新的文件描述符限制: $new_limit"
+        echo "  新的文件描述符限制: $new_limit"
     fi
     
-    log "✅ 配置加载完成，当前源码仓库类型: $SOURCE_REPO_TYPE"
+    echo "✅ 配置加载完成，当前源码仓库类型: $SOURCE_REPO_TYPE"
+    
+    # 标记已加载
+    export CONFIG_ALREADY_LOADED=1
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -73,9 +81,12 @@ if [ -n "${SOURCE_REPO:-}" ]; then
     export SOURCE_REPO_TYPE="$SOURCE_REPO"
 fi
 
-if [ -f "$CONFIG_FILE" ]; then
-    source "$CONFIG_FILE"
-    load_build_config
+# 只在首次加载时执行
+if [ -z "$CONFIG_ALREADY_LOADED" ]; then
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE"
+        load_build_config
+    fi
 fi
 #【build_firmware_main.sh-00.5-end】
 
@@ -94,6 +105,7 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 
 mkdir -p "$LOG_DIR"
 
+# 简单的日志函数，不触发配置加载
 log() {
     echo "【$(date '+%Y-%m-%d %H:%M:%S')】$1"
 }
@@ -104,118 +116,6 @@ handle_error() {
     echo "最后50行日志:"
     tail -50 "$LOG_DIR"/*.log 2>/dev/null || echo "无日志文件"
     exit 1
-}
-
-# ============================================
-# 动态生成完整的禁用插件列表
-# ============================================
-generate_forbidden_packages_list() {
-    local base_list="$1"
-    local full_list=()
-    
-    # 将空格分隔的字符串转换为数组
-    IFS=' ' read -ra BASE_PKGS <<< "$base_list"
-    
-    for pkg in "${BASE_PKGS[@]}"; do
-        # 添加主包（原始名称）
-        full_list+=("$pkg")
-        
-        # 添加 luci-app- 前缀版本（Web界面）
-        full_list+=("luci-app-${pkg}")
-        
-        # 添加 luci-i18n- 国际化版本（中文语言包）
-        full_list+=("luci-i18n-${pkg}-zh-cn")
-        
-        # 添加常见后缀变体
-        full_list+=("${pkg}-extra")
-        full_list+=("${pkg}-config")
-        full_list+=("${pkg}-scripts")
-        full_list+=("${pkg}-core")
-        full_list+=("${pkg}-lite")
-        full_list+=("${pkg}-full")
-        full_list+=("${pkg}-static")
-        full_list+=("${pkg}-dynamic")
-        
-        # 添加带下划线的子包格式
-        full_list+=("${pkg}_aliyun")
-        full_list+=("${pkg}_dnspod")
-        full_list+=("${pkg}_cloudflare")
-        full_list+=("${pkg}_digitalocean")
-        full_list+=("${pkg}_dynv6")
-        full_list+=("${pkg}_godaddy")
-        full_list+=("${pkg}_no-ip")
-        full_list+=("${pkg}_nsupdate")
-        full_list+=("${pkg}_route53")
-        
-        # 添加 INCLUDE 子选项格式
-        full_list+=("luci-app-${pkg}_INCLUDE_${pkg}-ng")
-        full_list+=("luci-app-${pkg}_INCLUDE_${pkg}-webui")
-        full_list+=("luci-app-${pkg}_INCLUDE_${pkg}-extra")
-        
-        # 添加带连字符的子包格式
-        full_list+=("${pkg}-ng")
-        full_list+=("${pkg}-webui")
-        full_list+=("${pkg}-client")
-        full_list+=("${pkg}-server")
-        full_list+=("${pkg}-utils")
-        full_list+=("${pkg}-tools")
-        
-        # 添加大写版本（用于配置文件中的宏）
-        local upper_pkg=$(echo "$pkg" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-        full_list+=("${upper_pkg}")
-        full_list+=("PACKAGE_${upper_pkg}")
-        full_list+=("LUCI_APP_${upper_pkg}")
-        
-        # 针对特定包的额外处理
-        if [[ "$pkg" == "ddns" ]]; then
-            full_list+=("ddns-scripts")
-            full_list+=("ddns-scripts_aliyun")
-            full_list+=("ddns-scripts_dnspod")
-            full_list+=("ddns-scripts_cloudflare.com-v4")
-            full_list+=("ddns-scripts_digitalocean")
-            full_list+=("ddns-scripts_dynv6")
-            full_list+=("ddns-scripts_godaddy")
-            full_list+=("ddns-scripts_no-ip_com")
-            full_list+=("ddns-scripts_nsupdate")
-            full_list+=("ddns-scripts_route53")
-            full_list+=("ddns-scripts_duckdns.org")
-            full_list+=("ddns-scripts_gandi.net")
-            full_list+=("ddns-scripts_inwx.com")
-            full_list+=("ddns-scripts_linode.com")
-            full_list+=("ddns-scripts_namecheap.com")
-        elif [[ "$pkg" == "rclone" ]]; then
-            full_list+=("rclone")
-            full_list+=("rclone-config")
-            full_list+=("rclone-webui")
-            full_list+=("rclone-ng")
-            full_list+=("rclone-webui-react")
-        elif [[ "$pkg" == "qbittorrent" ]]; then
-            full_list+=("qbittorrent")
-            full_list+=("qbittorrent-static")
-            full_list+=("qt5")
-            full_list+=("libtorrent")
-            full_list+=("libtorrent-rasterbar")
-        elif [[ "$pkg" == "filetransfer" ]]; then
-            full_list+=("filetransfer")
-            full_list+=("filebrowser")
-            full_list+=("filemanager")
-        elif [[ "$pkg" == "nlbwmon" ]]; then
-            full_list+=("nlbwmon")
-            full_list+=("luci-app-nlbwmon")
-            full_list+=("luci-i18n-nlbwmon-zh-cn")
-            full_list+=("nlbwmon-database")
-            full_list+=("nlbwmon-legacy")
-        elif [[ "$pkg" == "wol" ]]; then
-            full_list+=("wol")
-            full_list+=("luci-app-wol")
-            full_list+=("luci-i18n-wol-zh-cn")
-            full_list+=("etherwake")
-            full_list+=("wol-utils")
-        fi
-    done
-    
-    # 去重并输出，每行一个
-    printf '%s\n' "${full_list[@]}" | sort -u
 }
 #【build_firmware_main.sh-01-end】
 
@@ -4989,30 +4889,220 @@ workflow_step15_generate_config() {
     
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
+    log ""
+    log "=== 🔍 设备定义文件验证（前置检查） ==="
+    log "搜索设备名: $DEVICE"
+    log "搜索路径: target/linux/$TARGET"
+    
+    echo ""
+    echo "📁 所有子平台 .mk 文件列表:"
+    local mk_files=()
+    while IFS= read -r file; do
+        mk_files+=("$file")
+    done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null | sort)
+    
+    if [ ${#mk_files[@]} -gt 0 ]; then
+        echo "----------------------------------------"
+        for i in "${!mk_files[@]}"; do
+            printf "[%2d] %s\n" $((i+1)) "${mk_files[$i]}"
+        done
+        echo "----------------------------------------"
+        echo "📊 共找到 ${#mk_files[@]} 个 .mk 文件"
+    else
+        echo "   未找到 .mk 文件"
+    fi
+    echo ""
+    
+    local device_file=""
+    local mk_device_name=""
+    for mkfile in "${mk_files[@]}"; do
+        if grep -q "define Device.*$DEVICE" "$mkfile" 2>/dev/null; then
+            device_file="$mkfile"
+            mk_device_name=$(grep -m1 "define Device.*$DEVICE" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
+            log "✅ 找到设备定义: $mk_device_name (在 $device_file)"
+            break
+        fi
+    done
+    
+    if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
+        log "❌ 错误：未找到设备 $DEVICE 的定义文件"
+        log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
+        exit 1
+    fi
+    
+    local device_block=""
+    device_block=$(awk "/define Device.*$DEVICE/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+    
+    if [ -n "$device_block" ]; then
+        echo ""
+        echo "📋 设备定义信息（关键字段）:"
+        echo "----------------------------------------"
+        echo "$device_block" | grep -E "define Device" | head -1
+        echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
+        echo "----------------------------------------"
+    else
+        log "⚠️ 警告：无法提取设备 $DEVICE 的配置块"
+    fi
+    
     log "🔧 调用 generate_config，使用设备名: $DEVICE"
     
     generate_config "$extra_packages" "$DEVICE"
+    
+    local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+    
+    log "🔍 验证设备配置: $expected_config"
+    if grep -q "^${expected_config}$" .config; then
+        log "✅ 设备配置已正确写入"
+    else
+        log "⚠️ 设备配置未找到，尝试手动添加..."
+        echo "$expected_config" >> .config
+        sort -u .config -o .config
+    fi
+    
+    log ""
+    log "=== 🔧 强制禁用不需要的插件系列（优化版 - 最多2次尝试） ==="
+    
+    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
+    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
+    
+    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
+    
+    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
+    
+    cp .config .config.before_disable
+    
+    log "🔧 第一轮禁用..."
+    for plugin in "${full_forbidden_list[@]}"; do
+        [ -z "$plugin" ] && continue
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+    done
+    
+    local special_plugins=(
+        "nlbwmon"
+        "luci-app-nlbwmon"
+        "luci-i18n-nlbwmon-zh-cn"
+        "nlbwmon-database"
+        "wol"
+        "luci-app-wol"
+        "luci-i18n-wol-zh-cn"
+        "etherwake"
+    )
+    
+    for plugin in "${special_plugins[@]}"; do
+        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+        sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
+        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+    done
+    
+    sed -i '/CONFIG_PACKAGE_luci-app-.*_INCLUDE_/d' .config
+    
+    sort -u .config > .config.tmp && mv .config.tmp .config
+    
+    local max_attempts=2
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        log "尝试 $attempt/$max_attempts: 运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig_disable_attempt${attempt}.log 2>&1 || {
+            log "⚠️ make defconfig 警告，但继续"
+        }
+        
+        local still_enabled=0
+        for plugin in "${BASE_PKGS[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
+                still_enabled=$((still_enabled + 1))
+                log "  ⚠️ 发现残留: $plugin"
+            fi
+        done
+        
+        if [ $still_enabled -eq 0 ]; then
+            log "✅ 第 $attempt 次尝试后所有主插件已成功禁用"
+            break
+        else
+            if [ $attempt -lt $max_attempts ]; then
+                log "⚠️ 第 $attempt 次尝试后仍有 $still_enabled 个插件残留，再次强制禁用..."
+                for plugin in "${BASE_PKGS[@]}"; do
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+                    sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=y/d" .config
+                    sed -i "/^CONFIG_PACKAGE_luci-app-${plugin}=m/d" .config
+                    echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+                    echo "# CONFIG_PACKAGE_luci-app-${plugin} is not set" >> .config
+                done
+                sort -u .config > .config.tmp && mv .config.tmp .config
+            fi
+        fi
+        attempt=$((attempt + 1))
+    done
+    
+    log ""
+    log "📊 最终插件状态验证:"
+    local still_enabled_final=0
+    
+    for plugin in "${BASE_PKGS[@]}"; do
+        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config; then
+            log "  ❌ $plugin 仍然被启用"
+            still_enabled_final=$((still_enabled_final + 1))
+        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
+            log "  ❌ $plugin 仍然被模块化"
+            still_enabled_final=$((still_enabled_final + 1))
+        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
+            log "  ❌ luci-app-$plugin 仍然被启用"
+            still_enabled_final=$((still_enabled_final + 1))
+        elif grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
+            log "  ❌ luci-app-$plugin 仍然被模块化"
+            still_enabled_final=$((still_enabled_final + 1))
+        else
+            log "  ✅ $plugin 已正确禁用"
+        fi
+    done
+    
+    if [ $still_enabled_final -eq 0 ]; then
+        log "🎉 所有指定插件已成功禁用"
+    else
+        log "⚠️ 有 $still_enabled_final 个插件未能禁用，请检查 feeds 或依赖"
+        
+        log "🔧 执行最终强力禁用..."
+        for plugin in "${BASE_PKGS[@]}"; do
+            sed -i "/${plugin}/d" .config
+            sed -i "/$(echo $plugin | tr '[:lower:]' '[:upper:]')/d" .config
+        done
+        make defconfig > /dev/null 2>&1
+    fi
+    
+    log ""
+    log "📊 配置统计（禁用后）:"
+    log "  总配置行数: $(wc -l < .config)"
+    log "  启用软件包: $(grep -c "^CONFIG_PACKAGE_.*=y$" .config)"
+    log "  模块化软件包: $(grep -c "^CONFIG_PACKAGE_.*=m$" .config)"
+    
+    local final_check="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+    if grep -q "^${final_check}$" .config; then
+        log "✅ 最终验证: 设备配置存在"
+    else
+        log "⚠️ 最终验证: 设备配置丢失，尝试最后添加"
+        echo "$final_check" >> .config
+        sort -u .config -o .config
+    fi
     
     log "✅ 步骤15 完成"
 }
 #【build_firmware_main.sh-33-end】
 
 #【build_firmware_main.sh-34】
-# ============================================
-# 步骤16: 验证USB配置
-# 对应 firmware-build.yml 步骤16
-# ============================================
 workflow_step16_verify_usb() {
-    log "=== 步骤16: 验证USB配置（智能检测版） ==="
+    echo "=== 步骤16: 验证USB配置（智能检测版） ==="
     
     trap 'echo "⚠️ 步骤16 验证过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
     
-    # 调用 verify_usb_config 函数
     verify_usb_config
     
-    log "✅ 步骤16 完成"
+    echo "✅ 步骤16 完成"
 }
 #【build_firmware_main.sh-34-end】
 
@@ -5441,7 +5531,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（修复版） ==="
+    log "=== 步骤25: 编译固件（自动修复补丁问题） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -5550,6 +5640,28 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
+    # ============================================
+    # 预删除已知有问题的补丁
+    # ============================================
+    log "🔧 预删除已知有问题的 ipq40xx 补丁..."
+    
+    local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
+    if [ -d "$problem_patches_dir" ]; then
+        local problem_patches=(
+            "401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+        )
+        
+        for patch in "${problem_patches[@]}"; do
+            if [ -f "$problem_patches_dir/$patch" ]; then
+                log "  🗑️ 预删除补丁: $patch"
+                rm -f "$problem_patches_dir/$patch"
+            fi
+        done
+    fi
+    
+    # ============================================
+    # 编译循环 - 自动检测并修复补丁失败
+    # ============================================
     local max_attempts=3
     local attempt=1
     local compile_success=0
@@ -5581,6 +5693,57 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
+            # ============================================
+            # 检测补丁失败并自动删除问题补丁
+            # ============================================
+            if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
+                log "  ⚠️ 检测到补丁失败，正在自动修复..."
+                
+                # 提取失败的补丁名
+                local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+                
+                if [ -z "$failed_patches" ]; then
+                    failed_patches=$(grep -E "Applying.*\.patch" "$log_file" | grep -A1 "FAILED" | grep "Applying" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+                fi
+                
+                for patch_name in $failed_patches; do
+                    # 在多个可能的目录中查找补丁
+                    local found=0
+                    for patch_dir in target/linux/*/patches-*; do
+                        if [ -f "$patch_dir/$patch_name" ]; then
+                            log "    🗑️ 删除失败补丁: $patch_dir/$patch_name"
+                            rm -f "$patch_dir/$patch_name"
+                            found=1
+                        fi
+                    done
+                    
+                    if [ $found -eq 0 ]; then
+                        # 模糊搜索
+                        find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
+                            log "    🗑️ 删除失败补丁: $patch_file"
+                            rm -f "$patch_file"
+                        done
+                    fi
+                done
+                
+                # 特别处理 ipq40xx 的 mmc 补丁
+                local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+                if [ -f "$ipq40xx_patch" ]; then
+                    log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
+                    rm -f "$ipq40xx_patch"
+                fi
+                
+                # 清理内核构建目录
+                log "    🔄 清理内核构建目录..."
+                rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
+                rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+                
+                log "  ✅ 补丁修复完成，将重试编译"
+            fi
+            
+            # ============================================
+            # 检测 package/install 错误
+            # ============================================
             if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
                 
@@ -5594,12 +5757,14 @@ EOF
                     rm -rf "$ipkg_dir"
                 done
                 
-                log "    重新安装 feeds..."
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 
                 log "  ✅ package/install 错误修复完成"
             fi
             
+            # ============================================
+            # 检测 samba4 错误
+            # ============================================
             if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
                 log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
                 
@@ -5618,6 +5783,9 @@ EOF
                 log "  ✅ samba4 错误修复完成"
             fi
             
+            # ============================================
+            # 检测 ath10k 错误
+            # ============================================
             if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file"; then
                 log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
                 
@@ -5635,6 +5803,9 @@ EOF
                 log "  ✅ ath10k-ct 错误修复完成"
             fi
             
+            # ============================================
+            # 检测 shortcut-fe 错误
+            # ============================================
             if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file"; then
                 log "  ⚠️ 检测到 shortcut-fe 驱动编译错误，尝试修复..."
                 
@@ -5652,6 +5823,9 @@ EOF
                 log "  ✅ shortcut-fe 错误修复完成"
             fi
             
+            # ============================================
+            # 检测 LEDE kmod 依赖问题
+            # ============================================
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
                 if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
                     log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
@@ -5660,11 +5834,17 @@ EOF
                 fi
             fi
             
+            # ============================================
+            # 检测 Broken pipe 错误
+            # ============================================
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
             fi
             
+            # ============================================
+            # 检测 libssl 缺失
+            # ============================================
             if grep -q "libssl was not found" "$log_file"; then
                 log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
                 sudo apt-get update > /dev/null 2>&1 || true
@@ -6572,8 +6752,8 @@ main() {
     local arg5="$6"
 
     # 只在首次调用主函数时加载配置
-    if [ -z "$MAIN_CONFIG_LOADED" ]; then
-        if [ -f "$REPO_ROOT/build-config.conf" ] && [ -z "$CONFIG_LOADED" ]; then
+    if [ -z "$MAIN_CONFIG_LOADED" ] && [ -z "$CONFIG_ALREADY_LOADED" ]; then
+        if [ -f "$REPO_ROOT/build-config.conf" ]; then
             source "$REPO_ROOT/build-config.conf"
             load_build_config
         fi
