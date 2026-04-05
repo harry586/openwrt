@@ -4243,204 +4243,72 @@ workflow_step08_initialize_build_env_hybrid() {
 #【build_firmware_main.sh-26-end】
 
 #【build_firmware_main.sh-27】
-# ============================================
-# 步骤09: 编译源码自带工具链（增强版 - 检查libyaml）
-# 对应 firmware-build.yml 步骤09
-# ============================================
-workflow_step09_download_sdk() {
-    local device_name="$1"
-    
-    log "=== 步骤09: 编译源码自带工具链 ==="
+workflow_step13_pre_build_space_check() {
+    log "=== 步骤13: 编译前空间检查 ==="
     
     set -e
-    trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤13 失败，退出代码: $?"; exit 1' ERR
     
-    cd $BUILD_DIR
+    pre_build_space_check
     
-    # 加载环境变量
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-    fi
-    
-    # ============================================
-    # 检查libyaml是否安装（修复dtc链接错误）
-    # ============================================
-    log "🔧 检查libyaml库（修复dtc链接错误）..."
-    
-    if ! pkg-config --libs yaml-0.1 > /dev/null 2>&1; then
-        log "  ⚠️ libyaml未找到，尝试安装..."
-        sudo apt-get update > /dev/null 2>&1 || true
-        sudo apt-get install -y libyaml-dev > /dev/null 2>&1 || {
-            log "  ⚠️ 自动安装失败，将使用备用方案"
-            
-            # 备用方案：创建pkg-config文件
-            mkdir -p staging_dir/host/lib/pkgconfig
-            cat > staging_dir/host/lib/pkgconfig/yaml-0.1.pc << 'EOF'
-prefix=/usr
-exec_prefix=${prefix}
-includedir=${prefix}/include
-libdir=${exec_prefix}/lib/x86_64-linux-gnu
-
-Name: LibYAML
-Description: Library for YAML 1.1
-Version: 0.2.5
-Cflags: -I${includedir}
-Libs: -L${libdir} -lyaml
-EOF
-            export PKG_CONFIG_PATH="$PWD/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
-            log "  ✅ 已创建libyaml pkg-config文件"
-            
-            # 检查库文件是否存在
-            if [ ! -f "/usr/lib/x86_64-linux-gnu/libyaml.so" ] && [ ! -f "/usr/lib/libyaml.so" ]; then
-                log "  ⚠️ libyaml库文件不存在，尝试下载源码编译..."
-                
-                # 下载并编译libyaml
-                mkdir -p dl
-                if [ ! -f "dl/yaml-0.2.5.tar.gz" ]; then
-                    wget -O dl/yaml-0.2.5.tar.gz https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz || true
-                fi
-                
-                if [ -f "dl/yaml-0.2.5.tar.gz" ]; then
-                    mkdir -p build_dir/host/libyaml-0.2.5
-                    tar -xzf dl/yaml-0.2.5.tar.gz -C build_dir/host/libyaml-0.2.5 --strip-components=1
-                    cd build_dir/host/libyaml-0.2.5
-                    ./configure --prefix="$BUILD_DIR/staging_dir/host"
-                    make -j1
-                    make install
-                    cd "$BUILD_DIR"
-                    
-                    # 更新pkg-config路径
-                    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
-                    log "  ✅ libyaml手动编译完成"
-                fi
-            fi
-        }
-    else
-        log "  ✅ libyaml已安装"
-        pkg-config --libs --cflags yaml-0.1 | sed 's/^/      /'
-    fi
-    
-    log "📌 开始编译工具链..."
-    log "   源码类型: $SOURCE_REPO_TYPE"
-    log "   目标平台: $TARGET/$SUBTARGET"
-    log "   设备: $device_name"
-    
-    # 检查是否已经编译过工具链
-    if [ -d "staging_dir" ] && [ -f "staging_dir/host/bin/gcc" ]; then
-        log "  ✅ 工具链已存在，跳过编译"
-        COMPILER_DIR="$BUILD_DIR"
-        save_env
-        log "✅ 步骤09 完成"
-        return 0
-    fi
-    
-    # 步骤1: 更新feeds
-    log ""
-    log "🔄 步骤1: 更新feeds..."
-    ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
-        log "⚠️ feeds更新有警告，继续..."
-    }
-    
-    # 步骤2: 安装基础feed
-    log ""
-    log "🔄 步骤2: 安装基础feed..."
-    ./scripts/feeds install base > /tmp/build-logs/base_install.log 2>&1 || true
-    
-    # 步骤3: 准备编译工具链
-    log ""
-    log "🔄 步骤3: 配置工具链..."
-    
-    # 获取目标平台和子平台
-    local target="${TARGET:-ipq40xx}"
-    local subtarget="${SUBTARGET:-generic}"
-    
-    # 创建最小配置（只编译工具链）
-    cat > .config.toolchain << EOF
-CONFIG_TARGET_${target}=y
-CONFIG_TARGET_${target}_${subtarget}=y
-# 只编译工具链，不编译固件
-CONFIG_DEVEL=y
-CONFIG_TOOLCHAINOPTS=y
-# 禁用所有固件相关的配置
-CONFIG_TARGET_ROOTFS_INITRAMFS=n
-CONFIG_TARGET_ROOTFS_SQUASHFS=n
-CONFIG_TARGET_ROOTFS_EXT4FS=n
-CONFIG_TARGET_ROOTFS_JFFS2=n
-# 禁用内核编译（只编译工具链）
-CONFIG_KERNEL_NONE=y
-EOF
-    
-    # 使用最小配置
-    cp .config.toolchain .config
-    
-    # 运行defconfig
-    log "  运行 make defconfig..."
-    make defconfig > /tmp/build-logs/toolchain_defconfig.log 2>&1
-    
-    # 步骤4: 编译工具链
-    log ""
-    log "🔄 步骤4: 编译工具链..."
-    log "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-    log ""
-    
-    START_TIME=$(date +%s)
-    
-    # 先编译tools（基础工具）
-    log "  编译 tools (基础工具)..."
-    if make tools/compile -j$(nproc) V=s > /tmp/build-logs/tools_compile.log 2>&1; then
-        log "  ✅ tools编译完成"
-    else
-        log "  ⚠️ tools编译有警告，检查日志..."
-        tail -50 /tmp/build-logs/tools_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
-    fi
-    
-    # 再编译toolchain（交叉编译工具链）
-    log "  编译 toolchain (交叉工具链)..."
-    if make toolchain/compile -j$(nproc) V=s > /tmp/build-logs/toolchain_compile.log 2>&1; then
-        log "  ✅ toolchain编译完成"
-    else
-        log "  ⚠️ toolchain编译有警告，检查日志..."
-        tail -50 /tmp/build-logs/toolchain_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
-    fi
-    
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
-    
-    log ""
-    log "✅ 工具链编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-    
-    # 验证工具链
-    log ""
-    log "🔍 验证工具链..."
-    
-    if [ -d "staging_dir" ]; then
-        log "  ✅ staging_dir目录存在"
-        
-        # 查找GCC编译器
-        GCC_FILE=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
-        
-        if [ -n "$GCC_FILE" ]; then
-            log "  ✅ GCC编译器已生成: $(basename "$GCC_FILE")"
-            GCC_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            log "     版本: $GCC_VERSION"
-        else
-            log "  ⚠️ GCC编译器未找到，但可能正在生成中"
-        fi
-        
-        # 统计工具链大小
-        TOOLCHAIN_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-        log "  📊 工具链大小: $TOOLCHAIN_SIZE"
-    else
-        log "  ❌ staging_dir目录不存在，工具链编译可能失败"
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 编译前空间检查失败"
         exit 1
     fi
     
-    # 保存工具链信息到环境变量
-    COMPILER_DIR="$BUILD_DIR"
-    save_env
+    log "✅ 步骤13 完成"
+}
+
+workflow_step14_pre_build_space_check() {
+    log "=== 步骤14: 编译前空间检查 ==="
     
-    log "✅ 步骤09 完成"
+    set -e
+    trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
+    
+    pre_build_space_check
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 编译前空间检查失败"
+        exit 1
+    fi
+    
+    log "✅ 步骤14 完成"
+}
+
+pre_build_space_check() {
+    log "=== 编译前空间检查 ==="
+    
+    echo "当前目录: $(pwd)"
+    echo "构建目录: $BUILD_DIR"
+    
+    echo "=== 磁盘使用情况 ==="
+    df -h
+    
+    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | awk '{print $1}') || echo "无法获取构建目录大小"
+    echo "构建目录大小: $build_dir_usage"
+    
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    echo "/mnt 可用空间: ${available_gb}G"
+    
+    local root_available_space=$(df / --output=avail | tail -1)
+    local root_available_gb=$((root_available_space / 1024 / 1024))
+    echo "/ 可用空间: ${root_available_gb}G"
+    
+    echo "=== 内存使用情况 ==="
+    free -h
+    
+    echo "=== CPU信息 ==="
+    echo "CPU核心数: $(nproc)"
+    
+    local estimated_space=15
+    if [ $available_gb -lt $estimated_space ]; then
+        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
+    else
+        log "✅ 磁盘空间充足: ${available_gb}G 可用"
+    fi
+    
+    log "✅ 空间检查完成"
 }
 #【build_firmware_main.sh-27-end】
 
