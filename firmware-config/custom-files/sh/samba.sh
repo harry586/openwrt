@@ -1,15 +1,13 @@
 #!/bin/sh
-# Samba只读增强版配置脚本（兼容Samba 3.x/4.x）
-# 包含：文件过滤、性能优化、匿名访问，只读权限
-# 修改：禁用打印共享（避免 /etc/printcap 错误）
+# Samba只读 + FTP可写 配置脚本（兼容Samba 3.x/4.x）
+# 功能：Samba匿名只读，FTP等其他服务可写
 
-echo "=== Samba只读增强版配置（Samba 3.x/4.x兼容版） ==="
+echo "=== Samba只读 + FTP可写 配置脚本 ==="
 
 # 获取Samba版本
 echo "检测Samba版本..."
 SAMBA_VERSION="未知"
 if command -v smbd >/dev/null 2>&1; then
-    # 尝试多种方式获取版本
     if smbd -V 2>/dev/null | head -1 | grep -q "Version"; then
         SAMBA_VERSION=$(smbd -V 2>/dev/null | head -1 | sed 's/.*Version //')
     elif testparm -V 2>/dev/null | head -1 | grep -q "Version"; then
@@ -40,7 +38,7 @@ if [ "$SAMBA_MAJOR_VERSION" = "3" ]; then
 [global]
     # ========== 基本设置 ==========
     workgroup = WORKGROUP
-    server string = OpenWRT Samba (Read-Only Enhanced)
+    server string = OpenWRT Samba (Read-Only)
     netbios name = OpenWRT
     interfaces = lo br-lan
     bind interfaces only = yes
@@ -57,7 +55,6 @@ if [ "$SAMBA_MAJOR_VERSION" = "3" ]; then
     invalid users = root
     
     # ========== 协议兼容性 ==========
-    # Samba 3.x 只支持到 NT1 (SMB1)
     protocol = NT1
     
     # ========== 性能优化 ==========
@@ -66,7 +63,6 @@ if [ "$SAMBA_MAJOR_VERSION" = "3" ]; then
     getwd cache = yes
     large readwrite = yes
     
-    # 内存和连接优化
     max connections = 10
     max open files = 16384
     strict allocate = yes
@@ -80,13 +76,6 @@ if [ "$SAMBA_MAJOR_VERSION" = "3" ]; then
     hide unreadable = yes
     delete veto files = no
     
-    # ========== 文件属性映射 ==========
-    store dos attributes = yes
-    map archive = no
-    map hidden = no
-    map readonly = no
-    map system = no
-    
     # ========== 日志设置 ==========
     log file = /var/log/samba/log.%m
     max log size = 1024
@@ -94,15 +83,10 @@ if [ "$SAMBA_MAJOR_VERSION" = "3" ]; then
     
     # ========== 字符集设置 ==========
     unix charset = UTF-8
-    dos charset = CP936  # 3.x 通常用 CP936 (GBK)
-    
-    # ========== 网络发现设置 ==========
-    wins support = no
-    dns proxy = no
-    name resolve order = bcast host
+    dos charset = CP936
 
 [sda1]
-    comment = Read-Only Enhanced Share
+    comment = Read-Only Share (FTP可写)
     path = /mnt/sda1
     browseable = yes
     available = yes
@@ -110,25 +94,14 @@ if [ "$SAMBA_MAJOR_VERSION" = "3" ]; then
     writable = no
     guest ok = yes
     
-    # 文件权限设置
-    create mask = 0444
-    directory mask = 0555
-    force create mode = 0444
-    force directory mode = 0555
+    # 只读权限：不强制指定用户，保持文件原有权限
+    # FTP等其他服务可以正常写入
+    create mask = 0644
+    directory mask = 0755
     
-    force user = nobody
-    force group = nogroup
-    
-    # 共享特有过滤
     hide dot files = yes
     veto files = /*.exe/*.dll/*.bat/*.cmd/*.scr/*.tmp/*.temp/
     delete veto files = no
-    
-    strict allocate = yes
-    level2 oplocks = yes
-    oplocks = yes
-    locking = yes
-    kernel oplocks = no
     
     case sensitive = auto
     preserve case = yes
@@ -140,7 +113,7 @@ else
 [global]
     # ========== 基本设置 ==========
     workgroup = WORKGROUP
-    server string = OpenWRT Samba (Read-Only Enhanced)
+    server string = OpenWRT Samba (Read-Only)
     netbios name = OpenWRT
     interfaces = lo br-lan
     bind interfaces only = yes
@@ -191,18 +164,6 @@ else
     smb encrypt = disabled
     server signing = auto
     
-    # ========== 高级安全设置 ==========
-    logon home = \\
-    logon path = \\
-    
-    # ========== 文件属性映射 ==========
-    store dos attributes = yes
-    map archive = no
-    map hidden = no
-    map readonly = no
-    map system = no
-    unix extensions = no
-    
     # ========== 日志设置 ==========
     log file = /var/log/samba/log.%m
     max log size = 1024
@@ -211,14 +172,9 @@ else
     # ========== 字符集设置 ==========
     unix charset = UTF-8
     dos charset = CP850
-    
-    # ========== 网络发现设置 ==========
-    wins support = no
-    dns proxy = no
-    name resolve order = bcast host
 
 [sda1]
-    comment = Read-Only Enhanced Share
+    comment = Read-Only Share (FTP可写)
     path = /mnt/sda1
     browseable = yes
     available = yes
@@ -227,24 +183,14 @@ else
     guest ok = yes
     guest only = yes
     
-    create mask = 0444
-    directory mask = 0555
-    force create mode = 0444
-    force directory mode = 0555
-    
-    force user = nobody
-    force group = nogroup
+    # 只读权限：不强制指定用户，保持文件原有权限
+    # FTP等其他服务可以正常写入
+    create mask = 0644
+    directory mask = 0755
     
     hide dot files = yes
     veto files = /*.exe/*.dll/*.bat/*.cmd/*.scr/*.tmp/*.temp/
     delete veto files = no
-    
-    strict allocate = yes
-    use sendfile = yes
-    level2 oplocks = yes
-    oplocks = yes
-    locking = yes
-    kernel oplocks = no
     
     case sensitive = auto
     preserve case = yes
@@ -252,16 +198,39 @@ else
 EOF
 fi
 
-echo "✓ 配置文件已创建（兼容 Samba $SAMBA_VERSION）"
+echo "✓ 配置文件已创建"
 
-# 4. 设置目录权限（只读）
+# 4. 设置目录权限（关键：让FTP用户可写，Samba只读）
 echo "设置共享目录权限..."
+
+# 创建挂载点
 mkdir -p /mnt/sda1
-chmod 755 /mnt/sda1
-find /mnt/sda1 -type d -exec chmod 755 {} \; 2>/dev/null || true
-find /mnt/sda1 -type f -exec chmod 644 {} \; 2>/dev/null || true
-chown -R nobody:nogroup /mnt/sda1 2>/dev/null || 
-chown -R root:root /mnt/sda1 2>/dev/null || true
+
+# 方案：设置目录为 755，文件为 644
+# FTP 用户（如 root 或 ftp）需要有写入权限
+# 如果 FTP 以 root 运行，则无需额外设置
+# 如果 FTP 以 ftp 用户运行，则需设置权限
+
+# 检测是否有 vsftpd 的 ftp 用户
+if id ftp >/dev/null 2>&1; then
+    FTP_USER="ftp"
+    FTP_GROUP="ftp"
+    echo "检测到 ftp 用户，设置 ftp 用户可写..."
+    chown -R ftp:ftp /mnt/sda1 2>/dev/null || true
+    chmod -R 755 /mnt/sda1 2>/dev/null || true
+    # 目录需要写权限
+    find /mnt/sda1 -type d -exec chmod 775 {} \; 2>/dev/null || true
+else
+    # 如果 FTP 以 root 运行，保持 root 可写
+    echo "未检测到 ftp 用户，使用 root 权限（FTP需以root运行）"
+    chmod -R 755 /mnt/sda1 2>/dev/null || true
+fi
+
+# 确保 nobody 只读（Samba用）
+chown -R nobody:nogroup /mnt/sda1 2>/dev/null || true
+chmod -R 755 /mnt/sda1 2>/dev/null || true
+
+echo "✓ 目录权限已设置"
 
 # 5. 启动Samba服务
 echo "启动Samba服务..."
@@ -287,15 +256,17 @@ echo "=== 配置完成 ==="
 echo ""
 echo "配置摘要:"
 echo "  Samba版本: $SAMBA_VERSION"
-echo "  访问方式: 匿名只读"
-echo "  共享名称: sda1"
-echo "  共享路径: /mnt/sda1"
-echo "  配置文件: /etc/samba/smb.conf (只读)"
+echo "  Samba访问: 匿名只读"
+echo "  FTP访问:   可写（需FTP服务单独配置）"
+echo "  共享名称:   sda1"
+echo "  共享路径:   /mnt/sda1"
 echo ""
-echo "增强功能:"
-echo "  ✓ 文件过滤 (.exe/.dll/.tmp等)"
-echo "  ✓ 性能优化"
-echo "  ✓ 协议兼容"
-echo "  ✓ 安全设置 (只读权限)"
-echo "  ✓ 禁用打印共享 (避免printcap错误)"
+echo "权限说明:"
+echo "  ✓ Samba 使用 nobody 用户 → 只读"
+echo "  ✓ FTP 可使用 root/ftp 用户 → 可写"
+echo ""
+echo "FTP配置提醒:"
+echo "  1. vsftpd: 确保 write_enable=YES"
+echo "  2. 如果FTP使用匿名用户，需设置: anon_upload_enable=YES"
+echo "  3. 建议FTP使用root或ftp用户，并设置目录写权限"
 echo ""
