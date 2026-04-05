@@ -5631,14 +5631,15 @@ EOF
         echo "📊 最终固件检查:"
         echo "----------------------------------------"
         
-        for file in "$target_dir"/*.bin "$target_dir"/*.img "$target_dir"/*.itb 2>/dev/null; do
+        # 修复：将 2>/dev/null 移到 done 后面
+        for file in "$target_dir"/*.bin "$target_dir"/*.img "$target_dir"/*.itb; do
             if [ -f "$file" ]; then
                 local fname=$(basename "$file")
-                local size=$(ls -lh "$file" | awk '{print $5}')
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
                 echo "  ✅ $fname ($size)"
                 valid_firmware=$((valid_firmware + 1))
             fi
-        done
+        done 2>/dev/null
         
         echo "----------------------------------------"
     fi
