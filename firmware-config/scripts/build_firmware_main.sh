@@ -5378,34 +5378,6 @@ EOF
     fi
     
     # ============================================
-    # OpenWrt 官方源码特殊处理：修复内核编译错误
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "🔧 OpenWrt 官方源码预处理：修复内核编译错误..."
-        
-        # 删除有问题的补丁
-        local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-        
-        if [ -f "$problem_patch" ]; then
-            log "  🗑️ 删除有问题的补丁: $problem_patch"
-            rm -f "$problem_patch"
-        fi
-        
-        # 如果内核源码已经存在，直接修复
-        local kernel_dirs=$(find build_dir -path "*/linux-ipq40xx_generic/linux-5.15.*/drivers/mmc/host" -type d 2>/dev/null)
-        for kernel_dir in $kernel_dirs; do
-            local kernel_file="$kernel_dir/sdhci-msm.c"
-            if [ -f "$kernel_file" ]; then
-                log "  🔧 修复内核源码: $kernel_file"
-                sed -i 's/static void sdhci_msm_set_clock(/static void __maybe_unused sdhci_msm_set_clock(/' "$kernel_file"
-                log "  ✅ 内核源码已修复"
-            fi
-        done
-        
-        log "  ✅ OpenWrt 预处理完成"
-    fi
-    
-    # ============================================
     # LEDE 特殊预处理
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
@@ -5426,7 +5398,44 @@ EOF
             touch "$lib_dir/libhistory.a" 2>/dev/null || true
         done
         
+        # 删除有问题的 luci-lib-fs 包（LEDE 中导致 package/install 错误）
+        log "  🔧 处理有问题的 luci-lib-fs 包..."
+        
+        # 删除源码目录
+        find package/feeds -type d -name "luci-lib-fs" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 package/feeds/luci-lib-fs: $dir"
+            rm -rf "$dir"
+        done
+        
+        find feeds -type d -name "luci-lib-fs" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除 feeds/luci-lib-fs: $dir"
+            rm -rf "$dir"
+        done
+        
+        # 在配置中禁用 luci-lib-fs
+        if [ -f ".config" ]; then
+            sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
+            echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
+            log "    ✅ 已在配置中禁用 luci-lib-fs"
+        fi
+        
         log "  ✅ LEDE 预处理完成"
+    fi
+    
+    # ============================================
+    # OpenWrt 官方源码特殊处理
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "🔧 OpenWrt 官方源码预处理：修复内核编译错误..."
+        
+        local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+        
+        if [ -f "$problem_patch" ]; then
+            log "  🗑️ 删除有问题的补丁: $problem_patch"
+            rm -f "$problem_patch"
+        fi
+        
+        log "  ✅ OpenWrt 预处理完成"
     fi
     
     local max_attempts=3
@@ -5461,13 +5470,69 @@ EOF
         
         if [ -f "$log_file" ]; then
             # ============================================
+            # LEDE 特殊处理：package/install Error 255
+            # ============================================
+            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                if grep -q "package/install.*Error 255\|luci-lib-fs" "$log_file"; then
+                    log "  ⚠️ 检测到 LEDE package/install 错误，尝试修复..."
+                    
+                    # 清理安装缓存
+                    rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
+                    rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
+                    rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
+                    rm -f tmp/info/.packageinfo-* 2>/dev/null
+                    
+                    # 清理 ipkg 目录
+                    find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
+                        log "    清理 ipkg 目录: $ipkg_dir"
+                        rm -rf "$ipkg_dir"
+                    done
+                    
+                    # 重新安装 feeds
+                    log "    重新安装 feeds..."
+                    ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+                    
+                    # 确保 luci-lib-fs 被禁用
+                    if [ -f ".config" ]; then
+                        sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
+                        echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
+                        sort -u .config -o .config
+                        log "    ✅ 已禁用 luci-lib-fs"
+                    fi
+                    
+                    log "  ✅ LEDE package/install 错误修复完成"
+                fi
+                
+                if grep -q "vsftpd-alt" "$log_file"; then
+                    log "  ⚠️ 检测到 vsftpd-alt 冲突，强制删除..."
+                    
+                    find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+                        log "    删除 vsftpd-alt 目录: $dir"
+                        rm -rf "$dir"
+                    done
+                    
+                    find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+                        log "    删除 feeds vsftpd-alt 目录: $dir"
+                        rm -rf "$dir"
+                    done
+                    
+                    if [ -f ".config" ]; then
+                        sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
+                        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+                        sort -u .config -o .config
+                    fi
+                    
+                    log "  ✅ vsftpd-alt 冲突已解决"
+                fi
+            fi
+            
+            # ============================================
             # OpenWrt 官方源码：检测 sdhci-msm 函数未使用错误
             # ============================================
             if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
                 if grep -q "sdhci_msm_set_clock.*defined but not used" "$log_file"; then
                     log "  ⚠️ 检测到 sdhci_msm_set_clock 未使用错误，正在修复..."
                     
-                    # 查找并修复内核源码
                     local kernel_files=$(find build_dir -path "*/linux-ipq40xx_generic/linux-5.15.*/drivers/mmc/host/sdhci-msm.c" 2>/dev/null)
                     for kernel_file in $kernel_files; do
                         if [ -f "$kernel_file" ]; then
@@ -5476,8 +5541,6 @@ EOF
                         fi
                     done
                     
-                    # 清理内核构建目录
-                    log "    清理内核构建目录..."
                     rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
                     rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
                     
@@ -5488,7 +5551,7 @@ EOF
             # ============================================
             # 通用错误处理
             # ============================================
-            if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
+            if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file" && [ "$SOURCE_REPO_TYPE" != "lede" ]; then
                 log "  ⚠️ 检测到 package/install 错误，尝试修复..."
                 
                 rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
