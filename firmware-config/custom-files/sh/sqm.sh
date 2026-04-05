@@ -37,8 +37,8 @@ config queue 'eth1'
     option verbosity '2'
     option enabled '1'
     option interface 'br-lan'
-    option download '96000'
-    option upload '960000'
+    option download '960000'
+    option upload '0'
     option linklayer 'ethernet'
     option overhead '0'
 EOF
@@ -63,12 +63,19 @@ fi
 # Setup
 sqm_start
 
-# Default settings
-UPLINK=${UPLINK:-960000}
-DOWNLINK=${DOWNLINK:-96000}
+# Default settings (upload=0 表示禁用上行整形)
+UPLINK=${UPLINK:-0}
+DOWNLINK=${DOWNLINK:-960000}
 
-# Apply CAKE qdisc
-tc qdisc add dev $IFACE root handle 1: cake bandwidth ${UPLINK}kbit
+# 只有当 UPLINK 大于 0 时才配置上行队列
+if [ "$UPLINK" -gt 0 ]; then
+    tc qdisc add dev $IFACE root handle 1: cake bandwidth ${UPLINK}kbit
+    echo "SQM Upload configured: ${UPLINK}kbit"
+else
+    echo "SQM Upload disabled (UPLINK=0)"
+fi
+
+# 配置下行队列（始终配置，因为 DOWNLINK > 0）
 tc qdisc add dev $IFACE ingress
 tc filter add dev $IFACE parent ffff: protocol all prio 1 u32 match u32 0 0 flowid 1:1 action mirred egress redirect dev ifb4$IFACE
 tc qdisc add dev ifb4$IFACE root handle 1: cake bandwidth ${DOWNLINK}kbit
