@@ -117,7 +117,7 @@ config server
     option name 'google_dns_1'
     option ip '8.8.8.8'
     option type 'udp'
-    option enabled '1'
+    option enabled '0'
 EOF
     print_status "创建主配置文件完成（根据 smartdns.txt）"
 }
