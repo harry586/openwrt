@@ -5268,7 +5268,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（修复版） ==="
+    log "=== 步骤25: 编译固件（LEDE修复版） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -5280,78 +5280,49 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    log "🔧 创建双固件保护脚本..."
-    local protect_dir="$BUILD_DIR/.firmware_protect"
-    mkdir -p "$protect_dir"
-    
-    cat > "$protect_dir/protect.sh" << 'EOF'
-#!/bin/bash
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-LOG_FILE="$PROTECT_DIR/protect.log"
-
-echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
-
-while true; do
-    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
-    for tmp_dir in $TMP_DIRS; do
-        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.itb" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
-            if [ -f "$file" ]; then
-                backup="$PROTECT_DIR/$(basename "$file").backup"
-                cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份 $(basename "$file")" >> "$LOG_FILE"
-            fi
+    # ============================================
+    # LEDE 特殊预处理
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE 预处理：修复常见问题..."
+        
+        # 1. 创建缺失的 xattr.conf
+        find staging_dir -type d -name "root-*" 2>/dev/null | while read root_dir; do
+            mkdir -p "$root_dir/etc"
+            touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
         done
-    done
-    sleep 5
-done
-EOF
-    chmod +x "$protect_dir/protect.sh"
-    
-    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
-    local protect_pid=$!
-    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
-    
-    cat > "$protect_dir/recover.sh" << 'EOF'
-#!/bin/bash
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-
-if [ -f "$BUILD_DIR/build_env.sh" ]; then
-    source "$BUILD_DIR/build_env.sh"
-fi
-
-TARGET="${TARGET:-ath79}"
-SUBTARGET="${SUBTARGET:-generic}"
-TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-mkdir -p "$TARGET_DIR"
-
-echo "=== 强制恢复开始于 $(date) ==="
-echo "目标平台: $TARGET/$SUBTARGET"
-
-RECOVERED=0
-find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
-    filename=$(basename "$backup" .backup)
-    if [ ! -f "$TARGET_DIR/$filename" ]; then
-        cp -f "$backup" "$TARGET_DIR/$filename"
-        echo "  ✅ 恢复: $filename"
-        RECOVERED=$((RECOVERED + 1))
+        
+        # 2. 修复 dnsmasq-full 的 postinst 问题
+        log "  🔧 修复 dnsmasq-full postinst 脚本..."
+        local dnsmasq_postinst=$(find package/feeds -path "*/dnsmasq/files/dnsmasq.postinst" 2>/dev/null | head -1)
+        if [ -f "$dnsmasq_postinst" ]; then
+            # 确保脚本可以正常执行
+            chmod +x "$dnsmasq_postinst" 2>/dev/null || true
+        fi
+        
+        # 3. 修复 ppp-mod-pppoe 的 postinst 问题
+        log "  🔧 修复 ppp-mod-pppoe postinst 脚本..."
+        local ppp_postinst=$(find package/feeds -path "*/ppp/files/ppp.postinst" 2>/dev/null | head -1)
+        if [ -f "$ppp_postinst" ]; then
+            chmod +x "$ppp_postinst" 2>/dev/null || true
+        fi
+        
+        # 4. 创建必要的目录
+        mkdir -p staging_dir/target-*/etc/init.d 2>/dev/null || true
+        mkdir -p staging_dir/target-*/etc/config 2>/dev/null || true
+        
+        # 5. 预先创建一些可能缺失的配置文件
+        echo "config dnsmasq" > staging_dir/target-*/etc/config/dhcp 2>/dev/null || true
+        echo "config interface 'loopback'" > staging_dir/target-*/etc/config/network 2>/dev/null || true
+        
+        log "  ✅ LEDE 预处理完成"
     fi
-done
-
-echo "📊 恢复文件数: $RECOVERED"
-echo "=== 强制恢复结束 ==="
-EOF
-    chmod +x "$protect_dir/recover.sh"
     
+    # ============================================
+    # 编译循环
+    # ============================================
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
-    
-    echo ""
-    echo "🔧 系统信息:"
-    echo "  CPU核心数: $CPU_CORES"
-    echo "  内存大小: ${TOTAL_MEM}MB"
-    echo "  源码类型: $SOURCE_REPO_TYPE"
     
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
@@ -5365,7 +5336,7 @@ EOF
     
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
-            MAKE_JOBS=4
+            MAKE_JOBS=2
         elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
             MAKE_JOBS=2
         else
@@ -5377,68 +5348,13 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    # ============================================
-    # LEDE 特殊预处理
-    # ============================================
+    # LEDE 使用单线程更稳定
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE 预处理：创建必要的目录和文件..."
-        
-        find staging_dir -type d -name "root-*" 2>/dev/null | while read root_dir; do
-            mkdir -p "$root_dir/etc"
-            touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
-        done
-        
-        find build_dir -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
-            mkdir -p "$dir"
-            touch "$dir/Module.symvers" 2>/dev/null || true
-        done
-        
-        find build_dir -path "*/readline-*/ipkg-install/usr/lib" 2>/dev/null | while read lib_dir; do
-            touch "$lib_dir/libreadline.a" 2>/dev/null || true
-            touch "$lib_dir/libhistory.a" 2>/dev/null || true
-        done
-        
-        # 删除有问题的 luci-lib-fs 包（LEDE 中导致 package/install 错误）
-        log "  🔧 处理有问题的 luci-lib-fs 包..."
-        
-        # 删除源码目录
-        find package/feeds -type d -name "luci-lib-fs" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除 package/feeds/luci-lib-fs: $dir"
-            rm -rf "$dir"
-        done
-        
-        find feeds -type d -name "luci-lib-fs" 2>/dev/null | while read dir; do
-            log "    🗑️ 删除 feeds/luci-lib-fs: $dir"
-            rm -rf "$dir"
-        done
-        
-        # 在配置中禁用 luci-lib-fs
-        if [ -f ".config" ]; then
-            sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
-            echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
-            log "    ✅ 已在配置中禁用 luci-lib-fs"
-        fi
-        
-        log "  ✅ LEDE 预处理完成"
+        MAKE_JOBS=1
+        log "⚠️ LEDE 源码使用单线程编译"
     fi
     
-    # ============================================
-    # OpenWrt 官方源码特殊处理
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "🔧 OpenWrt 官方源码预处理：修复内核编译错误..."
-        
-        local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-        
-        if [ -f "$problem_patch" ]; then
-            log "  🗑️ 删除有问题的补丁: $problem_patch"
-            rm -f "$problem_patch"
-        fi
-        
-        log "  ✅ OpenWrt 预处理完成"
-    fi
-    
-    local max_attempts=3
+    local max_attempts=2
     local attempt=1
     local compile_success=0
     
@@ -5469,211 +5385,61 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            # ============================================
-            # LEDE 特殊处理：package/install Error 255
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                if grep -q "package/install.*Error 255\|luci-lib-fs" "$log_file"; then
-                    log "  ⚠️ 检测到 LEDE package/install 错误，尝试修复..."
-                    
-                    # 清理安装缓存
-                    rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
-                    rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
-                    rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
-                    rm -f tmp/info/.packageinfo-* 2>/dev/null
-                    
-                    # 清理 ipkg 目录
-                    find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
-                        log "    清理 ipkg 目录: $ipkg_dir"
-                        rm -rf "$ipkg_dir"
-                    done
-                    
-                    # 重新安装 feeds
-                    log "    重新安装 feeds..."
-                    ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
-                    
-                    # 确保 luci-lib-fs 被禁用
-                    if [ -f ".config" ]; then
-                        sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
-                        echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
-                        sort -u .config -o .config
-                        log "    ✅ 已禁用 luci-lib-fs"
-                    fi
-                    
-                    log "  ✅ LEDE package/install 错误修复完成"
-                fi
-                
-                if grep -q "vsftpd-alt" "$log_file"; then
-                    log "  ⚠️ 检测到 vsftpd-alt 冲突，强制删除..."
-                    
-                    find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-                        log "    删除 vsftpd-alt 目录: $dir"
-                        rm -rf "$dir"
-                    done
-                    
-                    find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-                        log "    删除 feeds vsftpd-alt 目录: $dir"
-                        rm -rf "$dir"
-                    done
-                    
-                    if [ -f ".config" ]; then
-                        sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
-                        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-                        sort -u .config -o .config
-                    fi
-                    
-                    log "  ✅ vsftpd-alt 冲突已解决"
-                fi
-            fi
+            # 输出详细错误信息
+            log "  ⚠️ 编译失败，退出代码: $PHASE1_EXIT_CODE"
+            log "  🔍 最后50行错误日志:"
+            grep -E "Error|error|ERROR|failed|Failed" "$log_file" | tail -50 | while read line; do
+                log "    $line"
+            done
             
-            # ============================================
-            # OpenWrt 官方源码：检测 sdhci-msm 函数未使用错误
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-                if grep -q "sdhci_msm_set_clock.*defined but not used" "$log_file"; then
-                    log "  ⚠️ 检测到 sdhci_msm_set_clock 未使用错误，正在修复..."
-                    
-                    local kernel_files=$(find build_dir -path "*/linux-ipq40xx_generic/linux-5.15.*/drivers/mmc/host/sdhci-msm.c" 2>/dev/null)
-                    for kernel_file in $kernel_files; do
-                        if [ -f "$kernel_file" ]; then
-                            log "    修复内核文件: $kernel_file"
-                            sed -i 's/static void sdhci_msm_set_clock(/static void __maybe_unused sdhci_msm_set_clock(/' "$kernel_file"
-                        fi
-                    done
-                    
-                    rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
-                    rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-                    
-                    log "  ✅ sdhci-msm 错误修复完成"
-                fi
-            fi
-            
-            # ============================================
-            # 通用错误处理
-            # ============================================
-            if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file" && [ "$SOURCE_REPO_TYPE" != "lede" ]; then
-                log "  ⚠️ 检测到 package/install 错误，尝试修复..."
+            # LEDE 特殊处理：如果失败，尝试清理并重试一次
+            if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $attempt -lt $max_attempts ]; then
+                log "  🔧 LEDE 重试前清理..."
                 
+                # 清理 package/install 缓存
                 rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
                 rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
                 rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
                 rm -f tmp/info/.packageinfo-* 2>/dev/null
                 
+                # 清理 ipkg 目录
                 find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
-                    log "    清理 ipkg 目录: $ipkg_dir"
                     rm -rf "$ipkg_dir"
                 done
                 
-                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
-                
-                log "  ✅ package/install 错误修复完成"
-            fi
-            
-            if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
-                log "  ⚠️ 检测到补丁失败，正在自动修复..."
-                
-                local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-                
-                for patch_name in $failed_patches; do
-                    find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
-                        log "    🗑️ 删除失败补丁: $patch_file"
-                        rm -f "$patch_file"
-                    done
-                done
-                
-                rm -rf build_dir/target-*/linux-* 2>/dev/null || true
-                rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-                
-                log "  ✅ 补丁修复完成"
-            fi
-            
-            if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
-                log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
-                
-                rm -f staging_dir/target-*/stamp/.samba4* 2>/dev/null
-                rm -f build_dir/target-*/samba-*/.built 2>/dev/null
-                
-                if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                    sudo apt-get install -y python3-distutils python3-dev libpython3-dev 2>/dev/null || true
-                    
-                    find build_dir -name "samba-*" -type d 2>/dev/null | while read samba_dir; do
-                        rm -f "$samba_dir/.configured" 2>/dev/null
-                        log "    清理 samba 配置缓存: $samba_dir"
-                    done
-                fi
-                
-                log "  ✅ samba4 错误修复完成"
-            fi
-            
-            if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file"; then
-                log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
-                
-                find build_dir -type d -name "ath10k-ct*" 2>/dev/null | while read ath10k_dir; do
-                    log "    清理 ath10k 目录: $ath10k_dir"
-                    rm -rf "$ath10k_dir"
-                done
-                
-                if [ -f ".config" ]; then
-                    sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
-                    echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
-                    log "    已在配置中禁用 kmod-ath10k-ct"
-                fi
-                
-                log "  ✅ ath10k-ct 错误修复完成"
-            fi
-            
-            if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file"; then
-                log "  ⚠️ 检测到 shortcut-fe 驱动编译错误，尝试修复..."
-                
-                find build_dir -type d -name "shortcut-fe*" 2>/dev/null | while read sfe_dir; do
-                    log "    清理 shortcut-fe 目录: $sfe_dir"
-                    rm -rf "$sfe_dir"
-                done
-                
-                if [ -f ".config" ]; then
-                    sed -i '/CONFIG_PACKAGE_kmod-shortcut-fe=y/d' .config
-                    echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-                    log "    已在配置中禁用 kmod-shortcut-fe"
-                fi
-                
-                log "  ✅ shortcut-fe 错误修复完成"
-            fi
-            
-            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
-                    log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
-                    make defconfig > /tmp/lede_defconfig_fix.log 2>&1 || true
-                    log "  ✅ kmod 依赖修复完成"
-                fi
-            fi
-            
-            if grep -q "Broken pipe" "$log_file"; then
-                log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
-                ulimit -n 65536 2>/dev/null || true
-            fi
-            
-            if grep -q "libssl was not found" "$log_file"; then
-                log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
-                sudo apt-get update > /dev/null 2>&1 || true
-                sudo apt-get install -y libssl-dev > /dev/null 2>&1 || true
+                log "  ✅ LEDE 清理完成，将重试"
             fi
         fi
         
         attempt=$((attempt + 1))
     done
     
-    if [ $compile_success -eq 0 ]; then
-        echo ""
-        echo "❌❌❌ 编译失败，已尝试 $max_attempts 次 ❌❌❌"
-        
-        bash "$protect_dir/recover.sh" "$protect_dir" "$BUILD_DIR"
-        
-        kill $protect_pid 2>/dev/null || true
-        rm -rf "$protect_dir" 2>/dev/null || true
-        
-        exit $PHASE1_EXIT_CODE
+    # 如果编译失败，检查是否有部分固件生成
+    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+    local valid_firmware=0
+    
+    if [ -d "$target_dir" ]; then
+        while IFS= read -r file; do
+            [ -n "$file" ] && continue
+            local fname=$(basename "$file")
+            local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
+            local size_mb=$((size_bytes / 1024 / 1024))
+            
+            if [[ "$fname" == *"sysupgrade"* ]] && [ $size_mb -ge 5 ]; then
+                valid_firmware=$((valid_firmware + 1))
+            fi
+        done < <(find "$target_dir" -type f -name "*.bin" 2>/dev/null | grep -v "sha256sums")
     fi
     
+    if [ $compile_success -eq 0 ] && [ $valid_firmware -eq 0 ]; then
+        echo ""
+        echo "❌❌❌ 编译失败，且没有生成任何有效固件 ❌❌❌"
+        exit $PHASE1_EXIT_CODE
+    elif [ $compile_success -eq 0 ] && [ $valid_firmware -gt 0 ]; then
+        log "⚠️ 编译有错误，但已生成 $valid_firmware 个有效固件，继续..."
+    fi
+    
+    # 第二阶段：单线程生成最终固件
     echo ""
     echo "🚀 第二阶段：单线程生成最终固件"
     echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
@@ -5692,18 +5458,13 @@ EOF
     
     echo ""
     echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
-    echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
     
-    cat build_phase1_attempt*.log build_phase2.log > build.log
-    
-    kill $protect_pid 2>/dev/null || true
-    log "🔧 双固件保护已停止"
+    cat build_phase1_attempt*.log build_phase2.log > build.log 2>/dev/null || true
     
     log "🔍 验证固件..."
     
-    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-    local valid_firmware=0
-    local firmware_files=()
+    valid_firmware=0
+    firmware_files=()
     
     if [ -d "$target_dir" ]; then
         while IFS= read -r file; do
@@ -5740,8 +5501,6 @@ EOF
     else
         log "✅ 找到 $valid_firmware 个有效可刷机固件"
     fi
-    
-    rm -rf "$protect_dir" 2>/dev/null || true
     
     log "✅ 步骤25 完成"
 }
