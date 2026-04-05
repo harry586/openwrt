@@ -4313,15 +4313,15 @@ pre_build_space_check() {
 #【build_firmware_main.sh-27-end】
 
 #【build_firmware_main.sh-28】
-# ============================================
-# 步骤10: 验证工具链编译结果
-# 对应 firmware-build.yml 步骤10
-# ============================================
-workflow_step10_verify_sdk() {
-    log "=== 步骤10: 验证工具链编译结果 ==="
+workflow_step09_download_sdk() {
+    local device_name="$1"
+    
+    log "=== 步骤09: 编译源码自带工具链 ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "📌 最终设备名称: $device_name"
     
     set -e
-    trap 'echo "❌ 步骤10 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
     
@@ -4331,192 +4331,10 @@ workflow_step10_verify_sdk() {
         log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
     fi
     
-    log "🔍 检查工具链编译结果..."
+    # 调用初始化编译器环境的函数
+    initialize_compiler_env "$device_name"
     
-    # 检查关键目录
-    log ""
-    log "📁 检查关键目录:"
-    
-    local missing_items=0
-    local warning_items=0
-    
-    # 检查staging_dir
-    if [ -d "staging_dir" ]; then
-        log "  ✅ staging_dir: 存在"
-        
-        # 检查host目录
-        if [ -d "staging_dir/host" ]; then
-            log "    ✅ host工具: 存在"
-            HOST_BIN_COUNT=$(find staging_dir/host/bin -type f 2>/dev/null | wc -l)
-            log "       host工具数量: $HOST_BIN_COUNT"
-            
-            # 列出关键host工具 - 使用更宽松的检查方式
-            local host_tools="make sed awk grep patch tar gzip bzip2"
-            for tool in $host_tools; do
-                # 查找所有可能的路径
-                TOOL_PATH=$(find staging_dir/host -type f -name "$tool" -o -name "$tool.exe" -o -name "*$tool*" 2>/dev/null | head -1)
-                if [ -n "$TOOL_PATH" ]; then
-                    log "      ✅ $tool: 存在 ($(basename "$TOOL_PATH"))"
-                else
-                    # 检查系统路径
-                    if command -v $tool >/dev/null 2>&1; then
-                        log "      ✅ $tool: 使用系统工具 ($(which $tool))"
-                    else
-                        log "      ⚠️ $tool: 未找到"
-                        warning_items=$((warning_items + 1))
-                    fi
-                fi
-            done
-        else
-            log "    ❌ host工具: 不存在"
-            missing_items=$((missing_items + 1))
-        fi
-        
-        # 检查target目录
-        TARGET_DIRS=$(find staging_dir -maxdepth 1 -type d -name "target-*" 2>/dev/null)
-        if [ -n "$TARGET_DIRS" ]; then
-            log "    ✅ target工具链: 存在"
-            for target_dir in $TARGET_DIRS; do
-                log "       📁 $(basename "$target_dir")"
-                
-                # 检查bin目录
-                if [ -d "$target_dir/bin" ]; then
-                    BIN_COUNT=$(find "$target_dir/bin" -type f 2>/dev/null | wc -l)
-                    log "         工具数量: $BIN_COUNT"
-                    
-                    # 检查关键编译工具
-                    local compile_tools="gcc g++ ar as ld objcopy strip"
-                    for tool in $compile_tools; do
-                        TOOL_PATH=$(find "$target_dir/bin" -type f -name "*$tool*" ! -name "*-gcc-ar" ! -name "*-gcc-ranlib" ! -name "*-gcc-nm" 2>/dev/null | head -1)
-                        if [ -n "$TOOL_PATH" ]; then
-                            log "          ✅ $tool: 存在 ($(basename "$TOOL_PATH"))"
-                        fi
-                    done
-                fi
-            done
-        else
-            log "    ❌ target工具链: 不存在"
-            missing_items=$((missing_items + 1))
-        fi
-    else
-        log "  ❌ staging_dir: 不存在"
-        missing_items=$((missing_items + 1))
-    fi
-    
-    # 检查工具链GCC
-    log ""
-    log "🔧 检查GCC编译器:"
-    
-    GCC_FILES=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null)
-    GCC_COUNT=$(echo "$GCC_FILES" | wc -l)
-    
-    if [ $GCC_COUNT -gt 0 ]; then
-        log "  ✅ 找到 $GCC_COUNT 个GCC编译器"
-        
-        # 显示第一个GCC的信息
-        FIRST_GCC=$(echo "$GCC_FILES" | head -1)
-        log "  📌 示例: $(basename "$FIRST_GCC")"
-        log "     路径: $FIRST_GCC"
-        
-        # 检查GCC版本
-        if [ -x "$FIRST_GCC" ]; then
-            GCC_VERSION=$("$FIRST_GCC" --version 2>&1 | head -1)
-            log "     版本: $GCC_VERSION"
-            
-            # 检查是否为目标平台编译器
-            if [[ "$FIRST_GCC" == *"$TARGET"* ]] || [[ "$FIRST_GCC" == *"openwrt"* ]]; then
-                log "     ✅ 是目标平台交叉编译器"
-            fi
-        fi
-    else
-        log "  ❌ 未找到GCC编译器"
-        missing_items=$((missing_items + 1))
-    fi
-    
-    # 检查关键头文件
-    log ""
-    log "📋 检查关键头文件:"
-    
-    KERNEL_HEADERS=$(find staging_dir -name "linux" -type d 2>/dev/null | grep -E "include/linux$" | head -1)
-    if [ -n "$KERNEL_HEADERS" ]; then
-        log "  ✅ 内核头文件: 存在"
-        log "     📁 $KERNEL_HEADERS"
-        
-        # 检查几个关键头文件
-        local headers="kernel.h types.h fs.h"
-        for header in $headers; do
-            if [ -f "$KERNEL_HEADERS/$header" ]; then
-                log "      ✅ $header: 存在"
-            fi
-        done
-    else
-        log "  ⚠️ 内核头文件: 未找到（可能正在生成）"
-        warning_items=$((warning_items + 1))
-    fi
-    
-    # 检查库文件
-    log ""
-    log "📚 检查基础库文件:"
-    
-    LIBS=$(find staging_dir -name "libc.so" -o -name "libgcc_s.so" -o -name "libstdc++.so" 2>/dev/null | head -5)
-    if [ -n "$LIBS" ]; then
-        log "  ✅ 基础库文件: 存在"
-        echo "$LIBS" | while read lib; do
-            log "     📄 $(basename "$lib")"
-        done
-    else
-        log "  ⚠️ 基础库文件: 未找到"
-        warning_items=$((warning_items + 1))
-    fi
-    
-    # 统计工具链大小
-    log ""
-    log "📊 工具链统计:"
-    if [ -d "staging_dir" ]; then
-        TOTAL_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-        log "  总大小: $TOTAL_SIZE"
-        
-        HOST_SIZE=$(du -sh staging_dir/host 2>/dev/null | awk '{print $1}' || echo "0B")
-        log "  host工具: $HOST_SIZE"
-        
-        TARGET_SIZE=$(du -sh staging_dir/target-* 2>/dev/null | awk '{print $1}' || echo "0B")
-        log "  target工具链: $TARGET_SIZE"
-    fi
-    
-    # 检查GCC是否可用
-    log ""
-    log "🔧 测试GCC编译器可用性:"
-    if [ -n "$FIRST_GCC" ] && [ -x "$FIRST_GCC" ]; then
-        # 创建一个简单的测试程序
-        echo 'int main(){return 0;}' > /tmp/test.c
-        if $FIRST_GCC -o /tmp/test /tmp/test.c 2>/dev/null; then
-            log "  ✅ GCC编译器可用（能编译简单程序）"
-            rm -f /tmp/test /tmp/test.c
-        else
-            log "  ⚠️ GCC编译器可能有问题（不能编译简单程序）"
-            warning_items=$((warning_items + 1))
-        fi
-    fi
-    
-    # 根据检查结果决定是否继续
-    log ""
-    if [ $missing_items -eq 0 ]; then
-        if [ $warning_items -eq 0 ]; then
-            log "✅✅✅ 工具链验证完全通过，所有组件都存在 ✅✅✅"
-        else
-            log "✅ 工具链验证通过，但有 $warning_items 个警告（不影响编译）"
-            log "   警告说明:"
-            log "   - make/gzip 可能以其他名称存在或使用系统工具"
-            log "   - 不影响后续编译"
-        fi
-        return 0
-    else
-        log "❌ 工具链验证失败，缺少 $missing_items 个关键组件"
-        log "   请检查工具链编译日志: /tmp/build-logs/tools_compile.log 和 /tmp/build-logs/toolchain_compile.log"
-        exit 1
-    fi
-    
-    log "✅ 步骤10 完成"
+    log "✅ 步骤09 完成"
 }
 #【build_firmware_main.sh-28-end】
 
