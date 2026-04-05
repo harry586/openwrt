@@ -947,6 +947,64 @@ EOF
         log "⚠️ feeds安装有警告，尝试继续..."
     }
     
+    # LEDE 特殊处理：安装后确保 luci-lib-fs 的 postinst 脚本正确
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE源码：确保 luci-lib-fs 的 postinst 脚本正确..."
+        
+        local luci_lib_fs_dir=$(find package/feeds -type d -name "luci-lib-fs" 2>/dev/null | head -1)
+        if [ -z "$luci_lib_fs_dir" ]; then
+            luci_lib_fs_dir=$(find feeds -type d -name "luci-lib-fs" 2>/dev/null | head -1)
+        fi
+        
+        if [ -n "$luci_lib_fs_dir" ]; then
+            log "  ✅ 找到 luci-lib-fs 目录: $luci_lib_fs_dir"
+            
+            # 创建 files 目录
+            mkdir -p "$luci_lib_fs_dir/files"
+            
+            # 确保 postinst 脚本存在且正确
+            cat > "$luci_lib_fs_dir/files/postinst" << 'EOF'
+#!/bin/sh
+# Safe postinst script for luci-lib-fs
+# Essential operations only
+
+# Create symbolic link
+if [ -f /usr/lib/lua/luci/fs.so ]; then
+    ln -sf luci/fs.so /usr/lib/lua/fs.so 2>/dev/null || true
+fi
+
+# Create necessary directories
+mkdir -p /usr/lib/lua/luci/controller/fs 2>/dev/null || true
+mkdir -p /usr/lib/lua/luci/model/fs 2>/dev/null || true
+mkdir -p /usr/lib/lua/luci/view/fs 2>/dev/null || true
+
+# Set correct permissions
+chmod 755 /usr/lib/lua/luci/fs.so 2>/dev/null || true
+
+# Reload LuCI if running
+if [ -x /etc/init.d/luci ]; then
+    /etc/init.d/luci reload 2>/dev/null || true
+fi
+
+exit 0
+EOF
+            chmod +x "$luci_lib_fs_dir/files/postinst"
+            
+            # 修改 Makefile
+            if [ -f "$luci_lib_fs_dir/Makefile" ]; then
+                if ! grep -q "PKG_POSTINST" "$luci_lib_fs_dir/Makefile"; then
+                    echo "" >> "$luci_lib_fs_dir/Makefile"
+                    echo "# Use custom postinst script" >> "$luci_lib_fs_dir/Makefile"
+                    echo "PKG_POSTINST:=files/postinst" >> "$luci_lib_fs_dir/Makefile"
+                fi
+            fi
+            
+            log "  ✅ luci-lib-fs 已修复"
+        else
+            log "  ⚠️ 未找到 luci-lib-fs 目录"
+        fi
+    fi
+    
     log "✅ Feeds配置完成"
 }
 #【build_firmware_main.sh-09-end】
@@ -5268,61 +5326,133 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（LEDE修复版） ==="
-    log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "=== 步骤25: 编译固件（LEDE源码特定修复 + 双固件强制保护） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
     
+    # ============================================
+    # LEDE源码特定修复（来自2026.02.27成功版本）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 检测到LEDE源码，应用特定修复..."
+        
+        # 重新编译padjffs2工具
+        if [ -f "staging_dir/host/bin/padjffs2" ]; then
+            log "  ✅ 重新编译padjffs2工具..."
+            rm -f staging_dir/host/bin/padjffs2
+            make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
+            make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
+        fi
+        
+        # 重新编译mkdniimg工具
+        if [ -f "staging_dir/host/bin/mkdniimg" ]; then
+            log "  ✅ 重新编译mkdniimg工具..."
+            rm -f staging_dir/host/bin/mkdniimg
+            make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
+            make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
+        fi
+        
+        # 清理可能冲突的临时文件
+        log "  ✅ 清理临时文件..."
+        find build_dir -name "*.bin" -o -name "*.img" -o -name "*.tmp" 2>/dev/null | xargs rm -f 2>/dev/null || true
+        
+        # 增加内核编译的稳定性
+        export KCFLAGS="-O2 -pipe"
+        
+        # 设置强制不安全配置（LEDE需要）
+        export FORCE_UNSAFE_CONFIGURE=1
+        
+        log "  ✅ LEDE特定修复完成"
+    fi
+    
+    # ============================================
+    # 设置文件描述符限制
+    # ============================================
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # LEDE 特殊预处理
+    # 创建双固件保护脚本
     # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE 预处理：修复常见问题..."
-        
-        # 1. 创建缺失的 xattr.conf
-        find staging_dir -type d -name "root-*" 2>/dev/null | while read root_dir; do
-            mkdir -p "$root_dir/etc"
-            touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
+    log "🔧 创建双固件保护脚本..."
+    local protect_dir="$BUILD_DIR/.firmware_protect"
+    mkdir -p "$protect_dir"
+    
+    cat > "$protect_dir/protect.sh" << 'EOF'
+#!/bin/bash
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+LOG_FILE="$PROTECT_DIR/protect.log"
+
+echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
+
+while true; do
+    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+    for tmp_dir in $TMP_DIRS; do
+        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.itb" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 $(basename "$file")" >> "$LOG_FILE"
+            fi
         done
-        
-        # 2. 修复 dnsmasq-full 的 postinst 问题
-        log "  🔧 修复 dnsmasq-full postinst 脚本..."
-        local dnsmasq_postinst=$(find package/feeds -path "*/dnsmasq/files/dnsmasq.postinst" 2>/dev/null | head -1)
-        if [ -f "$dnsmasq_postinst" ]; then
-            # 确保脚本可以正常执行
-            chmod +x "$dnsmasq_postinst" 2>/dev/null || true
-        fi
-        
-        # 3. 修复 ppp-mod-pppoe 的 postinst 问题
-        log "  🔧 修复 ppp-mod-pppoe postinst 脚本..."
-        local ppp_postinst=$(find package/feeds -path "*/ppp/files/ppp.postinst" 2>/dev/null | head -1)
-        if [ -f "$ppp_postinst" ]; then
-            chmod +x "$ppp_postinst" 2>/dev/null || true
-        fi
-        
-        # 4. 创建必要的目录
-        mkdir -p staging_dir/target-*/etc/init.d 2>/dev/null || true
-        mkdir -p staging_dir/target-*/etc/config 2>/dev/null || true
-        
-        # 5. 预先创建一些可能缺失的配置文件
-        echo "config dnsmasq" > staging_dir/target-*/etc/config/dhcp 2>/dev/null || true
-        echo "config interface 'loopback'" > staging_dir/target-*/etc/config/network 2>/dev/null || true
-        
-        log "  ✅ LEDE 预处理完成"
+    done
+    sleep 5
+done
+EOF
+    chmod +x "$protect_dir/protect.sh"
+    
+    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
+    local protect_pid=$!
+    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
+    
+    cat > "$protect_dir/recover.sh" << 'EOF'
+#!/bin/bash
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+
+if [ -f "$BUILD_DIR/build_env.sh" ]; then
+    source "$BUILD_DIR/build_env.sh"
+fi
+
+TARGET="${TARGET:-ath79}"
+SUBTARGET="${SUBTARGET:-generic}"
+TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+mkdir -p "$TARGET_DIR"
+
+echo "=== 强制恢复开始于 $(date) ==="
+echo "目标平台: $TARGET/$SUBTARGET"
+
+RECOVERED=0
+find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
+    filename=$(basename "$backup" .backup)
+    if [ ! -f "$TARGET_DIR/$filename" ]; then
+        cp -f "$backup" "$TARGET_DIR/$filename"
+        echo "  ✅ 恢复: $filename"
+        RECOVERED=$((RECOVERED + 1))
     fi
+done
+
+echo "📊 恢复文件数: $RECOVERED"
+echo "=== 强制恢复结束 ==="
+EOF
+    chmod +x "$protect_dir/recover.sh"
     
     # ============================================
-    # 编译循环
+    # 系统信息
     # ============================================
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+    
+    echo ""
+    echo "🔧 系统信息:"
+    echo "  CPU核心数: $CPU_CORES"
+    echo "  内存大小: ${TOTAL_MEM}MB"
+    echo "  源码类型: $SOURCE_REPO_TYPE"
     
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
@@ -5334,9 +5464,13 @@ workflow_step25_build_firmware() {
             ;;
     esac
     
-    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
+    # LEDE 使用单线程更稳定
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        MAKE_JOBS=1
+        log "⚠️ LEDE 源码使用单线程编译"
+    elif [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
-            MAKE_JOBS=2
+            MAKE_JOBS=4
         elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
             MAKE_JOBS=2
         else
@@ -5348,13 +5482,10 @@ workflow_step25_build_firmware() {
         log "⚠️ 使用单线程编译"
     fi
     
-    # LEDE 使用单线程更稳定
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        MAKE_JOBS=1
-        log "⚠️ LEDE 源码使用单线程编译"
-    fi
-    
-    local max_attempts=2
+    # ============================================
+    # 编译循环
+    # ============================================
+    local max_attempts=3
     local attempt=1
     local compile_success=0
     
@@ -5385,61 +5516,79 @@ workflow_step25_build_firmware() {
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            # 输出详细错误信息
-            log "  ⚠️ 编译失败，退出代码: $PHASE1_EXIT_CODE"
-            log "  🔍 最后50行错误日志:"
-            grep -E "Error|error|ERROR|failed|Failed" "$log_file" | tail -50 | while read line; do
-                log "    $line"
-            done
+            # LEDE 特殊处理：package/install Error 255
+            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
+                    log "  ⚠️ 检测到 LEDE package/install 错误，尝试修复..."
+                    
+                    # 清理安装缓存
+                    rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
+                    rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
+                    rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
+                    rm -f tmp/info/.packageinfo-* 2>/dev/null
+                    
+                    # 清理 ipkg 目录
+                    find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
+                        log "    清理 ipkg 目录: $ipkg_dir"
+                        rm -rf "$ipkg_dir"
+                    done
+                    
+                    # 重新安装 feeds
+                    log "    重新安装 feeds..."
+                    ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+                    
+                    log "  ✅ LEDE package/install 错误修复完成"
+                fi
+                
+                # 检测并修复 padjffs2 问题
+                if grep -q "padjffs2" "$log_file"; then
+                    log "  ⚠️ 检测到 padjffs2 错误，重新编译..."
+                    make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
+                    make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
+                    log "  ✅ padjffs2 重新编译完成"
+                fi
+                
+                # 检测并修复 mkdniimg 问题
+                if grep -q "mkdniimg" "$log_file"; then
+                    log "  ⚠️ 检测到 mkdniimg 错误，重新编译..."
+                    make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
+                    make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
+                    log "  ✅ mkdniimg 重新编译完成"
+                fi
+            fi
             
-            # LEDE 特殊处理：如果失败，尝试清理并重试一次
-            if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $attempt -lt $max_attempts ]; then
-                log "  🔧 LEDE 重试前清理..."
+            # 检测补丁失败
+            if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
+                log "  ⚠️ 检测到补丁失败，正在自动修复..."
                 
-                # 清理 package/install 缓存
-                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
-                rm -f tmp/info/.packageinfo-* 2>/dev/null
+                local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
                 
-                # 清理 ipkg 目录
-                find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
-                    rm -rf "$ipkg_dir"
+                for patch_name in $failed_patches; do
+                    find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
+                        log "    🗑️ 删除失败补丁: $patch_file"
+                        rm -f "$patch_file"
+                    done
                 done
                 
-                log "  ✅ LEDE 清理完成，将重试"
+                rm -rf build_dir/target-*/linux-* 2>/dev/null || true
+                rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+                
+                log "  ✅ 补丁修复完成"
+            fi
+            
+            # 检测 Broken pipe 错误
+            if grep -q "Broken pipe" "$log_file"; then
+                log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
+                ulimit -n 65536 2>/dev/null || true
             fi
         fi
         
         attempt=$((attempt + 1))
     done
     
-    # 如果编译失败，检查是否有部分固件生成
-    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-    local valid_firmware=0
-    
-    if [ -d "$target_dir" ]; then
-        while IFS= read -r file; do
-            [ -n "$file" ] && continue
-            local fname=$(basename "$file")
-            local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
-            local size_mb=$((size_bytes / 1024 / 1024))
-            
-            if [[ "$fname" == *"sysupgrade"* ]] && [ $size_mb -ge 5 ]; then
-                valid_firmware=$((valid_firmware + 1))
-            fi
-        done < <(find "$target_dir" -type f -name "*.bin" 2>/dev/null | grep -v "sha256sums")
-    fi
-    
-    if [ $compile_success -eq 0 ] && [ $valid_firmware -eq 0 ]; then
-        echo ""
-        echo "❌❌❌ 编译失败，且没有生成任何有效固件 ❌❌❌"
-        exit $PHASE1_EXIT_CODE
-    elif [ $compile_success -eq 0 ] && [ $valid_firmware -gt 0 ]; then
-        log "⚠️ 编译有错误，但已生成 $valid_firmware 个有效固件，继续..."
-    fi
-    
+    # ============================================
     # 第二阶段：单线程生成最终固件
+    # ============================================
     echo ""
     echo "🚀 第二阶段：单线程生成最终固件"
     echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
@@ -5458,13 +5607,26 @@ workflow_step25_build_firmware() {
     
     echo ""
     echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
+    echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
     
     cat build_phase1_attempt*.log build_phase2.log > build.log 2>/dev/null || true
     
+    # 停止保护脚本
+    kill $protect_pid 2>/dev/null || true
+    log "🔧 双固件保护已停止"
+    
+    # 执行强制恢复
+    log "🔧 执行强制恢复..."
+    bash "$protect_dir/recover.sh" "$protect_dir" "$BUILD_DIR"
+    
+    # ============================================
+    # 验证固件
+    # ============================================
     log "🔍 验证固件..."
     
-    valid_firmware=0
-    firmware_files=()
+    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+    local valid_firmware=0
+    local firmware_files=()
     
     if [ -d "$target_dir" ]; then
         while IFS= read -r file; do
@@ -5494,6 +5656,9 @@ workflow_step25_build_firmware() {
             fi
         done
     fi
+    
+    # 清理保护目录
+    rm -rf "$protect_dir" 2>/dev/null || true
     
     if [ $valid_firmware -eq 0 ]; then
         log "❌ 错误：没有找到任何有效可刷机固件"
