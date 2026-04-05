@@ -174,7 +174,7 @@ CRON_CONTENT="# ================================================================
 */30 * * * * /usr/sbin/ntpd -q -n -p ntp.aliyun.com >/dev/null 2>&1
 
 # 每天凌晨4点重启无线服务（提高稳定性）
-0 4 * * * wifi down && sleep 5 && wifi up >/dev/null 2>&1
+#0 4 * * * wifi down && sleep 5 && wifi up >/dev/null 2>&1
 
 # 每周日凌晨2点清理临时文件
 0 2 * * 0 rm -rf /tmp/luci-* /tmp/upload/* >/dev/null 2>&1"
