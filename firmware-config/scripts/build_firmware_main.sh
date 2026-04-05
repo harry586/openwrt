@@ -947,9 +947,9 @@ EOF
         log "⚠️ feeds安装有警告，尝试继续..."
     }
     
-    # LEDE 特殊处理：安装后确保 luci-lib-fs 的 postinst 脚本正确
+    # LEDE 特殊处理：安装后修复 luci-lib-fs 的 postinst 脚本
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码：确保 luci-lib-fs 的 postinst 脚本正确..."
+        log "🔧 LEDE源码：修复 luci-lib-fs postinst 脚本..."
         
         local luci_lib_fs_dir=$(find package/feeds -type d -name "luci-lib-fs" 2>/dev/null | head -1)
         if [ -z "$luci_lib_fs_dir" ]; then
@@ -959,47 +959,28 @@ EOF
         if [ -n "$luci_lib_fs_dir" ]; then
             log "  ✅ 找到 luci-lib-fs 目录: $luci_lib_fs_dir"
             
-            # 创建 files 目录
             mkdir -p "$luci_lib_fs_dir/files"
             
-            # 确保 postinst 脚本存在且正确
             cat > "$luci_lib_fs_dir/files/postinst" << 'EOF'
 #!/bin/sh
-# Safe postinst script for luci-lib-fs
-# Essential operations only
-
-# Create symbolic link
+# luci-lib-fs postinst script - LEDE 修复版
 if [ -f /usr/lib/lua/luci/fs.so ]; then
     ln -sf luci/fs.so /usr/lib/lua/fs.so 2>/dev/null || true
 fi
-
-# Create necessary directories
 mkdir -p /usr/lib/lua/luci/controller/fs 2>/dev/null || true
 mkdir -p /usr/lib/lua/luci/model/fs 2>/dev/null || true
 mkdir -p /usr/lib/lua/luci/view/fs 2>/dev/null || true
-
-# Set correct permissions
 chmod 755 /usr/lib/lua/luci/fs.so 2>/dev/null || true
-
-# Reload LuCI if running
-if [ -x /etc/init.d/luci ]; then
-    /etc/init.d/luci reload 2>/dev/null || true
-fi
-
 exit 0
 EOF
             chmod +x "$luci_lib_fs_dir/files/postinst"
             
-            # 修改 Makefile
-            if [ -f "$luci_lib_fs_dir/Makefile" ]; then
-                if ! grep -q "PKG_POSTINST" "$luci_lib_fs_dir/Makefile"; then
-                    echo "" >> "$luci_lib_fs_dir/Makefile"
-                    echo "# Use custom postinst script" >> "$luci_lib_fs_dir/Makefile"
-                    echo "PKG_POSTINST:=files/postinst" >> "$luci_lib_fs_dir/Makefile"
-                fi
+            if [ -f "$luci_lib_fs_dir/Makefile" ] && ! grep -q "PKG_POSTINST" "$luci_lib_fs_dir/Makefile"; then
+                echo "" >> "$luci_lib_fs_dir/Makefile"
+                echo "PKG_POSTINST:=files/postinst" >> "$luci_lib_fs_dir/Makefile"
             fi
             
-            log "  ✅ luci-lib-fs 已修复"
+            log "  ✅ luci-lib-fs postinst 脚本已修复"
         else
             log "  ⚠️ 未找到 luci-lib-fs 目录"
         fi
@@ -5326,46 +5307,99 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（LEDE源码特定修复 + 双固件强制保护） ==="
+    log "=== 步骤25: 编译固件（LEDE修复版） ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
     
+    ulimit -n 65536 2>/dev/null || true
+    local current_limit=$(ulimit -n)
+    log "  ✅ 当前文件描述符限制: $current_limit"
+    
     # ============================================
-    # LEDE源码特定修复（来自2026.02.27成功版本）
+    # LEDE 修复：修复 luci-lib-fs 的 postinst 脚本
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 检测到LEDE源码，应用特定修复..."
+        log "🔧 LEDE 修复：修复 luci-lib-fs postinst 脚本..."
         
-        # 重新编译padjffs2工具
+        # 查找 luci-lib-fs 目录
+        local luci_lib_fs_dir=$(find package/feeds -type d -name "luci-lib-fs" 2>/dev/null | head -1)
+        if [ -z "$luci_lib_fs_dir" ]; then
+            luci_lib_fs_dir=$(find feeds -type d -name "luci-lib-fs" 2>/dev/null | head -1)
+        fi
+        
+        if [ -n "$luci_lib_fs_dir" ]; then
+            log "  ✅ 找到 luci-lib-fs 目录: $luci_lib_fs_dir"
+            
+            # 创建 files 目录
+            mkdir -p "$luci_lib_fs_dir/files"
+            
+            # 创建修复后的 postinst 脚本
+            cat > "$luci_lib_fs_dir/files/postinst" << 'EOF'
+#!/bin/sh
+# luci-lib-fs postinst script - LEDE 修复版
+# 静默执行，不输出任何内容，避免破坏 package/install 流程
+
+# 创建符号链接
+if [ -f /usr/lib/lua/luci/fs.so ]; then
+    ln -sf luci/fs.so /usr/lib/lua/fs.so 2>/dev/null || true
+fi
+
+# 创建必要的目录
+mkdir -p /usr/lib/lua/luci/controller/fs 2>/dev/null || true
+mkdir -p /usr/lib/lua/luci/model/fs 2>/dev/null || true
+mkdir -p /usr/lib/lua/luci/view/fs 2>/dev/null || true
+
+# 设置权限
+chmod 755 /usr/lib/lua/luci/fs.so 2>/dev/null || true
+
+# 重新加载 LuCI（如果正在运行）
+if [ -x /etc/init.d/luci ] && [ -f /var/run/luci.pid ]; then
+    /etc/init.d/luci reload 2>/dev/null || true
+fi
+
+exit 0
+EOF
+            chmod +x "$luci_lib_fs_dir/files/postinst"
+            
+            # 修改 Makefile，确保使用自定义 postinst
+            if [ -f "$luci_lib_fs_dir/Makefile" ]; then
+                if ! grep -q "PKG_POSTINST" "$luci_lib_fs_dir/Makefile"; then
+                    echo "" >> "$luci_lib_fs_dir/Makefile"
+                    echo "# Use custom postinst script for LEDE compatibility" >> "$luci_lib_fs_dir/Makefile"
+                    echo "PKG_POSTINST:=files/postinst" >> "$luci_lib_fs_dir/Makefile"
+                fi
+            fi
+            
+            log "  ✅ luci-lib-fs postinst 脚本已修复"
+        else
+            log "  ⚠️ 未找到 luci-lib-fs 目录，跳过修复"
+        fi
+        
+        # 重新编译 padjffs2 工具（LEDE 常见问题）
         if [ -f "staging_dir/host/bin/padjffs2" ]; then
-            log "  ✅ 重新编译padjffs2工具..."
+            log "  🔧 重新编译 padjffs2 工具..."
             rm -f staging_dir/host/bin/padjffs2
             make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
             make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
         fi
         
-        # 重新编译mkdniimg工具
+        # 重新编译 mkdniimg 工具（LEDE 常见问题）
         if [ -f "staging_dir/host/bin/mkdniimg" ]; then
-            log "  ✅ 重新编译mkdniimg工具..."
+            log "  🔧 重新编译 mkdniimg 工具..."
             rm -f staging_dir/host/bin/mkdniimg
             make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
             make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
         fi
         
-        # 清理可能冲突的临时文件
-        log "  ✅ 清理临时文件..."
-        find build_dir -name "*.bin" -o -name "*.img" -o -name "*.tmp" 2>/dev/null | xargs rm -f 2>/dev/null || true
-        
-        # 增加内核编译的稳定性
+        # 设置环境变量
+        export FORCE_UNSAFE_CONFIGURE=1
         export KCFLAGS="-O2 -pipe"
         
-        # 设置强制不安全配置（LEDE需要）
-        export FORCE_UNSAFE_CONFIGURE=1
-        
-        log "  ✅ LEDE特定修复完成"
+        log "  ✅ LEDE 修复完成"
     fi
     
     # ============================================
@@ -5518,7 +5552,7 @@ EOF
         if [ -f "$log_file" ]; then
             # LEDE 特殊处理：package/install Error 255
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
+                if grep -q "package/install.*Error 255\|luci-lib-fs" "$log_file"; then
                     log "  ⚠️ 检测到 LEDE package/install 错误，尝试修复..."
                     
                     # 清理安装缓存
@@ -5540,20 +5574,12 @@ EOF
                     log "  ✅ LEDE package/install 错误修复完成"
                 fi
                 
-                # 检测并修复 padjffs2 问题
+                # 检测 padjffs2 问题
                 if grep -q "padjffs2" "$log_file"; then
                     log "  ⚠️ 检测到 padjffs2 错误，重新编译..."
                     make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
                     make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
                     log "  ✅ padjffs2 重新编译完成"
-                fi
-                
-                # 检测并修复 mkdniimg 问题
-                if grep -q "mkdniimg" "$log_file"; then
-                    log "  ⚠️ 检测到 mkdniimg 错误，重新编译..."
-                    make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
-                    make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
-                    log "  ✅ mkdniimg 重新编译完成"
                 fi
             fi
             
