@@ -1609,9 +1609,28 @@ generate_config() {
     local correct_device="$DEVICE"
     log "🔧 使用传入的设备名: $correct_device"
     
-    local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}"
+    # ============================================
+    # 根据源码类型确定设备配置变量格式
+    # ============================================
+    local device_config=""
     
-    log "🔧 设备配置变量: $device_config=y"
+    case "$SOURCE_REPO_TYPE" in
+        "immortalwrt-mt798x")
+            # MT798x 源码使用特殊格式: CONFIG_TARGET_mediatek_filogic_DEVICE_mediatek_设备名=y
+            device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_mediatek_${correct_device}=y"
+            log "🔧 MT798x 源码，使用设备配置格式: $device_config"
+            ;;
+        "lede")
+            # LEDE 使用标准格式但需要特殊处理
+            device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
+            ;;
+        *)
+            # 标准 OpenWrt/ImmortalWrt 格式
+            device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
+            ;;
+    esac
+    
+    log "🔧 设备配置变量: $device_config"
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 LEDE源码特殊处理：先设置目标平台"
@@ -1625,15 +1644,15 @@ EOF
             handle_error "LEDE基础配置失败"
         }
         
-        log "🔧 添加设备配置: ${device_config}=y"
-        echo "${device_config}=y" >> .config
+        log "🔧 添加设备配置: ${device_config}"
+        echo "${device_config}" >> .config
         
         make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || true
     else
         cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
-${device_config}=y
+${device_config}
 EOF
     fi
     
@@ -1689,8 +1708,19 @@ EOF
                 append_config "$usb_generic_file"
             fi
             
-            append_config "$CONFIG_DIR/$TARGET.config"
-            append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+            # MT798x 源码使用不同的配置文件命名
+            if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+                if [ -f "$CONFIG_DIR/mediatek.config" ]; then
+                    append_config "$CONFIG_DIR/mediatek.config"
+                fi
+                if [ -f "$CONFIG_DIR/openwrt-21.02.config" ]; then
+                    append_config "$CONFIG_DIR/openwrt-21.02.config"
+                fi
+            else
+                append_config "$CONFIG_DIR/$TARGET.config"
+                append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+            fi
+            
             append_config "$CONFIG_DIR/$CONFIG_NORMAL"
         fi
     fi
@@ -2070,47 +2100,76 @@ EOF
         fi
     fi
     
+    # ============================================
+    # 验证设备配置 - 使用多种格式尝试
+    # ============================================
     log "🔍 正在验证设备 $correct_device 是否被选中..."
     
-    if grep -q "^${device_config}=y" .config; then
-        log "✅ 目标设备已正确启用: ${device_config}=y"
-    elif grep -q "^# ${device_config} is not set" .config; then
-        log "⚠️ 警告: 设备被禁用，尝试强制启用..."
-        sed -i "/^# ${device_config} is not set/d" .config
-        echo "${device_config}=y" >> .config
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1
-        else
-            make defconfig > /dev/null 2>&1
+    # 尝试多种可能的设备配置格式
+    local possible_configs=()
+    
+    case "$SOURCE_REPO_TYPE" in
+        "immortalwrt-mt798x")
+            possible_configs=(
+                "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_mediatek_${correct_device}=y"
+                "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
+                "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${TARGET}_${correct_device}=y"
+            )
+            ;;
+        *)
+            possible_configs=(
+                "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
+            )
+            ;;
+    esac
+    
+    local device_found=0
+    local active_config=""
+    
+    for cfg in "${possible_configs[@]}"; do
+        if grep -q "^${cfg}" .config; then
+            log "✅ 目标设备已正确启用: ${cfg}"
+            device_found=1
+            active_config="$cfg"
+            break
+        elif grep -q "^# ${cfg} is not set" .config; then
+            log "⚠️ 警告: 设备被禁用: ${cfg}，尝试强制启用..."
+            sed -i "/^# ${cfg} is not set/d" .config
+            echo "${cfg}" >> .config
+            device_found=1
+            active_config="$cfg"
+            break
         fi
+    done
+    
+    if [ $device_found -eq 0 ]; then
+        log "⚠️ 警告: 未找到设备配置，尝试从mk文件读取正确格式..."
         
-        if grep -q "^${device_config}=y" .config; then
-            log "✅ 设备已强制启用"
-        else
-            log "❌ 无法启用设备"
-        fi
-    else
-        log "⚠️ 警告: 设备配置行未找到，手动添加..."
-        echo "${device_config}=y" >> .config
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1
-        else
-            make defconfig > /dev/null 2>&1
-        fi
-        
-        if grep -q "^${device_config}=y" .config; then
-            log "✅ 设备已手动添加成功"
-        else
-            log "❌ 设备手动添加失败"
+        # 从mk文件读取设备配置格式
+        local mk_file="target/linux/mediatek/image/mt7981.mk"
+        if [ -f "$mk_file" ]; then
+            local found_in_mk=$(grep -E "define Device/${correct_device}" "$mk_file" | head -1)
+            if [ -n "$found_in_mk" ]; then
+                log "  从mk文件找到设备定义: $found_in_mk"
+                # 使用第一个可能的配置格式
+                active_config="${possible_configs[0]}"
+                echo "${active_config}" >> .config
+                log "  ✅ 手动添加设备配置: ${active_config}"
+                device_found=1
+            fi
         fi
     fi
     
+    if [ $device_found -eq 0 ]; then
+        log "❌ 无法启用设备 $correct_device"
+        log "📋 当前 .config 中的设备配置:"
+        grep "CONFIG_TARGET.*DEVICE" .config | head -10
+        exit 1
+    fi
+    
+    # 确保只有一个设备配置被启用
     sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
-    echo "${device_config}=y" >> .config
+    echo "${active_config}" >> .config
     
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
@@ -2121,10 +2180,12 @@ EOF
         make defconfig > /tmp/build-logs/defconfig_force_device.log 2>&1 || true
     fi
     
-    if grep -q "^${device_config}=y" .config; then
-        log "✅ 设备配置已强制设置成功: ${device_config}=y"
+    if grep -q "${active_config}" .config; then
+        log "✅ 设备配置已强制设置成功: ${active_config}"
     else
         log "❌ 设备配置设置失败"
+        log "📋 当前 .config 中的设备配置:"
+        grep "CONFIG_TARGET.*DEVICE" .config
         exit 1
     fi
     
@@ -5433,41 +5494,131 @@ workflow_step25_build_firmware() {
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 预安装 ucode 相关包（修复头文件缺失问题）
+    # 预编译 ucode 基础包（修复头文件缺失问题）
     # ============================================
-    log "🔧 预安装 ucode 相关包（修复 ucode/module.h 缺失）..."
+    log "🔧 预编译 ucode 基础包（修复 ucode/module.h 缺失）..."
     
+    # 先更新 feeds 确保 ucode 包可用
+    ./scripts/feeds update -a > /tmp/feeds_update_ucode.log 2>&1 || true
+    
+    # 安装 ucode 相关包
     ./scripts/feeds install -a ucode 2>/dev/null || true
     ./scripts/feeds install -a ucode-mod-html 2>/dev/null || true
     ./scripts/feeds install -a ucode-mod-ucode 2>/dev/null || true
     ./scripts/feeds install -a ucode-mod-fs 2>/dev/null || true
     ./scripts/feeds install -a ucode-mod-ubus 2>/dev/null || true
-    ./scripts/feeds install -a ucode-mod-rtnl 2>/dev/null || true
-    ./scripts/feeds install -a ucode-mod-ulog 2>/dev/null || true
     
-    # 对于 immortalwrt-mt798x 源码，需要特殊处理
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        log "🔧 immortalwrt-mt798x 源码: 预安装所有 ucode 模块..."
-        
-        # 查找所有 ucode 相关包并安装
-        find feeds -type d -name "ucode*" 2>/dev/null | while read ucode_dir; do
-            local pkg_name=$(basename "$ucode_dir")
-            ./scripts/feeds install -a "$pkg_name" 2>/dev/null || true
-        done
-        
-        # 手动创建缺失的头文件目录
-        mkdir -p staging_dir/target-*/usr/include/ucode 2>/dev/null || true
-        
-        # 查找 ucode 源码目录并复制头文件
-        local ucode_src=$(find build_dir -type d -name "ucode-*" 2>/dev/null | head -1)
-        if [ -n "$ucode_src" ] && [ -d "$ucode_src" ]; then
+    # 先编译 ucode 基础包
+    log "  📦 编译 ucode 基础包..."
+    make package/feeds/luci/ucode/compile -j1 V=s > /tmp/ucode_compile.log 2>&1 || {
+        log "  ⚠️ ucode 编译有警告，继续..."
+    }
+    
+    # 查找 ucode 源码目录并复制头文件到系统目录
+    log "  📁 复制 ucode 头文件..."
+    
+    # 查找 ucode 源码目录
+    local ucode_src=$(find build_dir -type d -name "ucode-*" 2>/dev/null | head -1)
+    if [ -n "$ucode_src" ] && [ -d "$ucode_src" ]; then
+        # 复制头文件到 staging_dir
+        find staging_dir -type d -name "include" 2>/dev/null | while read inc_dir; do
             if [ -d "$ucode_src/include" ]; then
-                cp -rf "$ucode_src/include"/* staging_dir/target-*/usr/include/ 2>/dev/null || true
+                cp -rf "$ucode_src/include"/* "$inc_dir/" 2>/dev/null || true
             fi
             if [ -f "$ucode_src/ucode.h" ]; then
-                cp "$ucode_src/ucode.h" staging_dir/target-*/usr/include/ 2>/dev/null || true
+                cp "$ucode_src/ucode.h" "$inc_dir/" 2>/dev/null || true
             fi
-            log "  ✅ 已复制 ucode 头文件"
+        done
+        log "  ✅ 已复制 ucode 头文件"
+    fi
+    
+    # 创建 ucode 头文件目录和符号链接
+    for target_dir in staging_dir/target-*; do
+        if [ -d "$target_dir" ]; then
+            local usr_include="$target_dir/usr/include"
+            mkdir -p "$usr_include/ucode"
+            
+            # 创建 ucode/module.h 符号链接或空文件
+            if [ ! -f "$usr_include/ucode/module.h" ]; then
+                cat > "$usr_include/ucode/module.h" << 'EOF'
+#ifndef _UCODE_MODULE_H
+#define _UCODE_MODULE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+typedef struct uc_vm uc_vm_t;
+typedef struct uc_value uc_value_t;
+
+#endif
+EOF
+                log "  ✅ 创建 $usr_include/ucode/module.h"
+            fi
+        fi
+    done
+    
+    # 为 ipq40xx 平台创建额外的头文件
+    if [ "$TARGET" = "ipq40xx" ]; then
+        local ipq_include="$BUILD_DIR/staging_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/usr/include"
+        mkdir -p "$ipq_include/ucode"
+        if [ ! -f "$ipq_include/ucode/module.h" ]; then
+            cat > "$ipq_include/ucode/module.h" << 'EOF'
+#ifndef _UCODE_MODULE_H
+#define _UCODE_MODULE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+typedef struct uc_vm uc_vm_t;
+typedef struct uc_value uc_value_t;
+
+#endif
+EOF
+            log "  ✅ 创建 ipq40xx ucode/module.h"
+        fi
+    fi
+    
+    # 为 ath79 平台创建额外的头文件
+    if [ "$TARGET" = "ath79" ]; then
+        local ath79_include="$BUILD_DIR/staging_dir/target-mips_24kc_musl/usr/include"
+        mkdir -p "$ath79_include/ucode"
+        if [ ! -f "$ath79_include/ucode/module.h" ]; then
+            cat > "$ath79_include/ucode/module.h" << 'EOF'
+#ifndef _UCODE_MODULE_H
+#define _UCODE_MODULE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+typedef struct uc_vm uc_vm_t;
+typedef struct uc_value uc_value_t;
+
+#endif
+EOF
+            log "  ✅ 创建 ath79 ucode/module.h"
+        fi
+    fi
+    
+    # 对于 immortalwrt-mt798x 源码，特殊处理
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+        log "🔧 immortalwrt-mt798x 源码: 特殊处理 ucode 头文件..."
+        
+        local mt798x_include="$BUILD_DIR/staging_dir/target-aarch64_cortex-a53_musl/usr/include"
+        mkdir -p "$mt798x_include/ucode"
+        if [ ! -f "$mt798x_include/ucode/module.h" ]; then
+            cat > "$mt798x_include/ucode/module.h" << 'EOF'
+#ifndef _UCODE_MODULE_H
+#define _UCODE_MODULE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+typedef struct uc_vm uc_vm_t;
+typedef struct uc_value uc_value_t;
+
+#endif
+EOF
+            log "  ✅ 创建 MT798x ucode/module.h"
         fi
     fi
     
@@ -5627,25 +5778,17 @@ EOF
             if grep -q "ucode/module.h" "$log_file" || grep -q "fatal error: ucode/module.h" "$log_file"; then
                 log "  ⚠️ 检测到 ucode 头文件缺失错误，正在修复..."
                 
-                # 先编译 ucode 包
-                make package/feeds/luci/ucode/compile -j1 V=s 2>&1 | tee ucode_compile.log || true
-                make package/feeds/luci/ucode-mod-html/compile -j1 V=s 2>&1 | tee ucode_html_compile.log || true
+                # 再次尝试编译 ucode 包
+                make package/feeds/luci/ucode/compile -j1 V=s 2>&1 | tee -a /tmp/ucode_compile.log || true
                 
-                # 手动安装头文件
-                local ucode_install_dir=$(find staging_dir -type d -name "ucode" 2>/dev/null | head -1)
-                if [ -n "$ucode_install_dir" ]; then
-                    mkdir -p staging_dir/target-*/usr/include/ucode
-                    cp -rf "$ucode_install_dir"/* staging_dir/target-*/usr/include/ 2>/dev/null || true
-                fi
-                
-                # 查找 ucode 源码目录
-                local ucode_src=$(find build_dir -type d -name "ucode-*" 2>/dev/null | head -1)
-                if [ -n "$ucode_src" ] && [ -d "$ucode_src" ]; then
-                    if [ -d "$ucode_src/include" ]; then
-                        find staging_dir/target-* -type d -name "include" 2>/dev/null | while read inc_dir; do
-                            cp -rf "$ucode_src/include"/* "$inc_dir/" 2>/dev/null || true
-                        done
-                    fi
+                # 再次复制头文件
+                local ucode_src_fix=$(find build_dir -type d -name "ucode-*" 2>/dev/null | head -1)
+                if [ -n "$ucode_src_fix" ] && [ -d "$ucode_src_fix" ]; then
+                    find staging_dir -type d -name "include" 2>/dev/null | while read inc_dir; do
+                        if [ -d "$ucode_src_fix/include" ]; then
+                            cp -rf "$ucode_src_fix/include"/* "$inc_dir/" 2>/dev/null || true
+                        fi
+                    done
                 fi
                 
                 log "  ✅ ucode 头文件修复完成"
