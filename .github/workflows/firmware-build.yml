@@ -1,7 +1,7 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 3.3.0
-# 最后更新: 2026-03-15
+# 版本: 3.4.0
+# 最后更新: 2026-03-16
 
 name: OpenWrt 智能固件构建工作流
 
@@ -14,7 +14,7 @@ on:
         required: true
         type: choice
         default: "immortalwrt"
-        options: ["immortalwrt", "openwrt", "lede"]
+        options: ["immortalwrt", "immortalwrt-mt798x", "openwrt", "lede"]
       
       # 预定义设备下拉选择（保留）
       device_name:
