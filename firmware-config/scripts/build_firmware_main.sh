@@ -4762,6 +4762,34 @@ workflow_step15_generate_config() {
         log "⚠️ DEVICE为空，使用参数: $DEVICE"
     fi
     
+    # ============================================
+    # 设备名转换（仅针对 immortalwrt-mt798x 源码）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+        local converted_device="$DEVICE"
+        case "$DEVICE" in
+            cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
+                converted_device="cmcc_rax3000m"
+                log "🔧 [MT798x] 设备名转换: $DEVICE -> $converted_device"
+                ;;
+            ac42u|rt-ac42u)
+                converted_device="asus_rt-ac42u"
+                log "🔧 [MT798x] 设备名转换: $DEVICE -> $converted_device"
+                ;;
+        esac
+        
+        if [ "$converted_device" != "$DEVICE" ]; then
+            DEVICE="$converted_device"
+            export DEVICE
+            if [ -f "$BUILD_DIR/build_env.sh" ]; then
+                sed -i "s/^export DEVICE=.*/export DEVICE=\"$converted_device\"/" "$BUILD_DIR/build_env.sh" 2>/dev/null || true
+            fi
+            if [ -n "$GITHUB_ENV" ]; then
+                echo "DEVICE=$converted_device" >> $GITHUB_ENV
+            fi
+        fi
+    fi
+    
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     log ""
@@ -4853,7 +4881,7 @@ workflow_step15_generate_config() {
                     if [ "$ipart" = "$dpart" ] && [ ${#ipart} -gt 2 ]; then
                         weight=$((weight + 10))
                     fi
-                done
+                fi
             done
             
             if [ $weight -gt 0 ]; then
@@ -4947,7 +4975,9 @@ workflow_step15_generate_config() {
         for mkfile in "${mk_files[@]}"; do
             if [[ "$mkfile" == *"image/"*".mk" ]]; then
                 echo "📁 $(basename "$mkfile"):"
-                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\//    - /' | sed 's/ .*//'
+                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\///' | sed 's/ .*//' | while read dev; do
+                    echo "    - $dev"
+                done
             fi
         done
         echo "----------------------------------------"
