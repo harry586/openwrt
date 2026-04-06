@@ -4816,9 +4816,7 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # ============================================
     # 智能设备匹配函数
-    # ============================================
     find_best_matching_device() {
         local input_device="$1"
         local mk_file="$2"
@@ -4853,7 +4851,7 @@ workflow_step15_generate_config() {
                 weight=$((weight + 40))
             fi
             
-            # 去除后缀匹配：cmcc_rax3000m-nand -> rax3000m
+            # 去除后缀匹配
             local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//')
             local device_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//')
             if [ "$input_no_suffix" = "$device_no_suffix" ]; then
@@ -4881,7 +4879,7 @@ workflow_step15_generate_config() {
                     if [ "$ipart" = "$dpart" ] && [ ${#ipart} -gt 2 ]; then
                         weight=$((weight + 10))
                     fi
-                fi
+                done
             done
             
             if [ $weight -gt 0 ]; then
@@ -4943,11 +4941,10 @@ workflow_step15_generate_config() {
         
         # 选择权重最高的
         local best_match="${sorted_matches[0]}"
-        local best_weight=$(echo "$best_match" | cut -d':' -f1)
         mk_device_name=$(echo "$best_match" | cut -d':' -f2)
         device_file=$(echo "$best_match" | cut -d':' -f3)
         
-        log "🔧 未找到精确匹配，使用权重最高的设备: $mk_device_name (权重: $best_weight)"
+        log "🔧 未找到精确匹配，使用权重最高的设备: $mk_device_name"
         log "📁 定义文件: $device_file"
         
         # 显示其他可能的选择供参考
@@ -4957,9 +4954,8 @@ workflow_step15_generate_config() {
             local other_count=0
             for match in "${sorted_matches[@]}"; do
                 if [ $other_count -ge 1 ] && [ $other_count -lt 5 ]; then
-                    local other_weight=$(echo "$match" | cut -d':' -f1)
                     local other_dev=$(echo "$match" | cut -d':' -f2)
-                    echo "      - $other_dev (权重: $other_weight)"
+                    echo "      - $other_dev"
                 fi
                 other_count=$((other_count + 1))
             done
@@ -4981,23 +4977,7 @@ workflow_step15_generate_config() {
             fi
         done
         echo "----------------------------------------"
-        log ""
-        log "💡 提示: 输入设备名 '$(echo "$DEVICE" | sed 's/-nand$//;s/-emmc$//')' 可能更合适"
         exit 1
-    fi
-    
-    local device_block=""
-    device_block=$(awk "/define Device.*$mk_device_name/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
-    
-    if [ -n "$device_block" ]; then
-        echo ""
-        echo "📋 设备定义信息（关键字段）:"
-        echo "----------------------------------------"
-        echo "$device_block" | grep -E "define Device" | head -1
-        echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
-        echo "----------------------------------------"
-    else
-        log "⚠️ 警告：无法提取设备 $mk_device_name 的配置块"
     fi
     
     # 使用搜索到的正确设备名
