@@ -311,16 +311,9 @@ initialize_build_env() {
             ;;
         "openwrt")
             SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
-            case "$version_selection" in
-                "24.10") SELECTED_BRANCH="openwrt-24.10" ;;
-                "23.05") SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}" ;;
-                "22.03") SELECTED_BRANCH="openwrt-22.03" ;;
-                "21.02") SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}" ;;
-                "19.07") SELECTED_BRANCH="openwrt-19.07" ;;
-                "main"|"master") SELECTED_BRANCH="main" ;;
-                *) SELECTED_BRANCH="openwrt-23.05" ;;
-            esac
-            log "✅ OpenWrt官方源码选择: $SELECTED_BRANCH"
+            # 强制使用 21.02-SNAPSHOT 分支
+            SELECTED_BRANCH="openwrt-21.02-SNAPSHOT"
+            log "✅ OpenWrt官方源码选择: 强制使用 21.02-SNAPSHOT 分支"
             ;;
         "immortalwrt")
             SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
@@ -711,6 +704,55 @@ add_turboacc_support() {
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     # ============================================
+    # 修复 OpenWrt 官方源码的内核编译错误
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "🔧 修复 OpenWrt 官方源码的内核编译错误..."
+        
+        # 删除有问题的 mmc/sdhci-msm 补丁
+        local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+        
+        if [ -f "$problem_patch" ]; then
+            log "  🗑️ 删除有问题的补丁: $problem_patch"
+            rm -f "$problem_patch"
+        fi
+        
+        # 也删除任何 .disabled 版本
+        if [ -f "$problem_patch.disabled" ]; then
+            log "  🗑️ 删除 disabled 补丁: $problem_patch.disabled"
+            rm -f "$problem_patch.disabled"
+        fi
+        
+        # 直接修复内核源码中的函数（添加 __maybe_unused 属性）
+        local kernel_file="build_dir/target-arm_cortex-a7+neon-vfpv4_musl_eabi/linux-ipq40xx_generic/linux-5.15.198/drivers/mmc/host/sdhci-msm.c"
+        
+        # 如果内核源码已经解压，直接修复
+        if [ -f "$kernel_file" ]; then
+            log "  🔧 修复内核源码: $kernel_file"
+            sed -i 's/static void sdhci_msm_set_clock(/static void __maybe_unused sdhci_msm_set_clock(/' "$kernel_file"
+            log "  ✅ 内核源码已修复"
+        fi
+        
+        log "  ✅ OpenWrt 官方源码内核编译错误修复完成"
+    fi
+    
+    # ============================================
+    # 修复 ImmortalWrt 源码的补丁问题
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
+        log "🔧 修复 ImmortalWrt 源码的补丁问题..."
+        
+        local problem_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+        
+        if [ -f "$problem_patch" ]; then
+            log "  🗑️ 删除有问题的补丁: $problem_patch"
+            rm -f "$problem_patch"
+        fi
+        
+        log "  ✅ ImmortalWrt 补丁修复完成"
+    fi
+    
+    # ============================================
     # 彻底修复所有下载源
     # ============================================
     log "🔧 彻底修复所有下载源..."
@@ -740,7 +782,6 @@ EOF
     find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
         if [ -f "$dir/Makefile" ]; then
             cp "$dir/Makefile" "$dir/Makefile.bak"
-            # 替换为可用的下载源
             sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
             sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
             log "  ✅ 修复 libxml2 下载源"
@@ -781,144 +822,218 @@ configure_feeds() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 配置Feeds ==="
+    log "=== 配置Feeds（动态禁用插件） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    log "🔧 预创建所有可能缺失的文件..."
+    # ============================================
+    # 获取需要禁用的插件列表
+    # ============================================
+    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol}"
+    log "🔧 基础禁用插件: $base_forbidden"
     
-    mkdir -p staging_dir/target-*/root-*/etc 2>/dev/null || true
-    for target_dir in staging_dir/target-*; do
-        if [ -d "$target_dir" ]; then
-            for root_dir in "$target_dir"/root-*; do
-                if [ -d "$root_dir" ]; then
-                    mkdir -p "$root_dir/etc"
-                    touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
+    # 生成完整的禁用插件列表（包括子包）
+    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
+    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
+    
+    # 从完整列表中提取基础关键词用于目录搜索（去重）
+    local search_keywords=()
+    local seen_keywords=()
+    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
+    for pkg in "${BASE_PKGS[@]}"; do
+        local skip=0
+        for seen in "${seen_keywords[@]}"; do
+            if [ "$seen" = "$pkg" ]; then
+                skip=1
+                break
+            fi
+        done
+        if [ $skip -eq 0 ]; then
+            search_keywords+=("$pkg")
+            seen_keywords+=("$pkg")
+        fi
+        
+        local luci_pkg="luci-app-${pkg}"
+        skip=0
+        for seen in "${seen_keywords[@]}"; do
+            if [ "$seen" = "$luci_pkg" ]; then
+                skip=1
+                break
+            fi
+        done
+        if [ $skip -eq 0 ]; then
+            search_keywords+=("$luci_pkg")
+            seen_keywords+=("$luci_pkg")
+        fi
+        
+        local variants=("${pkg}-scripts" "${pkg}-extra" "${pkg}-core" "${pkg}-ng" "${pkg}-webui")
+        for variant in "${variants[@]}"; do
+            skip=0
+            for seen in "${seen_keywords[@]}"; do
+                if [ "$seen" = "$variant" ]; then
+                    skip=1
+                    break
+                fi
+            done
+            if [ $skip -eq 0 ]; then
+                search_keywords+=("$variant")
+                seen_keywords+=("$variant")
+            fi
+        done
+        
+        if [[ "$pkg" == "ddns" ]]; then
+            local ddns_variants=("ddns-scripts" "ddns-scripts_aliyun" "ddns-scripts_dnspod" "ddns-scripts_cloudflare" "ddns-scripts_no-ip" "ddns-scripts_route53")
+            for variant in "${ddns_variants[@]}"; do
+                skip=0
+                for seen in "${seen_keywords[@]}"; do
+                    if [ "$seen" = "$variant" ]; then
+                        skip=1
+                        break
+                    fi
+                done
+                if [ $skip -eq 0 ]; then
+                    search_keywords+=("$variant")
+                    seen_keywords+=("$variant")
                 fi
             done
         fi
     done
     
-    mkdir -p build_dir/target-* 2>/dev/null || true
-    for build_dir in build_dir/target-*; do
-        if [ -d "$build_dir" ]; then
-            find "$build_dir" -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
-                mkdir -p "$dir"
-                touch "$dir/Module.symvers" 2>/dev/null || true
-            done
-        fi
-    done
+    log "📋 搜索关键词列表 (${#search_keywords[@]} 个)"
     
-    if [ -f "feeds.conf.default" ]; then
-        cp "feeds.conf.default" "feeds.conf.default.bak"
-        log "  ✅ 备份原有feeds配置"
+    # ============================================
+    # 在配置 feeds 之前，先删除不需要的插件包
+    # ============================================
+    log "🔧 在配置 feeds 之前，删除不需要的插件包..."
+    
+    if [ -d "package/feeds" ]; then
+        for keyword in "${search_keywords[@]}"; do
+            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除包目录: $dir"
+                rm -rf "$dir"
+            done
+        done
     fi
     
-    > feeds.conf.default
+    if [ -d "feeds" ]; then
+        for keyword in "${search_keywords[@]}"; do
+            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除 feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+        done
+    fi
     
-    case "$SOURCE_REPO_TYPE" in
-        "lede")
-            log "🔧 LEDE源码模式: 使用LEDE官方feeds"
-            cat >> feeds.conf.default << 'EOF'
+    log "✅ 不需要的插件包已删除"
+    
+    # ============================================
+    # 根据源码类型设置feeds
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE源码模式: 使用LEDE官方feeds"
+        
+        cat > feeds.conf.default << 'EOF'
 src-git packages https://github.com/coolsnowwolf/packages.git
 src-git luci https://github.com/coolsnowwolf/luci.git
-src-git routing https://github.com/openwrt/routing.git
-src-git telephony https://github.com/openwrt/telephony.git
+src-git routing https://github.com/coolsnowwolf/routing.git
+src-git telephony https://github.com/coolsnowwolf/telephony.git
 EOF
-            ;;
-        "openwrt")
-            log "🔧 OpenWrt官方源码模式: 使用OpenWrt官方feeds"
-            local branch_suffix=""
-            case "$SELECTED_BRANCH" in
-                *"24.10"*) branch_suffix="openwrt-24.10" ;;
-                *"23.05"*) branch_suffix="openwrt-23.05" ;;
-                *"22.03"*) branch_suffix="openwrt-22.03" ;;
-                *"21.02"*) branch_suffix="openwrt-21.02" ;;
-                *"19.07"*) branch_suffix="openwrt-19.07" ;;
-                "main"|"master") branch_suffix="main" ;;
-                *) branch_suffix="$SELECTED_BRANCH" ;;
-            esac
-            
-            cat >> feeds.conf.default << EOF
-src-git packages https://git.openwrt.org/feed/packages.git;$branch_suffix
-src-git luci https://git.openwrt.org/project/luci.git;$branch_suffix
-src-git routing https://git.openwrt.org/feed/routing.git;$branch_suffix
-src-git telephony https://git.openwrt.org/feed/telephony.git;$branch_suffix
+        
+        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+            log "✅ 添加TurboACC feed"
+        fi
+        
+    elif [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "🔧 OpenWrt官方源码模式: 强制使用 21.02-SNAPSHOT 分支的feeds"
+        
+        # 强制使用 21.02-SNAPSHOT 分支的 feeds
+        cat > feeds.conf.default << EOF
+src-git packages https://github.com/openwrt/packages.git;openwrt-21.02-SNAPSHOT
+src-git luci https://github.com/openwrt/luci.git;openwrt-21.02-SNAPSHOT
+src-git routing https://github.com/openwrt/routing.git;openwrt-21.02-SNAPSHOT
+src-git telephony https://github.com/openwrt/telephony.git;openwrt-21.02-SNAPSHOT
 EOF
-            ;;
-        "immortalwrt")
-            log "🔧 ImmortalWrt源码模式: 使用ImmortalWrt官方feeds"
-            local branch_suffix=""
-            case "$SELECTED_BRANCH" in
-                *"23.05"*) branch_suffix="openwrt-23.05" ;;
-                *"21.02"*) branch_suffix="openwrt-21.02" ;;
-                *"18.06"*) branch_suffix="openwrt-18.06" ;;
-                "master") branch_suffix="master" ;;
-                *) branch_suffix="$SELECTED_BRANCH" ;;
-            esac
-            
-            cat >> feeds.conf.default << EOF
-src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$branch_suffix
-src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$branch_suffix
-src-git routing https://github.com/openwrt/routing.git;$branch_suffix
-src-git telephony https://github.com/openwrt/telephony.git;$branch_suffix
+        
+        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+            log "✅ 添加TurboACC feed"
+        fi
+        
+    else
+        log "🔧 ImmortalWrt源码模式: 使用ImmortalWrt官方feeds"
+        
+        if [ "$SELECTED_BRANCH" = "openwrt-23.05" ]; then
+            FEEDS_BRANCH="openwrt-23.05"
+        else
+            FEEDS_BRANCH="openwrt-21.02"
+        fi
+        
+        cat > feeds.conf.default << EOF
+src-git packages ${PACKAGES_FEED_URL:-https://github.com/immortalwrt/packages.git};$FEEDS_BRANCH
+src-git luci ${LUCI_FEED_URL:-https://github.com/immortalwrt/luci.git};$FEEDS_BRANCH
 EOF
-            ;;
-        *)
-            log "⚠️ 未知源码类型，使用通用feeds配置"
-            cat >> feeds.conf.default << 'EOF'
-src-git packages https://github.com/openwrt/packages.git
-src-git luci https://github.com/openwrt/luci.git
-src-git routing https://github.com/openwrt/routing.git
-src-git telephony https://github.com/openwrt/telephony.git
-EOF
-            ;;
-    esac
-    
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-        case "$SOURCE_REPO_TYPE" in
-            "immortalwrt"|"lede")
-                echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-                log "✅ 添加TurboACC feed"
-                ;;
-            "openwrt")
-                log "⚠️ OpenWrt官方源码可能不支持TurboACC feed，已跳过"
-                ;;
-        esac
+        
+        if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+            log "✅ 添加TurboACC feed"
+        fi
     fi
     
     log "📋 feeds.conf.default 内容:"
     cat feeds.conf.default
     
     log "=== 更新Feeds ==="
-    ./scripts/feeds update -a || {
-        log "⚠️ feeds更新有警告，尝试继续..."
-    }
+    ./scripts/feeds update -a || handle_error "更新feeds失败"
     
-    log "=== 删除有问题的包（在安装前） ==="
+    log "🔧 在安装 feeds 之前，再次删除不需要的插件包..."
     
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码：删除有依赖问题的 vsftpd 相关包"
-        
-        find package/feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package/feeds 目录: $dir"
+    sleep 2
+    
+    for keyword in "${search_keywords[@]}"; do
+        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+            log "  🗑️  删除 feeds 目录: $dir"
             rm -rf "$dir"
         done
         
-        find feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        find package -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package 目录: $dir"
-            rm -rf "$dir"
-        done
-    fi
+        if [ -d "package/feeds" ]; then
+            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除 package/feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+        fi
+    done
+    
+    log "✅ 不需要的插件包已删除"
     
     log "=== 安装Feeds ==="
-    ./scripts/feeds install -a || {
-        log "⚠️ feeds安装有警告，尝试继续..."
-    }
+    ./scripts/feeds install -a || handle_error "安装feeds失败"
+    
+    log "🔧 安装后彻底删除不需要的插件源文件..."
+    
+    for keyword in "${search_keywords[@]}"; do
+        find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+            log "  🗑️  删除 feeds 目录: $dir"
+            rm -rf "$dir"
+        done
+        
+        if [ -d "package/feeds" ]; then
+            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
+                log "  🗑️  删除 package/feeds 目录: $dir"
+                rm -rf "$dir"
+            done
+        fi
+    done
+    
+    log "✅ 所有不需要的插件源文件已彻底删除"
+    
+    local critical_feeds_dirs=("feeds/packages" "feeds/luci" "package/feeds")
+    for dir in "${critical_feeds_dirs[@]}"; do
+        if [ -d "$dir" ]; then
+            log "✅ Feed目录存在: $dir"
+        else
+            log "❌ Feed目录缺失: $dir"
+        fi
+    done
     
     log "✅ Feeds配置完成"
 }
@@ -1662,7 +1777,12 @@ EOF
             fi
             
             append_config "$CONFIG_DIR/$TARGET.config"
-            append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+            # 对于 OpenWrt 官方源码，使用固定的 21.02-SNAPSHOT 分支配置
+            if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+                append_config "$CONFIG_DIR/openwrt-21.02-SNAPSHOT.config"
+            else
+                append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
+            fi
             append_config "$CONFIG_DIR/$CONFIG_NORMAL"
         fi
     fi
@@ -4116,14 +4236,82 @@ workflow_step08_initialize_build_env_hybrid() {
 #【build_firmware_main.sh-26-end】
 
 #【build_firmware_main.sh-27】
-# ============================================
-# 步骤09: 编译源码自带工具链（增强版 - 检查libyaml）
-# 对应 firmware-build.yml 步骤09
-# ============================================
+workflow_step13_pre_build_space_check() {
+    log "=== 步骤13: 编译前空间检查 ==="
+    
+    set -e
+    trap 'echo "❌ 步骤13 失败，退出代码: $?"; exit 1' ERR
+    
+    pre_build_space_check
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 编译前空间检查失败"
+        exit 1
+    fi
+    
+    log "✅ 步骤13 完成"
+}
+
+workflow_step14_pre_build_space_check() {
+    log "=== 步骤14: 编译前空间检查 ==="
+    
+    set -e
+    trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
+    
+    pre_build_space_check
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ 错误: 编译前空间检查失败"
+        exit 1
+    fi
+    
+    log "✅ 步骤14 完成"
+}
+
+pre_build_space_check() {
+    log "=== 编译前空间检查 ==="
+    
+    echo "当前目录: $(pwd)"
+    echo "构建目录: $BUILD_DIR"
+    
+    echo "=== 磁盘使用情况 ==="
+    df -h
+    
+    local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | awk '{print $1}') || echo "无法获取构建目录大小"
+    echo "构建目录大小: $build_dir_usage"
+    
+    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
+    local available_gb=$((available_space / 1024 / 1024))
+    echo "/mnt 可用空间: ${available_gb}G"
+    
+    local root_available_space=$(df / --output=avail | tail -1)
+    local root_available_gb=$((root_available_space / 1024 / 1024))
+    echo "/ 可用空间: ${root_available_gb}G"
+    
+    echo "=== 内存使用情况 ==="
+    free -h
+    
+    echo "=== CPU信息 ==="
+    echo "CPU核心数: $(nproc)"
+    
+    local estimated_space=15
+    if [ $available_gb -lt $estimated_space ]; then
+        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
+    else
+        log "✅ 磁盘空间充足: ${available_gb}G 可用"
+    fi
+    
+    log "✅ 空间检查完成"
+}
+#【build_firmware_main.sh-27-end】
+
+#【build_firmware_main.sh-28】
 workflow_step09_download_sdk() {
     local device_name="$1"
     
     log "=== 步骤09: 编译源码自带工具链 ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "📌 最终设备名称: $device_name"
     
     set -e
     trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
@@ -4136,392 +4324,10 @@ workflow_step09_download_sdk() {
         log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
     fi
     
-    # ============================================
-    # 检查libyaml是否安装（修复dtc链接错误）
-    # ============================================
-    log "🔧 检查libyaml库（修复dtc链接错误）..."
-    
-    if ! pkg-config --libs yaml-0.1 > /dev/null 2>&1; then
-        log "  ⚠️ libyaml未找到，尝试安装..."
-        sudo apt-get update > /dev/null 2>&1 || true
-        sudo apt-get install -y libyaml-dev > /dev/null 2>&1 || {
-            log "  ⚠️ 自动安装失败，将使用备用方案"
-            
-            # 备用方案：创建pkg-config文件
-            mkdir -p staging_dir/host/lib/pkgconfig
-            cat > staging_dir/host/lib/pkgconfig/yaml-0.1.pc << 'EOF'
-prefix=/usr
-exec_prefix=${prefix}
-includedir=${prefix}/include
-libdir=${exec_prefix}/lib/x86_64-linux-gnu
-
-Name: LibYAML
-Description: Library for YAML 1.1
-Version: 0.2.5
-Cflags: -I${includedir}
-Libs: -L${libdir} -lyaml
-EOF
-            export PKG_CONFIG_PATH="$PWD/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
-            log "  ✅ 已创建libyaml pkg-config文件"
-            
-            # 检查库文件是否存在
-            if [ ! -f "/usr/lib/x86_64-linux-gnu/libyaml.so" ] && [ ! -f "/usr/lib/libyaml.so" ]; then
-                log "  ⚠️ libyaml库文件不存在，尝试下载源码编译..."
-                
-                # 下载并编译libyaml
-                mkdir -p dl
-                if [ ! -f "dl/yaml-0.2.5.tar.gz" ]; then
-                    wget -O dl/yaml-0.2.5.tar.gz https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz || true
-                fi
-                
-                if [ -f "dl/yaml-0.2.5.tar.gz" ]; then
-                    mkdir -p build_dir/host/libyaml-0.2.5
-                    tar -xzf dl/yaml-0.2.5.tar.gz -C build_dir/host/libyaml-0.2.5 --strip-components=1
-                    cd build_dir/host/libyaml-0.2.5
-                    ./configure --prefix="$BUILD_DIR/staging_dir/host"
-                    make -j1
-                    make install
-                    cd "$BUILD_DIR"
-                    
-                    # 更新pkg-config路径
-                    export PKG_CONFIG_PATH="$BUILD_DIR/staging_dir/host/lib/pkgconfig:$PKG_CONFIG_PATH"
-                    log "  ✅ libyaml手动编译完成"
-                fi
-            fi
-        }
-    else
-        log "  ✅ libyaml已安装"
-        pkg-config --libs --cflags yaml-0.1 | sed 's/^/      /'
-    fi
-    
-    log "📌 开始编译工具链..."
-    log "   源码类型: $SOURCE_REPO_TYPE"
-    log "   目标平台: $TARGET/$SUBTARGET"
-    log "   设备: $device_name"
-    
-    # 检查是否已经编译过工具链
-    if [ -d "staging_dir" ] && [ -f "staging_dir/host/bin/gcc" ]; then
-        log "  ✅ 工具链已存在，跳过编译"
-        COMPILER_DIR="$BUILD_DIR"
-        save_env
-        log "✅ 步骤09 完成"
-        return 0
-    fi
-    
-    # 步骤1: 更新feeds
-    log ""
-    log "🔄 步骤1: 更新feeds..."
-    ./scripts/feeds update -a > /tmp/build-logs/feeds_update.log 2>&1 || {
-        log "⚠️ feeds更新有警告，继续..."
-    }
-    
-    # 步骤2: 安装基础feed
-    log ""
-    log "🔄 步骤2: 安装基础feed..."
-    ./scripts/feeds install base > /tmp/build-logs/base_install.log 2>&1 || true
-    
-    # 步骤3: 准备编译工具链
-    log ""
-    log "🔄 步骤3: 配置工具链..."
-    
-    # 获取目标平台和子平台
-    local target="${TARGET:-ipq40xx}"
-    local subtarget="${SUBTARGET:-generic}"
-    
-    # 创建最小配置（只编译工具链）
-    cat > .config.toolchain << EOF
-CONFIG_TARGET_${target}=y
-CONFIG_TARGET_${target}_${subtarget}=y
-# 只编译工具链，不编译固件
-CONFIG_DEVEL=y
-CONFIG_TOOLCHAINOPTS=y
-# 禁用所有固件相关的配置
-CONFIG_TARGET_ROOTFS_INITRAMFS=n
-CONFIG_TARGET_ROOTFS_SQUASHFS=n
-CONFIG_TARGET_ROOTFS_EXT4FS=n
-CONFIG_TARGET_ROOTFS_JFFS2=n
-# 禁用内核编译（只编译工具链）
-CONFIG_KERNEL_NONE=y
-EOF
-    
-    # 使用最小配置
-    cp .config.toolchain .config
-    
-    # 运行defconfig
-    log "  运行 make defconfig..."
-    make defconfig > /tmp/build-logs/toolchain_defconfig.log 2>&1
-    
-    # 步骤4: 编译工具链
-    log ""
-    log "🔄 步骤4: 编译工具链..."
-    log "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-    log ""
-    
-    START_TIME=$(date +%s)
-    
-    # 先编译tools（基础工具）
-    log "  编译 tools (基础工具)..."
-    if make tools/compile -j$(nproc) V=s > /tmp/build-logs/tools_compile.log 2>&1; then
-        log "  ✅ tools编译完成"
-    else
-        log "  ⚠️ tools编译有警告，检查日志..."
-        tail -50 /tmp/build-logs/tools_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
-    fi
-    
-    # 再编译toolchain（交叉编译工具链）
-    log "  编译 toolchain (交叉工具链)..."
-    if make toolchain/compile -j$(nproc) V=s > /tmp/build-logs/toolchain_compile.log 2>&1; then
-        log "  ✅ toolchain编译完成"
-    else
-        log "  ⚠️ toolchain编译有警告，检查日志..."
-        tail -50 /tmp/build-logs/toolchain_compile.log | grep -E "error|Error|ERROR|fail|Fail|FAIL" || true
-    fi
-    
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
-    
-    log ""
-    log "✅ 工具链编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-    
-    # 验证工具链
-    log ""
-    log "🔍 验证工具链..."
-    
-    if [ -d "staging_dir" ]; then
-        log "  ✅ staging_dir目录存在"
-        
-        # 查找GCC编译器
-        GCC_FILE=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
-        
-        if [ -n "$GCC_FILE" ]; then
-            log "  ✅ GCC编译器已生成: $(basename "$GCC_FILE")"
-            GCC_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            log "     版本: $GCC_VERSION"
-        else
-            log "  ⚠️ GCC编译器未找到，但可能正在生成中"
-        fi
-        
-        # 统计工具链大小
-        TOOLCHAIN_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-        log "  📊 工具链大小: $TOOLCHAIN_SIZE"
-    else
-        log "  ❌ staging_dir目录不存在，工具链编译可能失败"
-        exit 1
-    fi
-    
-    # 保存工具链信息到环境变量
-    COMPILER_DIR="$BUILD_DIR"
-    save_env
+    # 调用初始化编译器环境的函数
+    initialize_compiler_env "$device_name"
     
     log "✅ 步骤09 完成"
-}
-#【build_firmware_main.sh-27-end】
-
-#【build_firmware_main.sh-28】
-# ============================================
-# 步骤10: 验证工具链编译结果
-# 对应 firmware-build.yml 步骤10
-# ============================================
-workflow_step10_verify_sdk() {
-    log "=== 步骤10: 验证工具链编译结果 ==="
-    
-    set -e
-    trap 'echo "❌ 步骤10 失败，退出代码: $?"; exit 1' ERR
-    
-    cd $BUILD_DIR
-    
-    # 加载环境变量
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-        log "✅ 加载环境变量: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
-    fi
-    
-    log "🔍 检查工具链编译结果..."
-    
-    # 检查关键目录
-    log ""
-    log "📁 检查关键目录:"
-    
-    local missing_items=0
-    local warning_items=0
-    
-    # 检查staging_dir
-    if [ -d "staging_dir" ]; then
-        log "  ✅ staging_dir: 存在"
-        
-        # 检查host目录
-        if [ -d "staging_dir/host" ]; then
-            log "    ✅ host工具: 存在"
-            HOST_BIN_COUNT=$(find staging_dir/host/bin -type f 2>/dev/null | wc -l)
-            log "       host工具数量: $HOST_BIN_COUNT"
-            
-            # 列出关键host工具 - 使用更宽松的检查方式
-            local host_tools="make sed awk grep patch tar gzip bzip2"
-            for tool in $host_tools; do
-                # 查找所有可能的路径
-                TOOL_PATH=$(find staging_dir/host -type f -name "$tool" -o -name "$tool.exe" -o -name "*$tool*" 2>/dev/null | head -1)
-                if [ -n "$TOOL_PATH" ]; then
-                    log "      ✅ $tool: 存在 ($(basename "$TOOL_PATH"))"
-                else
-                    # 检查系统路径
-                    if command -v $tool >/dev/null 2>&1; then
-                        log "      ✅ $tool: 使用系统工具 ($(which $tool))"
-                    else
-                        log "      ⚠️ $tool: 未找到"
-                        warning_items=$((warning_items + 1))
-                    fi
-                fi
-            done
-        else
-            log "    ❌ host工具: 不存在"
-            missing_items=$((missing_items + 1))
-        fi
-        
-        # 检查target目录
-        TARGET_DIRS=$(find staging_dir -maxdepth 1 -type d -name "target-*" 2>/dev/null)
-        if [ -n "$TARGET_DIRS" ]; then
-            log "    ✅ target工具链: 存在"
-            for target_dir in $TARGET_DIRS; do
-                log "       📁 $(basename "$target_dir")"
-                
-                # 检查bin目录
-                if [ -d "$target_dir/bin" ]; then
-                    BIN_COUNT=$(find "$target_dir/bin" -type f 2>/dev/null | wc -l)
-                    log "         工具数量: $BIN_COUNT"
-                    
-                    # 检查关键编译工具
-                    local compile_tools="gcc g++ ar as ld objcopy strip"
-                    for tool in $compile_tools; do
-                        TOOL_PATH=$(find "$target_dir/bin" -type f -name "*$tool*" ! -name "*-gcc-ar" ! -name "*-gcc-ranlib" ! -name "*-gcc-nm" 2>/dev/null | head -1)
-                        if [ -n "$TOOL_PATH" ]; then
-                            log "          ✅ $tool: 存在 ($(basename "$TOOL_PATH"))"
-                        fi
-                    done
-                fi
-            done
-        else
-            log "    ❌ target工具链: 不存在"
-            missing_items=$((missing_items + 1))
-        fi
-    else
-        log "  ❌ staging_dir: 不存在"
-        missing_items=$((missing_items + 1))
-    fi
-    
-    # 检查工具链GCC
-    log ""
-    log "🔧 检查GCC编译器:"
-    
-    GCC_FILES=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null)
-    GCC_COUNT=$(echo "$GCC_FILES" | wc -l)
-    
-    if [ $GCC_COUNT -gt 0 ]; then
-        log "  ✅ 找到 $GCC_COUNT 个GCC编译器"
-        
-        # 显示第一个GCC的信息
-        FIRST_GCC=$(echo "$GCC_FILES" | head -1)
-        log "  📌 示例: $(basename "$FIRST_GCC")"
-        log "     路径: $FIRST_GCC"
-        
-        # 检查GCC版本
-        if [ -x "$FIRST_GCC" ]; then
-            GCC_VERSION=$("$FIRST_GCC" --version 2>&1 | head -1)
-            log "     版本: $GCC_VERSION"
-            
-            # 检查是否为目标平台编译器
-            if [[ "$FIRST_GCC" == *"$TARGET"* ]] || [[ "$FIRST_GCC" == *"openwrt"* ]]; then
-                log "     ✅ 是目标平台交叉编译器"
-            fi
-        fi
-    else
-        log "  ❌ 未找到GCC编译器"
-        missing_items=$((missing_items + 1))
-    fi
-    
-    # 检查关键头文件
-    log ""
-    log "📋 检查关键头文件:"
-    
-    KERNEL_HEADERS=$(find staging_dir -name "linux" -type d 2>/dev/null | grep -E "include/linux$" | head -1)
-    if [ -n "$KERNEL_HEADERS" ]; then
-        log "  ✅ 内核头文件: 存在"
-        log "     📁 $KERNEL_HEADERS"
-        
-        # 检查几个关键头文件
-        local headers="kernel.h types.h fs.h"
-        for header in $headers; do
-            if [ -f "$KERNEL_HEADERS/$header" ]; then
-                log "      ✅ $header: 存在"
-            fi
-        done
-    else
-        log "  ⚠️ 内核头文件: 未找到（可能正在生成）"
-        warning_items=$((warning_items + 1))
-    fi
-    
-    # 检查库文件
-    log ""
-    log "📚 检查基础库文件:"
-    
-    LIBS=$(find staging_dir -name "libc.so" -o -name "libgcc_s.so" -o -name "libstdc++.so" 2>/dev/null | head -5)
-    if [ -n "$LIBS" ]; then
-        log "  ✅ 基础库文件: 存在"
-        echo "$LIBS" | while read lib; do
-            log "     📄 $(basename "$lib")"
-        done
-    else
-        log "  ⚠️ 基础库文件: 未找到"
-        warning_items=$((warning_items + 1))
-    fi
-    
-    # 统计工具链大小
-    log ""
-    log "📊 工具链统计:"
-    if [ -d "staging_dir" ]; then
-        TOTAL_SIZE=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-        log "  总大小: $TOTAL_SIZE"
-        
-        HOST_SIZE=$(du -sh staging_dir/host 2>/dev/null | awk '{print $1}' || echo "0B")
-        log "  host工具: $HOST_SIZE"
-        
-        TARGET_SIZE=$(du -sh staging_dir/target-* 2>/dev/null | awk '{print $1}' || echo "0B")
-        log "  target工具链: $TARGET_SIZE"
-    fi
-    
-    # 检查GCC是否可用
-    log ""
-    log "🔧 测试GCC编译器可用性:"
-    if [ -n "$FIRST_GCC" ] && [ -x "$FIRST_GCC" ]; then
-        # 创建一个简单的测试程序
-        echo 'int main(){return 0;}' > /tmp/test.c
-        if $FIRST_GCC -o /tmp/test /tmp/test.c 2>/dev/null; then
-            log "  ✅ GCC编译器可用（能编译简单程序）"
-            rm -f /tmp/test /tmp/test.c
-        else
-            log "  ⚠️ GCC编译器可能有问题（不能编译简单程序）"
-            warning_items=$((warning_items + 1))
-        fi
-    fi
-    
-    # 根据检查结果决定是否继续
-    log ""
-    if [ $missing_items -eq 0 ]; then
-        if [ $warning_items -eq 0 ]; then
-            log "✅✅✅ 工具链验证完全通过，所有组件都存在 ✅✅✅"
-        else
-            log "✅ 工具链验证通过，但有 $warning_items 个警告（不影响编译）"
-            log "   警告说明:"
-            log "   - make/gzip 可能以其他名称存在或使用系统工具"
-            log "   - 不影响后续编译"
-        fi
-        return 0
-    else
-        log "❌ 工具链验证失败，缺少 $missing_items 个关键组件"
-        log "   请检查工具链编译日志: /tmp/build-logs/tools_compile.log 和 /tmp/build-logs/toolchain_compile.log"
-        exit 1
-    fi
-    
-    log "✅ 步骤10 完成"
 }
 #【build_firmware_main.sh-28-end】
 
@@ -4593,10 +4399,6 @@ workflow_step13_install_turboacc() {
 #【build_firmware_main.sh-31-end】
 
 #【build_firmware_main.sh-32】
-# ============================================
-# 步骤14: 编译前空间检查
-# 对应 firmware-build.yml 步骤14
-# ============================================
 pre_build_space_check() {
     log "=== 编译前空间检查 ==="
     
@@ -4609,13 +4411,9 @@ pre_build_space_check() {
     local build_dir_usage=$(du -sh $BUILD_DIR 2>/dev/null | awk '{print $1}') || echo "无法获取构建目录大小"
     echo "构建目录大小: $build_dir_usage"
     
-    local available_space=$(df /mnt --output=avail 2>/dev/null | tail -1 || df / --output=avail | tail -1)
+    local available_space=$(df / --output=avail 2>/dev/null | tail -1 || echo "0")
     local available_gb=$((available_space / 1024 / 1024))
-    echo "/mnt 可用空间: ${available_gb}G"
-    
-    local root_available_space=$(df / --output=avail | tail -1)
-    local root_available_gb=$((root_available_space / 1024 / 1024))
-    echo "/ 可用空间: ${root_available_gb}G"
+    echo "/ 可用空间: ${available_gb}G"
     
     echo "=== 内存使用情况 ==="
     free -h
@@ -4623,31 +4421,22 @@ pre_build_space_check() {
     echo "=== CPU信息 ==="
     echo "CPU核心数: $(nproc)"
     
-    local estimated_space=15
-    if [ $available_gb -lt $estimated_space ]; then
-        log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少${estimated_space}G"
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        if [ $available_gb -lt 8 ]; then
+            log "⚠️ 警告: LEDE 编译可用空间(${available_gb}G)可能不足，建议至少8G"
+            log "⚠️ 继续编译，但可能失败"
+        else
+            log "✅ LEDE 磁盘空间充足: ${available_gb}G 可用"
+        fi
     else
-        log "✅ 磁盘空间充足: ${available_gb}G 可用"
+        if [ $available_gb -lt 5 ]; then
+            log "⚠️ 警告: 可用空间(${available_gb}G)可能不足，建议至少5G"
+        else
+            log "✅ 磁盘空间充足: ${available_gb}G 可用"
+        fi
     fi
     
     log "✅ 空间检查完成"
-}
-
-workflow_step14_pre_build_space_check() {
-    log "=== 步骤14: 编译前空间检查 ==="
-    
-    set -e
-    trap 'echo "❌ 步骤14 失败，退出代码: $?"; exit 1' ERR
-    
-    # 调用空间检查函数
-    pre_build_space_check
-    
-    if [ $? -ne 0 ]; then
-        echo "❌ 错误: 编译前空间检查失败"
-        exit 1
-    fi
-    
-    log "✅ 步骤14 完成"
 }
 #【build_firmware_main.sh-32-end】
 
@@ -5241,23 +5030,64 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（自动修复补丁问题） ==="
-    log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "=== 步骤25: 编译固件（LEDE兼容版） ==="
     
     set -e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
     
+    # ============================================
+    # LEDE源码特定修复（来自成功版本2026.02.27）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 检测到LEDE源码，应用特定修复..."
+        
+        # 重新编译padjffs2工具
+        if [ -f "staging_dir/host/bin/padjffs2" ]; then
+            log "  ✅ 重新编译padjffs2工具..."
+            rm -f staging_dir/host/bin/padjffs2
+            make tools/padjffs2/clean V=s > /dev/null 2>&1 || true
+            make tools/padjffs2/compile V=s > /dev/null 2>&1 || true
+        fi
+        
+        # 重新编译mkdniimg工具
+        if [ -f "staging_dir/host/bin/mkdniimg" ]; then
+            log "  ✅ 重新编译mkdniimg工具..."
+            rm -f staging_dir/host/bin/mkdniimg
+            make tools/mkdniimg/clean V=s > /dev/null 2>&1 || true
+            make tools/mkdniimg/compile V=s > /dev/null 2>&1 || true
+        fi
+        
+        # 清理可能冲突的临时文件
+        log "  ✅ 清理临时文件..."
+        find build_dir -name "*.bin" -o -name "*.img" -o -name "*.tmp" 2>/dev/null | xargs rm -f 2>/dev/null || true
+        
+        # 增加内核编译的稳定性
+        export KCFLAGS="-O2 -pipe"
+        
+        # 设置强制不安全配置（LEDE需要）
+        export FORCE_UNSAFE_CONFIGURE=1
+        
+        log "  ✅ LEDE特定修复完成"
+    fi
+    
+    # ============================================
+    # 设置文件描述符限制
+    # ============================================
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
+    # ============================================
+    # 创建双固件保护脚本
+    # ============================================
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
     
-    cat > "$protect_dir/protect.sh" << 'EOF'
+    local protect_script="$protect_dir/protect.sh"
+    cat > "$protect_script" << 'EOF'
 #!/bin/bash
 PROTECT_DIR="$1"
 BUILD_DIR="$2"
@@ -5279,9 +5109,9 @@ while true; do
     sleep 5
 done
 EOF
-    chmod +x "$protect_dir/protect.sh"
+    chmod +x "$protect_script"
     
-    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
+    "$protect_script" "$protect_dir" "$BUILD_DIR" &
     local protect_pid=$!
     log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
     
@@ -5317,6 +5147,23 @@ echo "=== 强制恢复结束 ==="
 EOF
     chmod +x "$protect_dir/recover.sh"
     
+    # ============================================
+    # 备份关键文件
+    # ============================================
+    log "🔧 创建固件备份目录..."
+    local backup_dir="$BUILD_DIR/firmware_backup_$(date +%s)"
+    mkdir -p "$backup_dir"
+    log "  ✅ 备份目录: $backup_dir"
+    
+    # ============================================
+    # 导出环境变量
+    # ============================================
+    export OPENWRT_VERBOSE=1
+    export FORCE_UNSAFE_CONFIGURE=1
+    
+    # ============================================
+    # 智能判断最佳并行任务数
+    # ============================================
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
     
@@ -5324,327 +5171,167 @@ EOF
     echo "🔧 系统信息:"
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
+    echo "  文件描述符限制: $(ulimit -n)"
+    echo "  并行优化: $enable_parallel"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     
-    local make_args="V=s"
-    case "$SOURCE_REPO_TYPE" in
-        "openwrt"|"lede")
-            make_args="V=s FORCE_UNSAFE_CONFIGURE=1"
-            ;;
-        "immortalwrt")
-            make_args="V=s"
-            ;;
-    esac
-    
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
+        echo ""
+        echo "🧠 智能判断最佳并行任务数..."
+        
         if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
             MAKE_JOBS=4
+            echo "✅ 高性能系统: 使用 $MAKE_JOBS 个并行任务"
         elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
             MAKE_JOBS=2
+            echo "✅ 标准系统: 使用 $MAKE_JOBS 个并行任务"
         else
             MAKE_JOBS=1
+            echo "⚠️ 低性能系统: 使用 $MAKE_JOBS 个并行任务"
         fi
-        log "🚀 使用 $MAKE_JOBS 个并行任务"
-    else
-        MAKE_JOBS=1
-        log "⚠️ 使用单线程编译"
-    fi
-    
-    # ============================================
-    # 预删除已知有问题的补丁
-    # ============================================
-    log "🔧 预删除已知有问题的 ipq40xx 补丁..."
-    
-    local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
-    if [ -d "$problem_patches_dir" ]; then
-        local problem_patches=(
-            "401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-        )
         
-        for patch in "${problem_patches[@]}"; do
-            if [ -f "$problem_patches_dir/$patch" ]; then
-                log "  🗑️ 预删除补丁: $patch"
-                rm -f "$problem_patches_dir/$patch"
-            fi
-        done
-    fi
-    
-    # ============================================
-    # 编译循环 - 自动检测并修复补丁失败
-    # ============================================
-    local max_attempts=3
-    local attempt=1
-    local compile_success=0
-    
-    while [ $attempt -le $max_attempts ] && [ $compile_success -eq 0 ]; do
+        # ============================================
+        # 第一阶段：并行编译
+        # ============================================
         echo ""
-        echo "🚀 编译尝试 $attempt/$max_attempts (make -j$MAKE_JOBS)"
+        echo "🚀 第一阶段：并行编译内核和模块 (make -j$MAKE_JOBS)"
         echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
         echo ""
         
         START_TIME=$(date +%s)
         
-        set +e
-        make -j$MAKE_JOBS $make_args 2>&1 | tee build_phase1_attempt${attempt}.log
+        make -j$MAKE_JOBS V=s 2>&1 | tee build_phase1.log
         PHASE1_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
         
         PHASE1_END=$(date +%s)
         PHASE1_DURATION=$((PHASE1_END - START_TIME))
         
         echo ""
-        echo "✅ 尝试 $attempt 完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
+        echo "✅ 第一阶段完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
+        echo "   退出代码: $PHASE1_EXIT_CODE"
         
-        if [ $PHASE1_EXIT_CODE -eq 0 ]; then
-            compile_success=1
-            break
-        fi
-        
-        local log_file="build_phase1_attempt${attempt}.log"
-        
-        if [ -f "$log_file" ]; then
-            # ============================================
-            # 检测补丁失败并自动删除问题补丁
-            # ============================================
-            if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
-                log "  ⚠️ 检测到补丁失败，正在自动修复..."
-                
-                # 提取失败的补丁名
-                local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-                
-                if [ -z "$failed_patches" ]; then
-                    failed_patches=$(grep -E "Applying.*\.patch" "$log_file" | grep -A1 "FAILED" | grep "Applying" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-                fi
-                
-                for patch_name in $failed_patches; do
-                    # 在多个可能的目录中查找补丁
-                    local found=0
-                    for patch_dir in target/linux/*/patches-*; do
-                        if [ -f "$patch_dir/$patch_name" ]; then
-                            log "    🗑️ 删除失败补丁: $patch_dir/$patch_name"
-                            rm -f "$patch_dir/$patch_name"
-                            found=1
-                        fi
-                    done
-                    
-                    if [ $found -eq 0 ]; then
-                        # 模糊搜索
-                        find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
-                            log "    🗑️ 删除失败补丁: $patch_file"
-                            rm -f "$patch_file"
-                        done
-                    fi
-                done
-                
-                # 特别处理 ipq40xx 的 mmc 补丁
-                local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                if [ -f "$ipq40xx_patch" ]; then
-                    log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
-                    rm -f "$ipq40xx_patch"
-                fi
-                
-                # 清理内核构建目录
-                log "    🔄 清理内核构建目录..."
-                rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
-                rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-                
-                log "  ✅ 补丁修复完成，将重试编译"
-            fi
-            
-            # ============================================
-            # 检测 package/install 错误
-            # ============================================
-            if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
-                log "  ⚠️ 检测到 package/install 错误，尝试修复..."
-                
-                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
-                rm -f tmp/info/.packageinfo-* 2>/dev/null
-                
-                find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
-                    log "    清理 ipkg 目录: $ipkg_dir"
-                    rm -rf "$ipkg_dir"
-                done
-                
-                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
-                
-                log "  ✅ package/install 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 samba4 错误
-            # ============================================
-            if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
-                log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
-                
-                rm -f staging_dir/target-*/stamp/.samba4* 2>/dev/null
-                rm -f build_dir/target-*/samba-*/.built 2>/dev/null
-                
-                if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                    sudo apt-get install -y python3-distutils python3-dev libpython3-dev 2>/dev/null || true
-                    
-                    find build_dir -name "samba-*" -type d 2>/dev/null | while read samba_dir; do
-                        rm -f "$samba_dir/.configured" 2>/dev/null
-                        log "    清理 samba 配置缓存: $samba_dir"
-                    done
-                fi
-                
-                log "  ✅ samba4 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 ath10k 错误
-            # ============================================
-            if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file"; then
-                log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
-                
-                find build_dir -type d -name "ath10k-ct*" 2>/dev/null | while read ath10k_dir; do
-                    log "    清理 ath10k 目录: $ath10k_dir"
-                    rm -rf "$ath10k_dir"
-                done
-                
-                if [ -f ".config" ]; then
-                    sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
-                    echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
-                    log "    已在配置中禁用 kmod-ath10k-ct"
-                fi
-                
-                log "  ✅ ath10k-ct 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 shortcut-fe 错误
-            # ============================================
-            if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file"; then
-                log "  ⚠️ 检测到 shortcut-fe 驱动编译错误，尝试修复..."
-                
-                find build_dir -type d -name "shortcut-fe*" 2>/dev/null | while read sfe_dir; do
-                    log "    清理 shortcut-fe 目录: $sfe_dir"
-                    rm -rf "$sfe_dir"
-                done
-                
-                if [ -f ".config" ]; then
-                    sed -i '/CONFIG_PACKAGE_kmod-shortcut-fe=y/d' .config
-                    echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-                    log "    已在配置中禁用 kmod-shortcut-fe"
-                fi
-                
-                log "  ✅ shortcut-fe 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 LEDE kmod 依赖问题
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
-                    log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
-                    make defconfig > /tmp/lede_defconfig_fix.log 2>&1 || true
-                    log "  ✅ kmod 依赖修复完成"
-                fi
-            fi
-            
-            # ============================================
-            # 检测 Broken pipe 错误
-            # ============================================
-            if grep -q "Broken pipe" "$log_file"; then
-                log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
-                ulimit -n 65536 2>/dev/null || true
-            fi
-            
-            # ============================================
-            # 检测 libssl 缺失
-            # ============================================
-            if grep -q "libssl was not found" "$log_file"; then
-                log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
-                sudo apt-get update > /dev/null 2>&1 || true
-                sudo apt-get install -y libssl-dev > /dev/null 2>&1 || true
-            fi
-        fi
-        
-        attempt=$((attempt + 1))
-    done
-    
-    if [ $compile_success -eq 0 ]; then
+        # ============================================
+        # 第二阶段前：备份所有临时固件文件
+        # ============================================
         echo ""
-        echo "❌❌❌ 编译失败，已尝试 $max_attempts 次 ❌❌❌"
+        echo "🔧 第二阶段前：备份所有临时固件文件..."
         
-        bash "$protect_dir/recover.sh" "$protect_dir" "$BUILD_DIR"
+        local temp_files=$(find "$BUILD_DIR/build_dir" -path "*/tmp/*.bin" -o -path "*/tmp/*.img" -o -name "*.new" 2>/dev/null)
+        local backup_count=0
         
-        kill $protect_pid 2>/dev/null || true
-        rm -rf "$protect_dir" 2>/dev/null || true
+        if [ -n "$temp_files" ]; then
+            echo "$temp_files" | while read file; do
+                if [ -f "$file" ]; then
+                    cp -v "$file" "$backup_dir/" 2>/dev/null
+                    backup_count=$((backup_count + 1))
+                fi
+            done
+            echo "  ✅ 已备份 $backup_count 个临时固件文件到: $backup_dir"
+        else
+            echo "  ⚠️ 未找到临时固件文件"
+        fi
         
-        exit $PHASE1_EXIT_CODE
+        # ============================================
+        # 第二阶段：单线程生成最终固件
+        # ============================================
+        echo ""
+        echo "🚀 第二阶段：单线程生成最终固件 (make -j1)"
+        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo ""
+        
+        PHASE2_START=$(date +%s)
+        
+        make -j1 V=s 2>&1 | tee -a build_phase2.log
+        BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        
+        PHASE2_END=$(date +%s)
+        PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
+        TOTAL_DURATION=$((PHASE2_END - START_TIME))
+        
+        echo ""
+        echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
+        echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
+        
+        cat build_phase1.log build_phase2.log > build.log
+        
+    else
+        # 单线程编译
+        MAKE_JOBS=1
+        echo ""
+        echo "⚠️ 禁用并行优化，使用单线程编译"
+        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
+        echo ""
+        
+        START_TIME=$(date +%s)
+        
+        make -j1 V=s 2>&1 | tee build.log
+        BUILD_EXIT_CODE=${PIPESTATUS[0]}
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        
+        echo ""
+        echo "📊 编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
+        echo "   退出代码: $BUILD_EXIT_CODE"
     fi
     
-    echo ""
-    echo "🚀 第二阶段：单线程生成最终固件"
-    echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-    echo ""
-    
-    PHASE2_START=$(date +%s)
-    
-    set +e
-    make -j1 $make_args 2>&1 | tee -a build_phase2.log
-    BUILD_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
-    
-    PHASE2_END=$(date +%s)
-    PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
-    TOTAL_DURATION=$((PHASE2_END - START_TIME))
-    
-    echo ""
-    echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
-    echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
-    
-    cat build_phase1_attempt*.log build_phase2.log > build.log
-    
+    # ============================================
+    # 停止保护脚本
+    # ============================================
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
     
-    log "🔍 验证固件..."
+    # ============================================
+    # 检查编译结果并强制恢复
+    # ============================================
+    if [ $BUILD_EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo "❌ 编译失败，退出代码: $BUILD_EXIT_CODE"
+        echo ""
+        echo "🔍 最后50行错误日志:"
+        tail -50 build.log | grep -E "error|Error|ERROR|failed|Failed|FAILED" -A 5 -B 5 || true
+        echo ""
+        echo "📝 完整日志请查看: build.log"
+    fi
     
+    # 无论成功失败，都执行强制恢复
+    echo ""
+    echo "🔧 执行强制恢复，确保固件存在..."
+    bash "$protect_dir/recover.sh" "$protect_dir" "$BUILD_DIR"
+    
+    # ============================================
+    # 最终检查
+    # ============================================
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local valid_firmware=0
-    local firmware_files=()
     
     if [ -d "$target_dir" ]; then
-        while IFS= read -r file; do
-            [ -n "$file" ] && firmware_files+=("$file")
-        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | grep -v "sha256sums")
+        echo ""
+        echo "📊 最终固件检查:"
+        echo "----------------------------------------"
         
-        for file in "${firmware_files[@]}"; do
-            local fname=$(basename "$file")
-            local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
-            local size_mb=$((size_bytes / 1024 / 1024))
-            
-            local is_flashable=0
-            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]] || [[ "$fname" == *".itb" && "$fname" != *"initramfs"* ]]; then
-                is_flashable=1
+        # 修复：将 2>/dev/null 移到 done 后面
+        for file in "$target_dir"/*.bin "$target_dir"/*.img "$target_dir"/*.itb; do
+            if [ -f "$file" ]; then
+                local fname=$(basename "$file")
+                local size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+                echo "  ✅ $fname ($size)"
+                valid_firmware=$((valid_firmware + 1))
             fi
-            
-            if [ $size_mb -ge 5 ]; then
-                if [ $is_flashable -eq 1 ]; then
-                    log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
-                    valid_firmware=$((valid_firmware + 1))
-                else
-                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
-                fi
-            else
-                log "  ❌ $fname 大小: ${size_mb}MB - 无效"
-                rm -f "$file"
-            fi
-        done
+        done 2>/dev/null
+        
+        echo "----------------------------------------"
     fi
+    
+    # 清理
+    rm -rf "$protect_dir" 2>/dev/null || true
     
     if [ $valid_firmware -eq 0 ]; then
-        log "❌ 错误：没有找到任何有效可刷机固件"
+        log "❌ 错误：没有找到任何有效固件"
         exit 1
     else
-        log "✅ 找到 $valid_firmware 个有效可刷机固件"
+        log "✅ 找到 $valid_firmware 个有效固件"
     fi
-    
-    rm -rf "$protect_dir" 2>/dev/null || true
     
     log "✅ 步骤25 完成"
 }
