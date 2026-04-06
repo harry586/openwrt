@@ -336,8 +336,8 @@ initialize_build_env() {
             ;;
         "immortalwrt-mt798x")
             SELECTED_REPO_URL="${IMMORTALWRT_MT798X_URL:-https://github.com/hanwckf/immortalwrt-mt798x.git}"
-            SELECTED_BRANCH="${BRANCH_MT798X:-mt798x}"
-            log "✅ ImmortalWrt MT798x源码选择: $SELECTED_BRANCH (hanwckf维护)"
+            SELECTED_BRANCH="${BRANCH_MT798X:-openwrt-21.02}"
+            log "✅ ImmortalWrt MT798x源码选择: 固定使用 $SELECTED_BRANCH 分支 (hanwckf维护)"
             ;;
         *)
             log "❌ 未知的源码仓库类型: $SOURCE_REPO_TYPE"
