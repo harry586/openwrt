@@ -8,6 +8,7 @@
 
 
 
+
 ## 📁 项目结构
 
 ```
@@ -30,6 +31,7 @@
 │   │   ├── sh/
 │   │   │   ├── OverlayBackup.sh
 │   │   │   ├── basic.sh
+│   │   │   ├── cpulimit.sh
 │   │   │   ├── dhcp.sh
 │   │   │   ├── disk.sh
 │   │   │   ├── ext4.sh
@@ -48,9 +50,9 @@
 ├── build-config.conf
 └── support.sh
 
-7 directories, 28 files
+7 directories, 29 files
 ```
 
 注意，自定义文件名是英文的，方便复制、运行
 
-> 最后更新时间: 2026-03-30 09:58:11
+> 最后更新时间: 2026-04-06 09:58:31
