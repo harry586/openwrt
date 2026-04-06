@@ -4727,25 +4727,176 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
+    # ============================================
+    # 智能设备匹配函数
+    # ============================================
+    find_best_matching_device() {
+        local input_device="$1"
+        local mk_file="$2"
+        local results=()
+        
+        # 从mk文件中提取所有设备定义
+        local all_devices=()
+        while IFS= read -r line; do
+            if [[ "$line" =~ define[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
+                all_devices+=("${BASH_REMATCH[1]}")
+            fi
+        done < <(grep -E "define Device/[a-zA-Z0-9_-]+" "$mk_file" 2>/dev/null)
+        
+        # 计算每个设备的匹配权重
+        for device in "${all_devices[@]}"; do
+            local weight=0
+            local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
+            local lower_device=$(echo "$device" | tr '[:upper:]' '[:lower:]')
+            
+            # 完全匹配：权重+100
+            if [ "$lower_input" = "$lower_device" ]; then
+                weight=$((weight + 100))
+            fi
+            
+            # 输入包含设备名：权重+50
+            if [[ "$lower_input" == *"$lower_device"* ]]; then
+                weight=$((weight + 50))
+            fi
+            
+            # 设备名包含输入：权重+40
+            if [[ "$lower_device" == *"$lower_input"* ]]; then
+                weight=$((weight + 40))
+            fi
+            
+            # 去除后缀匹配：cmcc_rax3000m-nand -> rax3000m
+            local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//')
+            local device_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//')
+            if [ "$input_no_suffix" = "$device_no_suffix" ]; then
+                weight=$((weight + 35))
+            fi
+            
+            # 匹配rax3000m相关
+            if [[ "$lower_input" == *"rax3000m"* ]] && [[ "$lower_device" == *"rax3000m"* ]]; then
+                weight=$((weight + 30))
+            fi
+            
+            # 匹配nand/emmc后缀
+            if [[ "$lower_input" == *"nand"* ]] && [[ "$lower_device" == *"nand"* ]]; then
+                weight=$((weight + 20))
+            fi
+            if [[ "$lower_input" == *"emmc"* ]] && [[ "$lower_device" == *"emmc"* ]]; then
+                weight=$((weight + 20))
+            fi
+            
+            # 部分单词匹配
+            local input_parts=($(echo "$lower_input" | tr '_-' ' '))
+            local device_parts=($(echo "$lower_device" | tr '_-' ' '))
+            for ipart in "${input_parts[@]}"; do
+                for dpart in "${device_parts[@]}"; do
+                    if [ "$ipart" = "$dpart" ] && [ ${#ipart} -gt 2 ]; then
+                        weight=$((weight + 10))
+                    fi
+                done
+            done
+            
+            if [ $weight -gt 0 ]; then
+                results+=("$weight:$device")
+            fi
+        done
+        
+        # 按权重排序
+        if [ ${#results[@]} -gt 0 ]; then
+            printf '%s\n' "${results[@]}" | sort -t':' -k1 -rn | head -20
+        fi
+    }
+    
     local device_file=""
     local mk_device_name=""
+    local all_matches=()
+    
+    # 遍历所有mk文件查找匹配
     for mkfile in "${mk_files[@]}"; do
+        # 先尝试精确匹配
         if grep -q "define Device.*$DEVICE" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
             mk_device_name=$(grep -m1 "define Device.*$DEVICE" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
-            log "✅ 找到设备定义: $mk_device_name (在 $device_file)"
+            log "✅ 找到精确设备定义: $mk_device_name (在 $device_file)"
             break
+        fi
+        
+        # 收集所有匹配项
+        local matches=$(find_best_matching_device "$DEVICE" "$mkfile")
+        if [ -n "$matches" ]; then
+            while IFS= read -r match; do
+                all_matches+=("$match:$mkfile")
+            done <<< "$matches"
         fi
     done
     
+    # 如果没有精确匹配，使用权重最高的匹配
+    if [ -z "$device_file" ] && [ ${#all_matches[@]} -gt 0 ]; then
+        echo ""
+        echo "📋 找到以下相关设备定义:"
+        echo "----------------------------------------"
+        
+        # 排序并显示所有匹配
+        local sorted_matches=($(printf '%s\n' "${all_matches[@]}" | sort -t':' -k1 -rn))
+        
+        local display_count=0
+        for match in "${sorted_matches[@]}"; do
+            local weight=$(echo "$match" | cut -d':' -f1)
+            local dev=$(echo "$match" | cut -d':' -f2)
+            local mkf=$(echo "$match" | cut -d':' -f3)
+            
+            if [ $display_count -lt 15 ]; then
+                printf "  权重 %3d: %s (位于 %s)\n" "$weight" "$dev" "$(basename "$mkf")"
+                display_count=$((display_count + 1))
+            fi
+        done
+        echo "----------------------------------------"
+        echo ""
+        
+        # 选择权重最高的
+        local best_match="${sorted_matches[0]}"
+        local best_weight=$(echo "$best_match" | cut -d':' -f1)
+        mk_device_name=$(echo "$best_match" | cut -d':' -f2)
+        device_file=$(echo "$best_match" | cut -d':' -f3)
+        
+        log "🔧 未找到精确匹配，使用权重最高的设备: $mk_device_name (权重: $best_weight)"
+        log "📁 定义文件: $device_file"
+        
+        # 显示其他可能的选择供参考
+        if [ ${#sorted_matches[@]} -gt 1 ]; then
+            echo ""
+            log "💡 其他可能的设备:"
+            local other_count=0
+            for match in "${sorted_matches[@]}"; do
+                if [ $other_count -ge 1 ] && [ $other_count -lt 5 ]; then
+                    local other_weight=$(echo "$match" | cut -d':' -f1)
+                    local other_dev=$(echo "$match" | cut -d':' -f2)
+                    echo "      - $other_dev (权重: $other_weight)"
+                fi
+                other_count=$((other_count + 1))
+            done
+            echo ""
+        fi
+    fi
+    
     if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
         log "❌ 错误：未找到设备 $DEVICE 的定义文件"
-        log "请检查设备名称是否正确，或 target/linux/$TARGET 目录下是否存在对应的 .mk 文件"
+        log ""
+        log "📋 所有可用的设备列表:"
+        echo "----------------------------------------"
+        for mkfile in "${mk_files[@]}"; do
+            if [[ "$mkfile" == *"image/"*".mk" ]]; then
+                echo "📁 $(basename "$mkfile"):"
+                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\//    - /' | sed 's/ .*//'
+            fi
+        done
+        echo "----------------------------------------"
+        log ""
+        log "💡 提示: 输入设备名 '$(echo "$DEVICE" | sed 's/-nand$//;s/-emmc$//')' 可能更合适"
         exit 1
     fi
     
     local device_block=""
-    device_block=$(awk "/define Device.*$DEVICE/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
+    device_block=$(awk "/define Device.*$mk_device_name/,/^[[:space:]]*$|^endef/" "$device_file" 2>/dev/null)
     
     if [ -n "$device_block" ]; then
         echo ""
@@ -4755,7 +4906,7 @@ workflow_step15_generate_config() {
         echo "$device_block" | grep -E "^[[:space:]]*(DEVICE_VENDOR|DEVICE_MODEL|DEVICE_VARIANT|DEVICE_DTS)[[:space:]]*:="
         echo "----------------------------------------"
     else
-        log "⚠️ 警告：无法提取设备 $DEVICE 的配置块"
+        log "⚠️ 警告：无法提取设备 $mk_device_name 的配置块"
     fi
     
     # 使用搜索到的正确设备名
@@ -5281,6 +5432,45 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
+    # ============================================
+    # 预安装 ucode 相关包（修复头文件缺失问题）
+    # ============================================
+    log "🔧 预安装 ucode 相关包（修复 ucode/module.h 缺失）..."
+    
+    ./scripts/feeds install -a ucode 2>/dev/null || true
+    ./scripts/feeds install -a ucode-mod-html 2>/dev/null || true
+    ./scripts/feeds install -a ucode-mod-ucode 2>/dev/null || true
+    ./scripts/feeds install -a ucode-mod-fs 2>/dev/null || true
+    ./scripts/feeds install -a ucode-mod-ubus 2>/dev/null || true
+    ./scripts/feeds install -a ucode-mod-rtnl 2>/dev/null || true
+    ./scripts/feeds install -a ucode-mod-ulog 2>/dev/null || true
+    
+    # 对于 immortalwrt-mt798x 源码，需要特殊处理
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+        log "🔧 immortalwrt-mt798x 源码: 预安装所有 ucode 模块..."
+        
+        # 查找所有 ucode 相关包并安装
+        find feeds -type d -name "ucode*" 2>/dev/null | while read ucode_dir; do
+            local pkg_name=$(basename "$ucode_dir")
+            ./scripts/feeds install -a "$pkg_name" 2>/dev/null || true
+        done
+        
+        # 手动创建缺失的头文件目录
+        mkdir -p staging_dir/target-*/usr/include/ucode 2>/dev/null || true
+        
+        # 查找 ucode 源码目录并复制头文件
+        local ucode_src=$(find build_dir -type d -name "ucode-*" 2>/dev/null | head -1)
+        if [ -n "$ucode_src" ] && [ -d "$ucode_src" ]; then
+            if [ -d "$ucode_src/include" ]; then
+                cp -rf "$ucode_src/include"/* staging_dir/target-*/usr/include/ 2>/dev/null || true
+            fi
+            if [ -f "$ucode_src/ucode.h" ]; then
+                cp "$ucode_src/ucode.h" staging_dir/target-*/usr/include/ 2>/dev/null || true
+            fi
+            log "  ✅ 已复制 ucode 头文件"
+        fi
+    fi
+    
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -5359,7 +5549,7 @@ EOF
         "openwrt"|"lede")
             make_args="V=s FORCE_UNSAFE_CONFIGURE=1"
             ;;
-        "immortalwrt")
+        "immortalwrt"|"immortalwrt-mt798x")
             make_args="V=s"
             ;;
     esac
@@ -5431,6 +5621,36 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
+            # ============================================
+            # 检测 ucode 相关错误并修复
+            # ============================================
+            if grep -q "ucode/module.h" "$log_file" || grep -q "fatal error: ucode/module.h" "$log_file"; then
+                log "  ⚠️ 检测到 ucode 头文件缺失错误，正在修复..."
+                
+                # 先编译 ucode 包
+                make package/feeds/luci/ucode/compile -j1 V=s 2>&1 | tee ucode_compile.log || true
+                make package/feeds/luci/ucode-mod-html/compile -j1 V=s 2>&1 | tee ucode_html_compile.log || true
+                
+                # 手动安装头文件
+                local ucode_install_dir=$(find staging_dir -type d -name "ucode" 2>/dev/null | head -1)
+                if [ -n "$ucode_install_dir" ]; then
+                    mkdir -p staging_dir/target-*/usr/include/ucode
+                    cp -rf "$ucode_install_dir"/* staging_dir/target-*/usr/include/ 2>/dev/null || true
+                fi
+                
+                # 查找 ucode 源码目录
+                local ucode_src=$(find build_dir -type d -name "ucode-*" 2>/dev/null | head -1)
+                if [ -n "$ucode_src" ] && [ -d "$ucode_src" ]; then
+                    if [ -d "$ucode_src/include" ]; then
+                        find staging_dir/target-* -type d -name "include" 2>/dev/null | while read inc_dir; do
+                            cp -rf "$ucode_src/include"/* "$inc_dir/" 2>/dev/null || true
+                        done
+                    fi
+                fi
+                
+                log "  ✅ ucode 头文件修复完成"
+            fi
+            
             # ============================================
             # 检测补丁失败并自动删除问题补丁
             # ============================================
