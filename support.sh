@@ -27,6 +27,7 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 # 格式: DEVICES["设备名称"]="目标平台 子目标 芯片型号"
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic bcm47189"
+DEVICES["asus_rt-ac42u"]="ipq40xx generic bcm47189"
 DEVICES["cmcc_rax3000m"]="mediatek filogic mt7981"
 DEVICES["cmcc_rax3000m-nand"]="mediatek filogic mt7981"
 DEVICES["netgear_wndr3800"]="ath79 generic ar7161"
@@ -176,12 +177,32 @@ validate_device() {
 get_device_platform() {
     local device_name="$1"
     
-    if [ -z "${DEVICES[$device_name]}" ]; then
-        echo ""
-        return 1
+    # 直接查找设备
+    if [ -n "${DEVICES[$device_name]}" ]; then
+        echo "${DEVICES[$device_name]}"
+        return 0
     fi
     
-    echo "${DEVICES[$device_name]}"
+    # 设备名映射（仅针对 MT798x 相关设备）
+    local mapped_name="$device_name"
+    case "$device_name" in
+        cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
+            mapped_name="cmcc_rax3000m"
+            log "🔧 设备名映射: $device_name -> $mapped_name"
+            ;;
+        ac42u|rt-ac42u)
+            mapped_name="asus_rt-ac42u"
+            log "🔧 设备名映射: $device_name -> $mapped_name"
+            ;;
+    esac
+    
+    if [ -n "${DEVICES[$mapped_name]}" ]; then
+        echo "${DEVICES[$mapped_name]}"
+        return 0
+    fi
+    
+    echo ""
+    return 1
 }
 #【support.sh-08-end】
 
@@ -659,6 +680,10 @@ full_config_process() {
         cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
             converted_device="cmcc_rax3000m"
             log "🔧 设备名转换: $device_name -> $converted_device (使用 DTS overlay)"
+            ;;
+        ac42u)
+            converted_device="asus_rt-ac42u"
+            log "🔧 设备名转换: $device_name -> $converted_device"
             ;;
     esac
     
