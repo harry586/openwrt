@@ -303,45 +303,71 @@ initialize_build_env() {
     log "=== 版本选择 ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    case "$SOURCE_REPO_TYPE" in
-        "lede")
-            SELECTED_REPO_URL="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
-            SELECTED_BRANCH="master"
-            log "✅ LEDE源码选择: 固定使用master分支"
-            ;;
-        "openwrt")
-            SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
-            case "$version_selection" in
-                "24.10") SELECTED_BRANCH="openwrt-24.10" ;;
-                "23.05") SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}" ;;
-                "22.03") SELECTED_BRANCH="openwrt-22.03" ;;
-                "21.02") SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}" ;;
-                "19.07") SELECTED_BRANCH="openwrt-19.07" ;;
-                "main"|"master") SELECTED_BRANCH="main" ;;
-                *) SELECTED_BRANCH="openwrt-23.05" ;;
-            esac
-            log "✅ OpenWrt官方源码选择: $SELECTED_BRANCH"
-            ;;
-        "immortalwrt")
-            SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
-            case "$version_selection" in
-                "24.10") SELECTED_BRANCH="openwrt-24.10" ;;
-                "23.05") SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}" ;;
-                "21.02") SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}" ;;
-                "18.06") SELECTED_BRANCH="openwrt-18.06" ;;
-                "master") SELECTED_BRANCH="master" ;;
-                *) SELECTED_BRANCH="openwrt-23.05" ;;
-            esac
-            log "✅ ImmortalWrt源码选择: $SELECTED_BRANCH"
-            ;;
-        *)
-            log "❌ 未知的源码仓库类型: $SOURCE_REPO_TYPE"
-            exit 1
-            ;;
-    esac
+    # ============================================
+    # 智能选择仓库：针对 rax3000m 设备在 21.02 版本时使用 hanwckf 仓库
+    # ============================================
+    local final_repo_url=""
+    local final_branch=""
     
-    log "仓库: $SELECTED_REPO_URL"
-    log "分支: $SELECTED_BRANCH"
+    # 判断是否需要使用 hanwckf 仓库
+    local use_hanwckf_repo=false
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ] && [ "$version_selection" = "21.02" ]; then
+        case "$device_name" in
+            "cmcc_rax3000m"|"cmcc_rax3000m-nand"|"rax3000m"|"rax3000m-nand")
+                use_hanwckf_repo=true
+                log "✅ 检测到 rax3000m 设备 + 21.02 版本，将使用 hanwckf 维护的 immortalwrt-mt798x 仓库"
+                ;;
+        esac
+    fi
+    
+    if [ "$use_hanwckf_repo" = true ]; then
+        final_repo_url="${HANWCKF_IMMORTALWRT_URL:-https://github.com/hanwckf/immortalwrt-mt798x.git}"
+        final_branch="openwrt-21.02"
+        log "✅ 使用 hanwckf 仓库: $final_repo_url"
+        log "✅ 分支: $final_branch"
+    else
+        case "$SOURCE_REPO_TYPE" in
+            "lede")
+                final_repo_url="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
+                final_branch="master"
+                log "✅ LEDE源码选择: 固定使用master分支"
+                ;;
+            "openwrt")
+                final_repo_url="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
+                case "$version_selection" in
+                    "24.10") final_branch="openwrt-24.10" ;;
+                    "23.05") final_branch="${BRANCH_23_05:-openwrt-23.05}" ;;
+                    "22.03") final_branch="openwrt-22.03" ;;
+                    "21.02") final_branch="${BRANCH_21_02:-openwrt-21.02}" ;;
+                    "19.07") final_branch="openwrt-19.07" ;;
+                    "main"|"master") final_branch="main" ;;
+                    *) final_branch="openwrt-23.05" ;;
+                esac
+                log "✅ OpenWrt官方源码选择: $final_branch"
+                ;;
+            "immortalwrt")
+                final_repo_url="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
+                case "$version_selection" in
+                    "24.10") final_branch="openwrt-24.10" ;;
+                    "23.05") final_branch="${BRANCH_23_05:-openwrt-23.05}" ;;
+                    "21.02") final_branch="${BRANCH_21_02:-openwrt-21.02}" ;;
+                    "18.06") final_branch="openwrt-18.06" ;;
+                    "master") final_branch="master" ;;
+                    *) final_branch="openwrt-23.05" ;;
+                esac
+                log "✅ ImmortalWrt源码选择: $final_branch"
+                ;;
+            *)
+                log "❌ 未知的源码仓库类型: $SOURCE_REPO_TYPE"
+                exit 1
+                ;;
+        esac
+        log "仓库: $final_repo_url"
+        log "分支: $final_branch"
+    fi
+    
+    SELECTED_REPO_URL="$final_repo_url"
+    SELECTED_BRANCH="$final_branch"
 
     sudo rm -rf ./* ./.git* 2>/dev/null || true
 
@@ -973,6 +999,7 @@ generate_config() {
     log "设备: $DEVICE"
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     if [ -z "$DEVICE" ]; then
         log "❌ 错误: DEVICE变量为空！"
@@ -983,37 +1010,55 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    local openwrt_device=""
-    local search_device=""
+    # ============================================
+    # 根据源码类型映射设备名（仅当需要时）
+    # ============================================
+    local mapped_device="$DEVICE"
     
-    case "$DEVICE" in
-        ac42u|rt-ac42u|asus_rt-ac42u)
-            openwrt_device="asus_rt-ac42u"
-            search_device="ac42u"
-            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
-            ;;
-        acrh17|rt-acrh17|asus_rt-acrh17)
-            openwrt_device="asus_rt-acrh17"
-            search_device="acrh17"
-            log "🔧 设备映射: 输入=$DEVICE, 配置用=$openwrt_device, 搜索用=$search_device"
-            ;;
-        *)
-            openwrt_device=$(echo "$DEVICE" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
-            search_device="$DEVICE"
-            log "🔧 使用原始设备名: $openwrt_device"
-            ;;
-    esac
+    # OpenWrt 官方源码的特殊设备名映射
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        case "$DEVICE" in
+            "cmcc_rax3000m-nand"|"rax3000m-nand")
+                mapped_device="cmcc_rax3000m"
+                log "🔧 OpenWrt源码: 设备名映射 $DEVICE -> $mapped_device"
+                ;;
+            "cmcc_rax3000m-emmc"|"rax3000m-emmc")
+                mapped_device="cmcc_rax3000m"
+                log "🔧 OpenWrt源码: 设备名映射 $DEVICE -> $mapped_device"
+                ;;
+        esac
+    fi
     
-    local device_lower="$openwrt_device"
-    local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}"
+    # ImmortalWrt 和 LEDE 保持原设备名不变
+    log "🔧 使用设备名: $mapped_device (源码类型: $SOURCE_REPO_TYPE)"
+    
+    local device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${mapped_device}"
     
     log "🔧 设备配置变量: $device_config=y"
     
-    cat > .config << EOF
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE源码特殊处理：先设置目标平台"
+        cat > .config << EOF
+CONFIG_TARGET_${TARGET}=y
+CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+EOF
+        log "🔄 运行 make defconfig 生成基础配置..."
+        make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || {
+            log "❌ LEDE基础配置失败"
+            handle_error "LEDE基础配置失败"
+        }
+        
+        log "🔧 添加设备配置: ${device_config}=y"
+        echo "${device_config}=y" >> .config
+        
+        make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || true
+    else
+        cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
 ${device_config}=y
 EOF
+    fi
     
     log "🔧 基础配置文件内容:"
     cat .config
@@ -1031,37 +1076,44 @@ EOF
     : ${CONFIG_USB_GENERIC:="usb-generic.config"}
     : ${CONFIG_NORMAL:="normal.config"}
     
-    append_config "$CONFIG_DIR/$CONFIG_BASE"
-    
     local device_config_file="$CONFIG_DIR/devices/$DEVICE.config"
     local usb_generic_file="$CONFIG_DIR/$CONFIG_USB_GENERIC"
-    local has_device_config=false
+    local base_config_file="$CONFIG_DIR/$CONFIG_BASE"
     
-    if [ -f "$device_config_file" ]; then
-        has_device_config=true
-        log "📋 找到设备专用配置文件: $device_config_file"
-        log "📋 根据规则: 设备.config + usb-generic.config"
+    if [ "$CONFIG_MODE" = "base" ]; then
+        log "📋 base模式: 只使用 base.config + usb-generic.config"
         
-        append_config "$device_config_file"
-        
-        if [ -f "$usb_generic_file" ]; then
-            log "📋 添加USB通用配置作为补充: $usb_generic_file"
-            append_config "$usb_generic_file"
+        if [ -f "$base_config_file" ]; then
+            append_config "$base_config_file"
+            log "  ✅ 已添加 base.config"
+        else
+            log "  ⚠️ 未找到 base.config"
         fi
         
-        log "📋 有设备专用配置，跳过 normal.config 和 $TARGET.config 等通用配置"
+        if [ -f "$usb_generic_file" ]; then
+            append_config "$usb_generic_file"
+            log "  ✅ 已添加 usb-generic.config"
+        else
+            log "  ⚠️ 未找到 usb-generic.config"
+        fi
     else
-        log "📋 未找到设备专用配置文件，使用通用配置组合"
-        
-        if [ -f "$usb_generic_file" ]; then
-            append_config "$usb_generic_file"
-        fi
-        
-        append_config "$CONFIG_DIR/$TARGET.config"
-        append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-        
-        if [ "$CONFIG_MODE" = "normal" ]; then
-            log "📋 normal模式: 添加 $CONFIG_NORMAL"
+        log "📋 normal模式: 使用完整配置组合"
+        if [ -f "$device_config_file" ]; then
+            log "📋 找到设备专用配置文件: $device_config_file"
+            append_config "$device_config_file"
+        else
+            log "📋 未找到设备专用配置文件，使用通用配置组合"
+            
+            if [ -f "$base_config_file" ]; then
+                append_config "$base_config_file"
+            fi
+            
+            if [ -f "$usb_generic_file" ]; then
+                append_config "$usb_generic_file"
+            fi
+            
+            append_config "$CONFIG_DIR/$TARGET.config"
+            append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
             append_config "$CONFIG_DIR/$CONFIG_NORMAL"
         fi
     fi
@@ -1083,11 +1135,13 @@ EOF
         log "✅ TCP BBR已启用"
     fi
     
-    if [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-        log "✅ TurboACC已启用（全局启用）"
+    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
+        log "✅ TurboACC已启用"
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+    elif [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
@@ -1101,6 +1155,51 @@ EOF
         log "✅ ath10k-ct驱动已强制启用"
     fi
     
+    log "🔧 强制配置生成固件..."
+    
+    if grep -q "CONFIG_TARGET_IMAGES_FIT=y" .config; then
+        sed -i 's/^CONFIG_TARGET_IMAGES_FIT=y/# CONFIG_TARGET_IMAGES_FIT is not set/' .config
+        log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT"
+    fi
+    
+    if ! grep -q "CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config; then
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        log "  ✅ 强制启用 squashfs 格式"
+    fi
+    
+    cat >> .config << 'EOF'
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_IMAGES_PAD=y
+CONFIG_TARGET_IMAGES_GZIP=y
+EOF
+    
+    case "$TARGET" in
+        ipq40xx|ipq806x|qcom)
+            cat >> .config << 'EOF'
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
+CONFIG_TARGET_UBIFS=y
+EOF
+            log "  ✅ 高通平台配置"
+            ;;
+        mediatek|ramips)
+            cat >> .config << 'EOF'
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
+CONFIG_TARGET_MTD_SPI_NAND=y
+EOF
+            log "  ✅ 联发科平台配置"
+            ;;
+        ath79)
+            cat >> .config << 'EOF'
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
+EOF
+            log "  ✅ ATH79平台配置"
+            ;;
+    esac
+    
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
@@ -1112,12 +1211,13 @@ EOF
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
         if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
             local device_def_file=""
-            while IFS= read -r mkfile; do
-                if grep -q "define Device.*$search_device" "$mkfile" 2>/dev/null; then
+            local mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+            for mkfile in $mk_files; do
+                if grep -q "define Device.*$mapped_device" "$mkfile" 2>/dev/null; then
                     device_def_file="$mkfile"
                     break
                 fi
-            done < <(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+            done
             
             if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
                 kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
@@ -1193,13 +1293,30 @@ EOF
         fi
     fi
     
-    log "🔄 第一次运行 make defconfig..."
-    make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
-        log "❌ 第一次 make defconfig 失败"
-        tail -50 /tmp/build-logs/defconfig1.log
-        handle_error "第一次依赖解决失败"
-    }
-    log "✅ 第一次 make defconfig 成功"
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔄 LEDE使用 olddefconfig 更新配置..."
+        make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "⚠️ 第一次 olddefconfig 有警告，但继续"
+        }
+    else
+        log "🔄 第一次运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "❌ 第一次 make defconfig 失败"
+            tail -50 /tmp/build-logs/defconfig1.log
+            handle_error "第一次依赖解决失败"
+        }
+    fi
+    log "✅ 第一次配置更新成功"
+    
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+            log "⚠️ olddefconfig 有警告，但继续"
+        }
+    else
+        make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续"
+        }
+    fi
     
     log "🔍 动态检测实际生效的USB内核配置..."
     
@@ -1311,11 +1428,18 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    log "🔄 第二次运行 make defconfig..."
-    make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-        log "⚠️ 第二次 make defconfig 有警告，但继续..."
-    }
-    log "✅ 第二次 make defconfig 完成"
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔄 LEDE第二次使用 olddefconfig..."
+        make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+            log "⚠️ 第二次 olddefconfig 有警告，但继续..."
+        }
+    else
+        log "🔄 第二次运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+            log "⚠️ 第二次 make defconfig 有警告，但继续..."
+        }
+    fi
+    log "✅ 第二次配置更新完成"
     
     log "🔍 验证关键USB驱动状态..."
     
@@ -1362,32 +1486,69 @@ EOF
             echo "CONFIG_PACKAGE_${driver}=y" >> .config
             log "  ✅ 已添加: $driver"
         done
-        make defconfig > /dev/null 2>&1
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
     fi
     
-    log "🔍 正在验证设备 $openwrt_device 是否被选中..."
+    log "🔍 正在验证设备 $mapped_device 是否被选中..."
     
-    if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
-        log "✅ 目标设备已正确启用: CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y"
-    elif grep -q "^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set" .config; then
+    if grep -q "^${device_config}=y" .config; then
+        log "✅ 目标设备已正确启用: ${device_config}=y"
+    elif grep -q "^# ${device_config} is not set" .config; then
         log "⚠️ 警告: 设备被禁用，尝试强制启用..."
-        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower} is not set/d" .config
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        sed -i "/^# ${device_config} is not set/d" .config
+        echo "${device_config}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
-        make defconfig > /dev/null 2>&1
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
         
-        if grep -q "^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" .config; then
+        if grep -q "^${device_config}=y" .config; then
             log "✅ 设备已强制启用"
         else
             log "❌ 无法启用设备"
         fi
     else
         log "⚠️ 警告: 设备配置行未找到，手动添加..."
-        echo "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_lower}=y" >> .config
+        echo "${device_config}=y" >> .config
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
-        make defconfig > /dev/null 2>&1
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
+        
+        if grep -q "^${device_config}=y" .config; then
+            log "✅ 设备已手动添加成功"
+        else
+            log "❌ 设备手动添加失败"
+        fi
+    fi
+    
+    sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
+    echo "${device_config}=y" >> .config
+    
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_force_device.log 2>&1 || true
+    else
+        make defconfig > /tmp/build-logs/defconfig_force_device.log 2>&1 || true
+    fi
+    
+    if grep -q "^${device_config}=y" .config; then
+        log "✅ 设备配置已强制设置成功: ${device_config}=y"
+    else
+        log "❌ 设备配置设置失败"
+        exit 1
     fi
     
     local total_configs=$(wc -l < .config)
@@ -1401,9 +1562,6 @@ EOF
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
     
-    # ============================================
-    # 全面禁用不需要的插件（多轮禁用）
-    # ============================================
     log "🔧 ===== 全面禁用不需要的插件 ===== "
     
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
@@ -1420,31 +1578,44 @@ EOF
         search_keywords+=("${pkg}-scripts")
     done
     
-    # 第一轮：彻底删除源文件
     log "🔧 第一轮：彻底删除源文件..."
     for keyword in "${search_keywords[@]}"; do
         if [ -d "package/feeds" ]; then
             find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 package/feeds 源目录: $dir"
+                log "  🗑️ 删除 package/feeds: $dir"
                 rm -rf "$dir"
             done
         fi
         if [ -d "feeds" ]; then
             find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️  删除 feeds 源目录: $dir"
+                log "  🗑️ 删除 feeds: $dir"
                 rm -rf "$dir"
             done
         fi
     done
     
-    # 第二轮：在 .config 中禁用所有相关包
+    log "🔧 特别处理 vsftpd 冲突问题..."
+    find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        log "  🗑️ 删除 vsftpd-alt 目录: $dir"
+        rm -rf "$dir"
+    done
+    find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        log "  🗑️ 删除 feeds vsftpd-alt 目录: $dir"
+        rm -rf "$dir"
+    done
+    find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
+        log "  🗑️ 删除 package vsftpd-alt 目录: $dir"
+        rm -rf "$dir"
+    done
+    
     log "📋 第二轮：在 .config 中禁用所有相关包..."
     
     local disable_temp=$(mktemp)
-    
     for plugin in "${full_forbidden_list[@]}"; do
         echo "$plugin" >> "$disable_temp"
     done
+    
+    echo "vsftpd-alt" >> "$disable_temp"
     
     sort -u "$disable_temp" > "$disable_temp.sorted"
     
@@ -1458,7 +1629,6 @@ EOF
     
     rm -f "$disable_temp" "$disable_temp.sorted"
     
-    # 第三轮：删除所有包含关键字的配置行
     log "🔧 第三轮：删除所有包含关键字的配置行..."
     for keyword in "${search_keywords[@]}"; do
         sed -i "/${keyword}/d" .config
@@ -1466,24 +1636,35 @@ EOF
         sed -i "/${upper_keyword}/d" .config
     done
     
-    # 特别处理 DDNS（无论是否在禁用列表中）
+    sed -i "/vsftpd-alt/d" .config
+    sed -i "/VSFTPD-ALT/d" .config
+    
     log "🔧 特别处理 DDNS 相关配置..."
     sed -i '/ddns/d' .config
     sed -i '/DDNS/d' .config
     
+    log "🔧 确保 vsftpd 被启用..."
+    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        log "  ✅ 已启用 vsftpd"
+    fi
+    
     log "✅ 禁用完成"
     
-    # 去重
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # 运行 make defconfig 使禁用生效
     log "🔄 运行 make defconfig 使禁用生效..."
-    make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-        log "⚠️ make defconfig 有警告，但继续..."
-    }
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+            log "⚠️ olddefconfig 有警告，但继续..."
+        }
+    else
+        make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续..."
+        }
+    fi
     
-    # 第四轮：检查残留并再次禁用
     log "🔍 第四轮：检查插件残留..."
     
     local remaining=()
@@ -1492,6 +1673,8 @@ EOF
     for plugin in "${full_forbidden_list[@]}"; do
         echo "$plugin" >> "$check_temp"
     done
+    
+    echo "vsftpd-alt" >> "$check_temp"
     
     sort -u "$check_temp" > "$check_temp.sorted"
     
@@ -1517,10 +1700,13 @@ EOF
         
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
-        make defconfig > /dev/null 2>&1
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1
+        else
+            make defconfig > /dev/null 2>&1
+        fi
     fi
     
-    # 最终验证
     log "📊 最终插件状态验证:"
     local still_enabled=0
     
@@ -1535,6 +1721,20 @@ EOF
             log "  ✅ $plugin 已禁用"
         fi
     done
+    
+    if grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd-alt=m" .config; then
+        log "  ❌ vsftpd-alt 仍被启用"
+        still_enabled=$((still_enabled + 1))
+    else
+        log "  ✅ vsftpd-alt 已禁用"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_vsftpd=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
+        log "  ✅ vsftpd 已启用"
+    else
+        log "  ⚠️ vsftpd 未启用，尝试启用"
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+    fi
     
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
@@ -5351,26 +5551,224 @@ EOF
     fi
     
     # ============================================
-    # 预删除已知有问题的补丁
+    # 增强版补丁清理函数 - 动态查找并删除问题补丁
     # ============================================
-    log "🔧 预删除已知有问题的 ipq40xx 补丁..."
-    
-    local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
-    if [ -d "$problem_patches_dir" ]; then
-        local problem_patches=(
+    delete_problem_patches_dynamic() {
+        local log_file="$1"
+        local deleted_patches=()
+        
+        if [ ! -f "$log_file" ]; then
+            return 1
+        fi
+        
+        log "  🔍 动态扫描日志中的补丁失败信息..."
+        
+        local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" 2>/dev/null | \
+            sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | \
+            sed -E 's/.*patch[[:space:]]+([0-9]+-.*\.patch).*/\1/' | \
+            sort -u)
+        
+        if [ -z "$failed_patches" ]; then
+            local applying_patch=$(grep -n "Applying.*\.patch" "$log_file" 2>/dev/null | tail -5)
+            local failed_line=$(grep -n "FAILED" "$log_file" 2>/dev/null | head -1 | cut -d':' -f1)
+            
+            if [ -n "$failed_line" ] && [ -n "$applying_patch" ]; then
+                failed_patches=$(echo "$applying_patch" | awk -v fl="$failed_line" '{
+                    line_num = $1
+                    line_num = line_num + 0
+                    if (line_num < fl) {
+                        match($0, /([0-9]+-.*\.patch)/)
+                        if (RSTART) print substr($0, RSTART, RLENGTH)
+                    }
+                }' | sort -u)
+            fi
+        fi
+        
+        if [ -z "$failed_patches" ]; then
+            local error_context=$(grep -B 10 -A 5 "error:.*defined but not used" "$log_file" 2>/dev/null | head -30)
+            if [ -n "$error_context" ]; then
+                failed_patches=$(echo "$error_context" | grep -E "Applying.*\.patch" | \
+                    sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+            fi
+        fi
+        
+        local problem_patch_patterns=(
             "401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+            "mmc-sdhci-msm"
+            "sdhci-msm"
         )
         
-        for patch in "${problem_patches[@]}"; do
-            if [ -f "$problem_patches_dir/$patch" ]; then
-                log "  🗑️ 预删除补丁: $patch"
-                rm -f "$problem_patches_dir/$patch"
+        for pattern in "${problem_patch_patterns[@]}"; do
+            local found=$(grep -l "$pattern" "$log_file" 2>/dev/null | head -1)
+            if [ -n "$found" ]; then
+                failed_patches="$failed_patches"$'\n'"$pattern"
             fi
         done
-    fi
+        
+        failed_patches=$(echo "$failed_patches" | grep -v "^$" | sort -u)
+        
+        if [ -z "$failed_patches" ]; then
+            return 1
+        fi
+        
+        log "    📋 检测到问题补丁模式:"
+        echo "$failed_patches" | while read patch_name; do
+            [ -z "$patch_name" ] && continue
+            log "      - $patch_name"
+        done
+        
+        for patch_name in $failed_patches; do
+            local found=0
+            for patch_dir in target/linux/*/patches-*; do
+                if [ -f "$patch_dir/$patch_name" ]; then
+                    log "    🗑️ 删除失败补丁: $patch_dir/$patch_name"
+                    rm -f "$patch_dir/$patch_name"
+                    deleted_patches+=("$patch_dir/$patch_name")
+                    found=1
+                fi
+            done
+            
+            if [ $found -eq 0 ]; then
+                find target/linux -name "*${patch_name}*" -type f 2>/dev/null | while read patch_file; do
+                    log "    🗑️ 删除失败补丁: $patch_file"
+                    rm -f "$patch_file"
+                    deleted_patches+=("$patch_file")
+                    found=1
+                done
+            fi
+            
+            if [ $found -eq 0 ]; then
+                local keyword=$(echo "$patch_name" | sed 's/\.patch$//' | cut -d'-' -f2-)
+                if [ -n "$keyword" ] && [ ${#keyword} -gt 5 ]; then
+                    find target/linux -name "*${keyword}*" -type f 2>/dev/null | while read patch_file; do
+                        log "    🗑️ 删除相关补丁: $patch_file"
+                        rm -f "$patch_file"
+                        deleted_patches+=("$patch_file")
+                    done
+                fi
+            fi
+        done
+        
+        if [ ${#deleted_patches[@]} -gt 0 ]; then
+            log "    ✅ 已删除 ${#deleted_patches[@]} 个问题补丁"
+            rm -rf build_dir/target-*/linux-* 2>/dev/null || true
+            rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+            rm -f staging_dir/target-*/stamp/.kernel_* 2>/dev/null || true
+            return 0
+        fi
+        
+        return 1
+    }
     
     # ============================================
-    # 编译循环 - 自动检测并修复补丁失败
+    # 增强版 package/install 错误修复函数
+    # ============================================
+    fix_package_install_error() {
+        local log_file="$1"
+        
+        if [ ! -f "$log_file" ]; then
+            return 1
+        fi
+        
+        log "  🔧 修复 package/install 错误 (Error 255)..."
+        
+        # 清理 package 安装标记
+        rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
+        rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
+        rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
+        rm -f staging_dir/target-*/stamp/.prepared_* 2>/dev/null
+        
+        # 清理临时信息文件
+        rm -f tmp/info/.packageinfo-* 2>/dev/null
+        rm -f tmp/.packageinfo 2>/dev/null
+        
+        # 清理 ipkg 构建目录
+        find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
+            log "    清理 ipkg 目录: $ipkg_dir"
+            rm -rf "$ipkg_dir"
+        done
+        
+        # 清理特定软件包的构建标记
+        local problem_packages=$(grep -E "Configuring.*failed|ERROR:.*failed to build" "$log_file" 2>/dev/null | \
+            sed -E 's/.*Configuring ([a-zA-Z0-9_-]+).*/\1/' | \
+            sed -E 's/.*ERROR: package\/([a-zA-Z0-9_-]+)\/build.*/\1/' | \
+            sort -u | head -10)
+        
+        if [ -n "$problem_packages" ]; then
+            log "    📋 检测到问题软件包:"
+            for pkg in $problem_packages; do
+                log "      - $pkg"
+                # 清理问题包的构建目录
+                find build_dir -type d -name "*${pkg}*" 2>/dev/null | while read pkg_dir; do
+                    rm -f "$pkg_dir/.built" 2>/dev/null
+                    rm -f "$pkg_dir/.configured" 2>/dev/null
+                done
+            done
+        fi
+        
+        # 重新安装 feeds
+        log "    🔄 重新安装 feeds..."
+        ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+        
+        # 运行 make defconfig 重新生成配置
+        log "    🔄 运行 make defconfig..."
+        make defconfig > /tmp/defconfig_after_package_error.log 2>&1 || true
+        
+        # 清理特定的 stamp 文件
+        find staging_dir -name "*.stamp" -type f 2>/dev/null | while read stamp; do
+            if [[ "$stamp" == *"package"* ]] || [[ "$stamp" == *"install"* ]]; then
+                rm -f "$stamp"
+            fi
+        done
+        
+        log "  ✅ package/install 错误修复完成"
+        return 0
+    }
+    
+    # ============================================
+    # 增强版 samba4 错误修复函数
+    # ============================================
+    fix_samba4_error() {
+        local log_file="$1"
+        
+        if [ ! -f "$log_file" ]; then
+            return 1
+        fi
+        
+        if ! grep -q "samba4.*Error\|samba.*configure.*error" "$log_file" 2>/dev/null; then
+            return 1
+        fi
+        
+        log "  🔧 修复 samba4 编译错误..."
+        
+        rm -f staging_dir/target-*/stamp/.samba4* 2>/dev/null
+        rm -f build_dir/target-*/samba-*/.built 2>/dev/null
+        
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            sudo apt-get install -y python3-distutils python3-dev libpython3-dev 2>/dev/null || true
+            
+            find build_dir -name "samba-*" -type d 2>/dev/null | while read samba_dir; do
+                rm -f "$samba_dir/.configured" 2>/dev/null
+                log "    清理 samba 配置缓存: $samba_dir"
+            done
+        fi
+        
+        # 在配置中禁用 samba4 如果它导致问题
+        if [ -f ".config" ]; then
+            if grep -q "CONFIG_PACKAGE_samba4-server=y" .config 2>/dev/null; then
+                sed -i '/CONFIG_PACKAGE_samba4-server=y/d' .config
+                echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
+                log "    ⚠️ 已在配置中禁用 samba4-server"
+            fi
+            make defconfig > /dev/null 2>&1
+        fi
+        
+        log "  ✅ samba4 错误修复完成"
+        return 0
+    }
+    
+    # ============================================
+    # 编译循环 - 自动检测并修复各种错误
     # ============================================
     local max_attempts=3
     local attempt=1
@@ -5401,164 +5799,96 @@ EOF
         fi
         
         local log_file="build_phase1_attempt${attempt}.log"
+        local fixed=0
         
         if [ -f "$log_file" ]; then
-            # ============================================
-            # 检测补丁失败并自动删除问题补丁
-            # ============================================
-            if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
-                log "  ⚠️ 检测到补丁失败，正在自动修复..."
-                
-                # 提取失败的补丁名
-                local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-                
-                if [ -z "$failed_patches" ]; then
-                    failed_patches=$(grep -E "Applying.*\.patch" "$log_file" | grep -A1 "FAILED" | grep "Applying" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-                fi
-                
-                for patch_name in $failed_patches; do
-                    # 在多个可能的目录中查找补丁
-                    local found=0
-                    for patch_dir in target/linux/*/patches-*; do
-                        if [ -f "$patch_dir/$patch_name" ]; then
-                            log "    🗑️ 删除失败补丁: $patch_dir/$patch_name"
-                            rm -f "$patch_dir/$patch_name"
-                            found=1
-                        fi
-                    done
-                    
-                    if [ $found -eq 0 ]; then
-                        # 模糊搜索
-                        find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
-                            log "    🗑️ 删除失败补丁: $patch_file"
-                            rm -f "$patch_file"
-                        done
-                    fi
-                done
-                
-                # 特别处理 ipq40xx 的 mmc 补丁
-                local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                if [ -f "$ipq40xx_patch" ]; then
-                    log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
-                    rm -f "$ipq40xx_patch"
-                fi
-                
-                # 清理内核构建目录
-                log "    🔄 清理内核构建目录..."
-                rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
-                rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-                
+            # 1. 检测并修复补丁失败
+            if delete_problem_patches_dynamic "$log_file"; then
+                fixed=1
                 log "  ✅ 补丁修复完成，将重试编译"
             fi
             
-            # ============================================
-            # 检测 package/install 错误
-            # ============================================
-            if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
-                log "  ⚠️ 检测到 package/install 错误，尝试修复..."
-                
-                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
-                rm -f tmp/info/.packageinfo-* 2>/dev/null
-                
-                find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
-                    log "    清理 ipkg 目录: $ipkg_dir"
-                    rm -rf "$ipkg_dir"
+            # 2. 检测并修复 package/install 错误 (Error 255)
+            if grep -q "package/install.*Error 255\|Error 255" "$log_file" 2>/dev/null; then
+                fix_package_install_error "$log_file"
+                fixed=1
+                log "  ✅ package/install 错误修复完成，将重试编译"
+            fi
+            
+            # 3. 检测并修复 samba4 错误
+            if fix_samba4_error "$log_file"; then
+                fixed=1
+            fi
+            
+            # 4. 检测 sdhci-msm 特定错误
+            if grep -q "sdhci-msm.*error:.*defined but not used" "$log_file" 2>/dev/null; then
+                log "  ⚠️ 检测到 sdhci-msm 补丁问题，尝试特定修复..."
+                find target/linux -name "*sdhci-msm*" -type f 2>/dev/null | while read patch_file; do
+                    log "    🗑️ 删除补丁: $patch_file"
+                    rm -f "$patch_file"
                 done
-                
-                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
-                
-                log "  ✅ package/install 错误修复完成"
+                rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
+                rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+                fixed=1
+                log "  ✅ sdhci-msm 补丁已删除"
             fi
             
-            # ============================================
-            # 检测 samba4 错误
-            # ============================================
-            if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
-                log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
-                
-                rm -f staging_dir/target-*/stamp/.samba4* 2>/dev/null
-                rm -f build_dir/target-*/samba-*/.built 2>/dev/null
-                
-                if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                    sudo apt-get install -y python3-distutils python3-dev libpython3-dev 2>/dev/null || true
-                    
-                    find build_dir -name "samba-*" -type d 2>/dev/null | while read samba_dir; do
-                        rm -f "$samba_dir/.configured" 2>/dev/null
-                        log "    清理 samba 配置缓存: $samba_dir"
-                    done
-                fi
-                
-                log "  ✅ samba4 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 ath10k 错误
-            # ============================================
-            if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file"; then
+            # 5. 检测 ath10k 错误
+            if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file" 2>/dev/null; then
                 log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
-                
                 find build_dir -type d -name "ath10k-ct*" 2>/dev/null | while read ath10k_dir; do
                     log "    清理 ath10k 目录: $ath10k_dir"
                     rm -rf "$ath10k_dir"
                 done
-                
                 if [ -f ".config" ]; then
                     sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
                     echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
-                    log "    已在配置中禁用 kmod-ath10k-ct"
                 fi
-                
+                fixed=1
                 log "  ✅ ath10k-ct 错误修复完成"
             fi
             
-            # ============================================
-            # 检测 shortcut-fe 错误
-            # ============================================
-            if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file"; then
+            # 6. 检测 shortcut-fe 错误
+            if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file" 2>/dev/null; then
                 log "  ⚠️ 检测到 shortcut-fe 驱动编译错误，尝试修复..."
-                
                 find build_dir -type d -name "shortcut-fe*" 2>/dev/null | while read sfe_dir; do
                     log "    清理 shortcut-fe 目录: $sfe_dir"
                     rm -rf "$sfe_dir"
                 done
-                
                 if [ -f ".config" ]; then
                     sed -i '/CONFIG_PACKAGE_kmod-shortcut-fe=y/d' .config
                     echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-                    log "    已在配置中禁用 kmod-shortcut-fe"
                 fi
-                
+                fixed=1
                 log "  ✅ shortcut-fe 错误修复完成"
             fi
             
-            # ============================================
-            # 检测 LEDE kmod 依赖问题
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
-                    log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
-                    make defconfig > /tmp/lede_defconfig_fix.log 2>&1 || true
-                    log "  ✅ kmod 依赖修复完成"
-                fi
-            fi
-            
-            # ============================================
-            # 检测 Broken pipe 错误
-            # ============================================
-            if grep -q "Broken pipe" "$log_file"; then
+            # 7. 检测 Broken pipe 错误
+            if grep -q "Broken pipe" "$log_file" 2>/dev/null; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
+                fixed=1
             fi
             
-            # ============================================
-            # 检测 libssl 缺失
-            # ============================================
-            if grep -q "libssl was not found" "$log_file"; then
+            # 8. 检测 libssl 缺失
+            if grep -q "libssl was not found" "$log_file" 2>/dev/null; then
                 log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
                 sudo apt-get update > /dev/null 2>&1 || true
                 sudo apt-get install -y libssl-dev > /dev/null 2>&1 || true
+                fixed=1
+            fi
+            
+            # 9. 检测 LEDE kmod 依赖问题
+            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file" 2>/dev/null; then
+                    log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
+                    make defconfig > /tmp/lede_defconfig_fix.log 2>&1 || true
+                    fixed=1
+                fi
+            fi
+            
+            if [ $fixed -eq 0 ]; then
+                log "  ⚠️ 未能自动修复错误，继续重试..."
             fi
         fi
         
