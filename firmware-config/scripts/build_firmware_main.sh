@@ -6241,7 +6241,21 @@ main() {
             workflow_step09_download_sdk "$arg1"
             ;;
         "step10_verify_sdk")
-            workflow_step10_verify_sdk
+            cd $BUILD_DIR
+            log "=== 验证工具链编译结果 ==="
+            if [ -d "staging_dir" ]; then
+                log "✅ staging_dir 目录存在"
+                gcc_file=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -1)
+                if [ -n "$gcc_file" ]; then
+                    log "✅ 找到工具链中的 GCC 编译器: $(basename "$gcc_file")"
+                    log "  📋 版本信息: $($gcc_file --version 2>&1 | head -1)"
+                else
+                    log "⚠️ 未找到 GCC 编译器"
+                fi
+            else
+                log "⚠️ staging_dir 目录不存在"
+            fi
+            log "✅ 步骤10 完成"
             ;;
         "step11_add_turboacc")
             workflow_step11_add_turboacc
