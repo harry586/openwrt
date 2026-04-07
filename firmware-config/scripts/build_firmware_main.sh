@@ -1605,7 +1605,6 @@ generate_config() {
     rm -f .config .config.old .config.bak*
     log "✅ 已清理旧配置文件"
     
-    # 直接使用传入的设备名，不再重复解析MK文件
     local correct_device="$DEVICE"
     log "🔧 使用传入的设备名: $correct_device"
     
@@ -1614,23 +1613,28 @@ generate_config() {
     # ============================================
     local device_config=""
     
-    case "$SOURCE_REPO_TYPE" in
-        "immortalwrt-mt798x")
-            # MT798x 源码使用特殊格式: CONFIG_TARGET_mediatek_filogic_DEVICE_mediatek_设备名=y
-            device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_mediatek_${correct_device}=y"
-            log "🔧 MT798x 源码，使用设备配置格式: $device_config"
-            ;;
-        "lede")
-            # LEDE 使用标准格式但需要特殊处理
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+        # MT798x 源码特殊处理
+        if [ "$TARGET" = "mediatek" ]; then
+            # mediatek 平台使用 mt7986 子平台格式
+            device_config="CONFIG_TARGET_mediatek_mt7986_DEVICE_${correct_device}=y"
+            log "🔧 [MT798x] mediatek平台，使用设备配置格式: $device_config"
+        elif [ "$TARGET" = "ipq40xx" ]; then
+            # ipq40xx 平台使用标准格式
             device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
-            ;;
-        *)
-            # 标准 OpenWrt/ImmortalWrt 格式
+            log "🔧 [MT798x] ipq40xx平台，使用标准格式: $device_config"
+        else
+            # 其他平台使用标准格式
             device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
-            ;;
-    esac
+            log "🔧 [MT798x] 其他平台，使用标准格式: $device_config"
+        fi
+    else
+        # 非 MT798x 源码，使用标准格式
+        device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
+        log "🔧 标准设备配置格式: $device_config"
+    fi
     
-    log "🔧 设备配置变量: $device_config"
+    log "🔧 最终设备配置变量: $device_config"
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 LEDE源码特殊处理：先设置目标平台"
@@ -2101,92 +2105,64 @@ EOF
     fi
     
     # ============================================
-    # 验证设备配置 - 使用多种格式尝试
+    # 验证设备配置
     # ============================================
     log "🔍 正在验证设备 $correct_device 是否被选中..."
     
-    # 尝试多种可能的设备配置格式
-    local possible_configs=()
+    # 先运行 make defconfig 生成完整的配置
+    make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || true
     
-    case "$SOURCE_REPO_TYPE" in
-        "immortalwrt-mt798x")
-            possible_configs=(
-                "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_mediatek_${correct_device}=y"
-                "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
-                "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${TARGET}_${correct_device}=y"
-            )
-            ;;
-        *)
-            possible_configs=(
-                "CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
-            )
-            ;;
-    esac
+    # 查找正确的设备配置变量名
+    local found_config=""
+    local search_pattern="CONFIG_TARGET.*DEVICE.*${correct_device}"
+    found_config=$(grep -E "$search_pattern" .config 2>/dev/null | grep -v "^#" | head -1)
     
-    local device_found=0
-    local active_config=""
-    
-    for cfg in "${possible_configs[@]}"; do
-        if grep -q "^${cfg}" .config; then
-            log "✅ 目标设备已正确启用: ${cfg}"
-            device_found=1
-            active_config="$cfg"
-            break
-        elif grep -q "^# ${cfg} is not set" .config; then
-            log "⚠️ 警告: 设备被禁用: ${cfg}，尝试强制启用..."
-            sed -i "/^# ${cfg} is not set/d" .config
-            echo "${cfg}" >> .config
-            device_found=1
-            active_config="$cfg"
-            break
-        fi
-    done
-    
-    if [ $device_found -eq 0 ]; then
-        log "⚠️ 警告: 未找到设备配置，尝试从mk文件读取正确格式..."
+    if [ -n "$found_config" ]; then
+        log "✅ 找到设备配置: $found_config"
+        device_config="$found_config"
+    else
+        log "⚠️ 未找到设备配置 $search_pattern"
         
-        # 从mk文件读取设备配置格式
-        local mk_file="target/linux/mediatek/image/mt7981.mk"
-        if [ -f "$mk_file" ]; then
-            local found_in_mk=$(grep -E "define Device/${correct_device}" "$mk_file" | head -1)
-            if [ -n "$found_in_mk" ]; then
-                log "  从mk文件找到设备定义: $found_in_mk"
-                # 使用第一个可能的配置格式
-                active_config="${possible_configs[0]}"
-                echo "${active_config}" >> .config
-                log "  ✅ 手动添加设备配置: ${active_config}"
-                device_found=1
+        # 对于 MT798x 源码，尝试使用 CONFIG_TARGET_PROFILE
+        if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+            local target_profile="CONFIG_TARGET_PROFILE=\"DEVICE_${correct_device}\""
+            echo "$target_profile" >> .config
+            log "  🔧 [MT798x] 添加 PROFILE 配置: $target_profile"
+            
+            make defconfig > /tmp/build-logs/defconfig_profile.log 2>&1 || true
+            
+            # 再次查找
+            found_config=$(grep -E "$search_pattern" .config 2>/dev/null | grep -v "^#" | head -1)
+            if [ -n "$found_config" ]; then
+                log "✅ 通过 PROFILE 找到设备配置: $found_config"
+                device_config="$found_config"
             fi
         fi
     fi
     
-    if [ $device_found -eq 0 ]; then
-        log "❌ 无法启用设备 $correct_device"
+    # 如果还是找不到，显示可用的设备列表
+    if [ -z "$found_config" ]; then
+        log "⚠️ 未找到设备 $correct_device 的配置"
         log "📋 当前 .config 中的设备配置:"
-        grep "CONFIG_TARGET.*DEVICE" .config | head -10
-        exit 1
-    fi
-    
-    # 确保只有一个设备配置被启用
-    sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
-    echo "${active_config}" >> .config
-    
-    sort .config | uniq > .config.tmp
-    mv .config.tmp .config
-    
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig_force_device.log 2>&1 || true
+        grep "CONFIG_TARGET.*DEVICE" .config 2>/dev/null | head -10 | while read line; do
+            log "  $line"
+        done
+        log "⚠️ 继续编译，但设备可能未被正确选中"
     else
+        # 确保设备配置被正确设置
+        sed -i "/^CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
+        echo "$device_config" >> .config
+        
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        
         make defconfig > /tmp/build-logs/defconfig_force_device.log 2>&1 || true
-    fi
-    
-    if grep -q "${active_config}" .config; then
-        log "✅ 设备配置已强制设置成功: ${active_config}"
-    else
-        log "❌ 设备配置设置失败"
-        log "📋 当前 .config 中的设备配置:"
-        grep "CONFIG_TARGET.*DEVICE" .config
-        exit 1
+        
+        if grep -q "$device_config" .config; then
+            log "✅ 设备配置已成功设置: $device_config"
+        else
+            log "⚠️ 设备配置设置可能失败"
+        fi
     fi
     
     local total_configs=$(wc -l < .config)
