@@ -1609,27 +1609,36 @@ generate_config() {
     log "🔧 使用传入的设备名: $correct_device"
     
     # ============================================
-    # 根据源码类型确定设备配置变量格式
+    # 根据源码类型和设备定义文件确定设备配置变量格式
     # ============================================
     local device_config=""
+    local platform_sub=""
     
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        # MT798x 源码特殊处理
-        if [ "$TARGET" = "mediatek" ]; then
-            # mediatek 平台使用 mt7986 子平台格式
-            device_config="CONFIG_TARGET_mediatek_mt7986_DEVICE_${correct_device}=y"
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
+        # 从 mk 文件中提取正确的子平台名称
+        local mk_file=""
+        for mkf in target/linux/mediatek/image/*.mk; do
+            if [ -f "$mkf" ] && grep -q "define Device.*$correct_device" "$mkf" 2>/dev/null; then
+                mk_file="$mkf"
+                break
+            fi
+        done
+        
+        if [ -n "$mk_file" ]; then
+            # 从文件名提取子平台，如 mt7981.mk -> mt7981
+            platform_sub=$(basename "$mk_file" .mk)
+            device_config="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${correct_device}=y"
+            log "🔧 [MT798x] 从设备定义文件提取子平台: $platform_sub"
             log "🔧 [MT798x] mediatek平台，使用设备配置格式: $device_config"
-        elif [ "$TARGET" = "ipq40xx" ]; then
-            # ipq40xx 平台使用标准格式
-            device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
-            log "🔧 [MT798x] ipq40xx平台，使用标准格式: $device_config"
         else
-            # 其他平台使用标准格式
-            device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
-            log "🔧 [MT798x] 其他平台，使用标准格式: $device_config"
+            # 如果找不到定义文件，使用默认值
+            device_config="CONFIG_TARGET_mediatek_mt7981_DEVICE_${correct_device}=y"
+            log "🔧 [MT798x] 未找到设备定义文件，使用默认 mt7981 格式: $device_config"
         fi
+    elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
+        device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
+        log "🔧 [MT798x] ipq40xx平台，使用标准格式: $device_config"
     else
-        # 非 MT798x 源码，使用标准格式
         device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
         log "🔧 标准设备配置格式: $device_config"
     fi
@@ -1712,7 +1721,6 @@ EOF
                 append_config "$usb_generic_file"
             fi
             
-            # MT798x 源码使用不同的配置文件命名
             if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
                 if [ -f "$CONFIG_DIR/mediatek.config" ]; then
                     append_config "$CONFIG_DIR/mediatek.config"
@@ -2114,42 +2122,34 @@ EOF
     
     # 查找正确的设备配置变量名
     local found_config=""
-    local search_pattern="CONFIG_TARGET.*DEVICE.*${correct_device}"
-    found_config=$(grep -E "$search_pattern" .config 2>/dev/null | grep -v "^#" | head -1)
+    local search_pattern=""
+    
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
+        # 使用正确的子平台搜索
+        if [ -n "$platform_sub" ]; then
+            search_pattern="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${correct_device}"
+        else
+            search_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${correct_device}"
+        fi
+    else
+        search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}"
+    fi
+    
+    found_config=$(grep -E "^${search_pattern}=y" .config 2>/dev/null | head -1)
     
     if [ -n "$found_config" ]; then
         log "✅ 找到设备配置: $found_config"
         device_config="$found_config"
     else
         log "⚠️ 未找到设备配置 $search_pattern"
-        
-        # 对于 MT798x 源码，尝试使用 CONFIG_TARGET_PROFILE
-        if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-            local target_profile="CONFIG_TARGET_PROFILE=\"DEVICE_${correct_device}\""
-            echo "$target_profile" >> .config
-            log "  🔧 [MT798x] 添加 PROFILE 配置: $target_profile"
-            
-            make defconfig > /tmp/build-logs/defconfig_profile.log 2>&1 || true
-            
-            # 再次查找
-            found_config=$(grep -E "$search_pattern" .config 2>/dev/null | grep -v "^#" | head -1)
-            if [ -n "$found_config" ]; then
-                log "✅ 通过 PROFILE 找到设备配置: $found_config"
-                device_config="$found_config"
-            fi
-        fi
-    fi
-    
-    # 如果还是找不到，显示可用的设备列表
-    if [ -z "$found_config" ]; then
-        log "⚠️ 未找到设备 $correct_device 的配置"
         log "📋 当前 .config 中的设备配置:"
         grep "CONFIG_TARGET.*DEVICE" .config 2>/dev/null | head -10 | while read line; do
             log "  $line"
         done
-        log "⚠️ 继续编译，但设备可能未被正确选中"
-    else
-        # 确保设备配置被正确设置
+    fi
+    
+    # 确保设备配置被正确设置
+    if [ -n "$device_config" ]; then
         sed -i "/^CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         echo "$device_config" >> .config
         
@@ -5246,30 +5246,44 @@ workflow_step23_pre_build_check() {
     fi
     
     # ============================================
-    # 根据源码类型确定设备配置格式（仅 MT798x 特殊处理）
+    # 根据源码类型和设备定义文件确定设备配置格式
     # ============================================
     local expected_config=""
     local search_pattern=""
+    local platform_sub=""
     
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        # MT798x 源码特殊处理
-        if [ "$TARGET" = "mediatek" ]; then
-            expected_config="CONFIG_TARGET_mediatek_mt7986_DEVICE_${DEVICE}=y"
-            search_pattern="CONFIG_TARGET_mediatek_mt7986_DEVICE_${DEVICE}"
-            log "🔧 [MT798x] mediatek平台，期望配置: $expected_config"
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
+        # 从 mk 文件中提取正确的子平台名称
+        local mk_file=""
+        for mkf in target/linux/mediatek/image/*.mk; do
+            if [ -f "$mkf" ] && grep -q "define Device.*$DEVICE" "$mkf" 2>/dev/null; then
+                mk_file="$mkf"
+                break
+            fi
+        done
+        
+        if [ -n "$mk_file" ]; then
+            platform_sub=$(basename "$mk_file" .mk)
+            expected_config="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${DEVICE}=y"
+            search_pattern="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${DEVICE}"
+            log "🔧 [MT798x] 从设备定义文件提取子平台: $platform_sub"
+            log "🔧 [MT798x] 期望配置: $expected_config"
         else
-            expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-            search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
-            log "🔧 [MT798x] 其他平台，期望配置: $expected_config"
+            expected_config="CONFIG_TARGET_mediatek_mt7981_DEVICE_${DEVICE}=y"
+            search_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${DEVICE}"
+            log "🔧 [MT798x] 未找到设备定义文件，使用默认 mt7981 格式"
         fi
+    elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
+        expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+        search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
+        log "🔧 [MT798x] ipq40xx平台，期望配置: $expected_config"
     else
-        # 非 MT798x 源码，使用标准格式
         expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
         search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
         log "🔧 标准格式，期望配置: $expected_config"
     fi
     
-    # 检查设备配置是否存在（支持 =y 或 is not set 两种形式）
+    # 检查设备配置是否存在
     local config_exists=0
     if grep -q "^${expected_config}$" .config 2>/dev/null; then
         config_exists=1
@@ -5278,7 +5292,6 @@ workflow_step23_pre_build_check() {
         expected_config=$(grep "^${search_pattern}=y" .config | head -1)
     elif grep -q "^# ${search_pattern} is not set" .config 2>/dev/null; then
         config_exists=1
-        # 如果被禁用，需要启用它
         log "⚠️ 设备配置被禁用，正在启用..."
         sed -i "/^# ${search_pattern} is not set/d" .config
         echo "${search_pattern}=y" >> .config
@@ -5288,18 +5301,14 @@ workflow_step23_pre_build_check() {
     if [ $config_exists -eq 0 ]; then
         log "⚠️ 设备配置丢失，重新添加: ${search_pattern}=y"
         
-        # 删除所有同平台的设备配置
         sed -i "/^CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         sed -i "/^# CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         
-        # 添加正确的设备配置
         echo "${search_pattern}=y" >> .config
         
-        # 去重
         sort -u .config > .config.tmp
         mv .config.tmp .config
         
-        # 重新运行 defconfig
         make defconfig > /tmp/build-logs/defconfig_restore.log 2>&1 || {
             log "⚠️ make defconfig 有警告，但继续"
         }
@@ -5345,7 +5354,13 @@ workflow_step23_pre_build_check() {
         local check_pattern=""
         
         if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
-            check_pattern="CONFIG_TARGET_mediatek_mt7986_DEVICE_${device_for_check}"
+            if [ -n "$platform_sub" ]; then
+                check_pattern="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${device_for_check}"
+            else
+                check_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${device_for_check}"
+            fi
+        elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
+            check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
         else
             check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
         fi
@@ -5526,96 +5541,41 @@ workflow_step25_build_firmware() {
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 对于 MT798x 源码，禁用有问题的 ucode 相关包
+    # 对于 MT798x 源码，彻底禁用有问题的 ucode 相关包
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        log "🔧 [MT798x] 检测到 MT798x 源码，禁用有问题的 ucode 相关包..."
+        log "🔧 [MT798x] 检测到 MT798x 源码，彻底禁用有问题的 ucode 相关包..."
         
-        # 在配置中禁用 ucode-mod-html 和 lucihttp-ucode
+        # 删除 ucode-mod-html 源文件
+        if [ -d "package/feeds/luci/ucode-mod-html" ]; then
+            rm -rf package/feeds/luci/ucode-mod-html
+            log "  🗑️ 删除 package/feeds/luci/ucode-mod-html"
+        fi
+        if [ -d "feeds/luci/ucode-mod-html" ]; then
+            rm -rf feeds/luci/ucode-mod-html
+            log "  🗑️ 删除 feeds/luci/ucode-mod-html"
+        fi
+        
+        # 删除 lucihttp-ucode 相关文件
+        if [ -d "package/feeds/luci/lucihttp" ]; then
+            # 只删除 ucode 相关文件，保留 lucihttp 主包
+            find package/feeds/luci/lucihttp -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
+            log "  🗑️ 删除 lucihttp 中的 ucode 相关文件"
+        fi
+        
+        # 在 .config 中禁用相关包
         if [ -f ".config" ]; then
             sed -i '/CONFIG_PACKAGE_ucode-mod-html/d' .config
             sed -i '/CONFIG_PACKAGE_lucihttp-ucode/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-turboacc/d' .config
             echo "# CONFIG_PACKAGE_ucode-mod-html is not set" >> .config
             echo "# CONFIG_PACKAGE_lucihttp-ucode is not set" >> .config
-            log "  ✅ 已禁用 ucode-mod-html 和 lucihttp-ucode"
+            log "  ✅ 已在配置中禁用 ucode-mod-html 和 lucihttp-ucode"
         fi
         
-        # 创建完整的 ucode 头文件
-        log "  📁 创建完整的 ucode 头文件..."
-        for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
-            if [ -d "$inc_dir" ]; then
-                mkdir -p "$inc_dir/ucode"
-                cat > "$inc_dir/ucode/module.h" << 'EOF'
-#ifndef _UCODE_MODULE_H
-#define _UCODE_MODULE_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdio.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* Opaque types */
-typedef struct uc_vm uc_vm_t;
-typedef struct uc_value uc_value_t;
-typedef struct uc_resource_type uc_resource_type_t;
-
-/* String buffer type */
-typedef struct uc_stringbuf uc_stringbuf_t;
-
-/* Exception types */
-#define EXCEPTION_RUNTIME 1
-#define EXCEPTION_SYNTAX 2
-#define EXCEPTION_LIMIT 3
-
-/* VM functions */
-uc_vm_t *uc_vm_new(void);
-void uc_vm_destroy(uc_vm_t *vm);
-void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
-void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
-int uc_vm_call(uc_vm_t *vm, uc_value_t *func, int argc);
-
-/* Value functions */
-uc_value_t *ucv_get(void *ptr);
-uc_value_t *ucv_string(const char *str);
-uc_value_t *ucv_number(double num);
-uc_value_t *ucv_boolean(int val);
-uc_value_t *ucv_null(void);
-uc_value_t *ucv_array_new(void);
-uc_value_t *ucv_object_new(void);
-void ucv_put(uc_value_t *val);
-
-/* String buffer functions */
-uc_stringbuf_t *uc_stringbuf_new(void);
-void uc_stringbuf_free(uc_stringbuf_t *buf);
-void uc_stringbuf_add(uc_stringbuf_t *buf, const char *str, size_t len);
-void uc_stringbuf_addc(uc_stringbuf_t *buf, char c);
-void uc_stringbuf_addutf8(uc_stringbuf_t *buf, unsigned int code);
-const char *uc_stringbuf_get(uc_stringbuf_t *buf);
-size_t uc_stringbuf_len(uc_stringbuf_t *buf);
-void uc_stringbuf_clear(uc_stringbuf_t *buf);
-
-/* Resource type functions */
-uc_resource_type_t *uc_resource_type_new(uc_vm_t *vm, const char *name,
-    void (*dtor)(uc_vm_t *, uc_value_t *),
-    void (*gc)(uc_vm_t *, uc_value_t *));
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-EOF
-                log "  ✅ 创建 $inc_dir/ucode/module.h"
-            fi
-        done
-        
-        # 重新运行 defconfig 使禁用生效
+        # 重新运行 defconfig
         make defconfig > /tmp/build-logs/defconfig_disable_ucode.log 2>&1 || true
-        log "  ✅ ucode 相关包已禁用"
+        log "  ✅ ucode 相关包已彻底禁用"
     fi
     
     log "🔧 创建双固件保护脚本..."
@@ -5769,25 +5729,26 @@ EOF
         
         if [ -f "$log_file" ]; then
             # ============================================
-            # 检测 ucode 相关错误并修复（仅 MT798x 特殊处理）
+            # 检测 ucode-mod-html 错误并修复（仅 MT798x）
             # ============================================
             if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                if grep -q "ucode" "$log_file" || grep -q "lucihttp" "$log_file"; then
-                    log "  ⚠️ [MT798x] 检测到 ucode/lucihttp 错误，尝试禁用相关包..."
+                if grep -q "ucode-mod-html" "$log_file" || grep -q "lucihttp-ucode" "$log_file"; then
+                    log "  ⚠️ [MT798x] 检测到 ucode-mod-html 编译错误，正在彻底禁用..."
                     
-                    # 强制禁用有问题的包
-                    sed -i '/CONFIG_PACKAGE_ucode-mod-html/d' .config
-                    sed -i '/CONFIG_PACKAGE_lucihttp-ucode/d' .config
-                    sed -i '/CONFIG_PACKAGE_lucihttp/d' .config
-                    echo "# CONFIG_PACKAGE_ucode-mod-html is not set" >> .config
-                    echo "# CONFIG_PACKAGE_lucihttp-ucode is not set" >> .config
+                    # 彻底删除 ucode-mod-html
+                    find . -type d -name "ucode-mod-html" -exec rm -rf {} \; 2>/dev/null || true
+                    find . -type d -name "*ucode*html*" -exec rm -rf {} \; 2>/dev/null || true
                     
                     # 清理构建目录
                     rm -rf build_dir/target-*/ucode-mod-html* 2>/dev/null || true
-                    rm -rf build_dir/target-*/lucihttp* 2>/dev/null || true
+                    rm -rf staging_dir/target-*/.stamp_ucode* 2>/dev/null || true
                     
-                    make defconfig > /tmp/build-logs/defconfig_fix_ucode.log 2>&1 || true
-                    log "  ✅ [MT798x] ucode/lucihttp 包已禁用"
+                    # 再次在 .config 中禁用
+                    sed -i '/CONFIG_PACKAGE_ucode-mod-html/d' .config
+                    echo "# CONFIG_PACKAGE_ucode-mod-html is not set" >> .config
+                    
+                    make defconfig > /tmp/build-logs/defconfig_remove_ucode.log 2>&1 || true
+                    log "  ✅ [MT798x] ucode-mod-html 已彻底禁用"
                 fi
             fi
             
