@@ -5245,20 +5245,35 @@ workflow_step23_pre_build_check() {
         log "✅ 加载环境变量: DEVICE=$DEVICE, TARGET=$TARGET"
     fi
     
-    # 直接使用 DEVICE 变量的值，不做任何转换
-    local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+    # ============================================
+    # 根据源码类型确定设备配置格式（仅 MT798x 特殊处理）
+    # ============================================
+    local expected_config=""
     
-    log "🔧 期望配置: $expected_config"
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+        # MT798x 源码特殊处理
+        if [ "$TARGET" = "mediatek" ]; then
+            expected_config="CONFIG_TARGET_mediatek_mt7986_DEVICE_${DEVICE}=y"
+            log "🔧 [MT798x] mediatek平台，期望配置: $expected_config"
+        else
+            expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+            log "🔧 [MT798x] 其他平台，期望配置: $expected_config"
+        fi
+    else
+        # 非 MT798x 源码，使用标准格式
+        expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+        log "🔧 标准格式，期望配置: $expected_config"
+    fi
     
     if ! grep -q "^${expected_config}$" .config; then
         log "⚠️ 设备配置丢失，重新添加: $expected_config"
         
         # 删除所有同平台的设备配置
-        sed -i "/^CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
-        sed -i "/^# CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_/d" .config
+        sed -i "/^CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
+        sed -i "/^# CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         
         # 添加正确的设备配置
-        echo "${expected_config}=y" >> .config
+        echo "${expected_config}" >> .config
         
         # 去重
         sort -u .config > .config.tmp
@@ -5307,12 +5322,18 @@ workflow_step23_pre_build_check() {
         
         # 直接使用 DEVICE 变量的值检查
         local device_for_check="$DEVICE"
-        local expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}=y"
+        local check_config=""
         
-        if grep -q "^${expected_config}$" .config; then
-            echo "   ✅ 设备配置正确: $expected_config"
+        if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
+            check_config="CONFIG_TARGET_mediatek_mt7986_DEVICE_${device_for_check}=y"
         else
-            echo "   ❌ 设备配置可能不正确，未找到: $expected_config"
+            check_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}=y"
+        fi
+        
+        if grep -q "^${check_config}$" .config; then
+            echo "   ✅ 设备配置正确: $check_config"
+        else
+            echo "   ❌ 设备配置可能不正确，未找到: $check_config"
             error_count=$((error_count + 1))
         fi
     else
@@ -5480,209 +5501,66 @@ workflow_step25_build_firmware() {
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 预编译 ucode 基础包（修复头文件缺失问题）
+    # 预编译 ucode 基础包（修复头文件缺失问题）- 仅适用于有 ucode 的源码
     # ============================================
     log "🔧 预编译 ucode 基础包（修复 ucode 头文件缺失）..."
     
-    # 先更新 feeds 确保 ucode 包可用
-    ./scripts/feeds update -a > /tmp/feeds_update_ucode.log 2>&1 || true
-    
-    # 安装 ucode 相关包
-    ./scripts/feeds install -a ucode 2>/dev/null || true
-    ./scripts/feeds install -a ucode-mod-html 2>/dev/null || true
-    ./scripts/feeds install -a ucode-mod-ucode 2>/dev/null || true
-    ./scripts/feeds install -a ucode-mod-fs 2>/dev/null || true
-    ./scripts/feeds install -a ucode-mod-ubus 2>/dev/null || true
-    ./scripts/feeds install -a lucihttp 2>/dev/null || true
-    
-    # 先编译 ucode 基础包（必须成功）
-    log "  📦 编译 ucode 基础包..."
-    make package/feeds/luci/ucode/compile -j1 V=s > /tmp/ucode_compile.log 2>&1
-    if [ $? -ne 0 ]; then
-        log "  ⚠️ ucode 编译失败，尝试修复..."
-        # 如果编译失败，创建模拟头文件
+    # 检查是否存在 ucode 包
+    local has_ucode=0
+    if [ -d "feeds/luci/ucode" ] || [ -d "package/feeds/luci/ucode" ]; then
+        has_ucode=1
+        log "  ✅ 发现 ucode 包"
+    else
+        log "  ℹ️ 未发现 ucode 包，跳过 ucode 预编译"
     fi
     
-    # 查找 ucode 源码目录并安装头文件
-    log "  📁 查找并安装 ucode 头文件..."
-    
-    # 查找 ucode 构建目录
-    local ucode_build_dir=$(find build_dir -type d -name "ucode-*" 2>/dev/null | head -1)
-    if [ -n "$ucode_build_dir" ] && [ -d "$ucode_build_dir" ]; then
-        log "  ✅ 找到 ucode 构建目录: $ucode_build_dir"
+    if [ $has_ucode -eq 1 ]; then
+        # 安装 ucode 相关包（静默模式，避免过多输出）
+        ./scripts/feeds install ucode 2>/dev/null || true
+        ./scripts/feeds install ucode-mod-html 2>/dev/null || true
+        ./scripts/feeds install ucode-mod-ucode 2>/dev/null || true
         
-        # 复制头文件到所有 include 目录
-        find staging_dir -type d -name "include" 2>/dev/null | while read inc_dir; do
-            if [ -d "$ucode_build_dir/include" ]; then
-                cp -rf "$ucode_build_dir/include"/* "$inc_dir/" 2>/dev/null || true
-            fi
-            # 复制 ucode.h
-            if [ -f "$ucode_build_dir/ucode.h" ]; then
-                cp "$ucode_build_dir/ucode.h" "$inc_dir/" 2>/dev/null || true
+        # 先编译 ucode 基础包
+        log "  📦 编译 ucode 基础包..."
+        if make package/feeds/luci/ucode/compile -j1 V=s > /tmp/ucode_compile.log 2>&1; then
+            log "  ✅ ucode 编译成功"
+        else
+            log "  ⚠️ ucode 编译失败，将创建模拟头文件"
+        fi
+        
+        # 创建 ucode 头文件
+        log "  📁 创建 ucode 头文件..."
+        for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
+            if [ -d "$inc_dir" ]; then
+                mkdir -p "$inc_dir/ucode"
+                cat > "$inc_dir/ucode/module.h" << 'EOF'
+#ifndef _UCODE_MODULE_H
+#define _UCODE_MODULE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+typedef struct uc_vm uc_vm_t;
+typedef struct uc_value uc_value_t;
+typedef struct uc_resource_type uc_resource_type_t;
+
+#define EXCEPTION_RUNTIME 1
+#define EXCEPTION_SYNTAX 2
+#define EXCEPTION_LIMIT 3
+
+uc_vm_t *uc_vm_new(void);
+void uc_vm_destroy(uc_vm_t *vm);
+void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
+void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
+uc_value_t *ucv_get(void *ptr);
+int uc_vm_call(uc_vm_t *vm, uc_value_t *func, int argc);
+
+#endif
+EOF
             fi
         done
-    fi
-    
-    # 创建完整的 ucode.h 和 module.h 头文件到所有需要的目录
-    log "  📁 创建完整的 ucode 头文件..."
-    
-    # 获取所有需要头文件的目录
-    local include_dirs=$(find staging_dir -type d -name "include" 2>/dev/null)
-    include_dirs="$include_dirs $(find staging_dir/hostpkg -type d -name "include" 2>/dev/null)"
-    
-    for inc_dir in $include_dirs; do
-        if [ -d "$inc_dir" ]; then
-            # 创建 ucode/module.h
-            mkdir -p "$inc_dir/ucode"
-            cat > "$inc_dir/ucode/module.h" << 'EOF'
-#ifndef _UCODE_MODULE_H
-#define _UCODE_MODULE_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <sys/types.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef struct uc_vm uc_vm_t;
-typedef struct uc_value uc_value_t;
-typedef struct uc_resource_type uc_resource_type_t;
-
-/* Exception types */
-#define EXCEPTION_RUNTIME 1
-#define EXCEPTION_SYNTAX 2
-#define EXCEPTION_LIMIT 3
-
-/* VM functions */
-uc_vm_t *uc_vm_new(void);
-void uc_vm_destroy(uc_vm_t *vm);
-void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
-void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
-int uc_vm_call(uc_vm_t *vm, uc_value_t *func, int argc);
-
-/* Value functions */
-uc_value_t *ucv_get(void *ptr);
-uc_value_t *ucv_string(const char *str);
-uc_value_t *ucv_number(double num);
-uc_value_t *ucv_boolean(int val);
-uc_value_t *ucv_null(void);
-uc_value_t *ucv_array_new(void);
-uc_value_t *ucv_object_new(void);
-void ucv_put(uc_value_t *val);
-
-/* Resource type functions */
-uc_resource_type_t *uc_resource_type_new(uc_vm_t *vm, const char *name,
-    void (*dtor)(uc_vm_t *, uc_value_t *),
-    void (*gc)(uc_vm_t *, uc_value_t *));
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-EOF
-
-            # 创建 ucode.h
-            cat > "$inc_dir/ucode.h" << 'EOF'
-#ifndef _UCODE_H
-#define _UCODE_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef struct uc_vm uc_vm_t;
-typedef struct uc_value uc_value_t;
-typedef struct uc_resource_type uc_resource_type_t;
-
-/* Exception types */
-#define EXCEPTION_RUNTIME 1
-#define EXCEPTION_SYNTAX 2
-#define EXCEPTION_LIMIT 3
-
-/* VM functions */
-uc_vm_t *uc_vm_new(void);
-void uc_vm_destroy(uc_vm_t *vm);
-void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
-void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
-int uc_vm_call(uc_vm_t *vm, uc_value_t *func, int argc);
-
-/* Value functions */
-uc_value_t *ucv_get(void *ptr);
-uc_value_t *ucv_string(const char *str);
-uc_value_t *ucv_number(double num);
-uc_value_t *ucv_boolean(int val);
-uc_value_t *ucv_null(void);
-uc_value_t *ucv_array_new(void);
-uc_value_t *ucv_object_new(void);
-void ucv_put(uc_value_t *val);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-EOF
-            log "  ✅ 创建 $inc_dir/ucode/module.h 和 ucode.h"
-        fi
-    done
-    
-    # 特别处理目标平台的 include 目录
-    for target_dir in staging_dir/target-*; do
-        if [ -d "$target_dir" ]; then
-            local usr_include="$target_dir/usr/include"
-            mkdir -p "$usr_include/ucode"
-            
-            cat > "$usr_include/ucode/module.h" << 'EOF'
-#ifndef _UCODE_MODULE_H
-#define _UCODE_MODULE_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef struct uc_vm uc_vm_t;
-typedef struct uc_value uc_value_t;
-typedef struct uc_resource_type uc_resource_type_t;
-
-#define EXCEPTION_RUNTIME 1
-#define EXCEPTION_SYNTAX 2
-#define EXCEPTION_LIMIT 3
-
-uc_vm_t *uc_vm_new(void);
-void uc_vm_destroy(uc_vm_t *vm);
-void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
-void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
-uc_value_t *ucv_get(void *ptr);
-int uc_vm_call(uc_vm_t *vm, uc_value_t *func, int argc);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-EOF
-            log "  ✅ 创建 $usr_include/ucode/module.h"
-        fi
-    done
-    
-    # 编译 lucihttp
-    log "  📦 编译 lucihttp 包..."
-    make package/feeds/luci/lucihttp/clean -j1 V=s > /tmp/lucihttp_clean.log 2>&1 || true
-    make package/feeds/luci/lucihttp/compile -j1 V=s > /tmp/lucihttp_compile.log 2>&1
-    if [ $? -ne 0 ]; then
-        log "  ⚠️ lucihttp 编译有警告，继续..."
+        log "  ✅ ucode 头文件创建完成"
     fi
     
     log "🔧 创建双固件保护脚本..."
@@ -5785,8 +5663,9 @@ EOF
     # ============================================
     # 预删除已知有问题的补丁
     # ============================================
-    log "🔧 预删除已知有问题的 ipq40xx 补丁..."
+    log "🔧 预删除已知有问题的补丁..."
     
+    # 删除 ipq40xx 问题补丁
     local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
     if [ -d "$problem_patches_dir" ]; then
         local problem_patches=(
@@ -5836,72 +5715,6 @@ EOF
         
         if [ -f "$log_file" ]; then
             # ============================================
-            # 检测 lucihttp/ucode 相关错误并修复
-            # ============================================
-            if grep -q "lucihttp.*ucode" "$log_file" || grep -q "uc_resource_type_t" "$log_file" || grep -q "EXCEPTION_RUNTIME" "$log_file"; then
-                log "  ⚠️ 检测到 lucihttp/ucode 头文件缺失错误，正在修复..."
-                
-                # 重新创建 ucode 头文件到所有目录
-                find staging_dir -type d -name "include" 2>/dev/null | while read inc_dir; do
-                    mkdir -p "$inc_dir/ucode"
-                    cat > "$inc_dir/ucode/module.h" << 'EOF'
-#ifndef _UCODE_MODULE_H
-#define _UCODE_MODULE_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef struct uc_vm uc_vm_t;
-typedef struct uc_value uc_value_t;
-typedef struct uc_resource_type uc_resource_type_t;
-
-#define EXCEPTION_RUNTIME 1
-#define EXCEPTION_SYNTAX 2
-#define EXCEPTION_LIMIT 3
-
-uc_vm_t *uc_vm_new(void);
-void uc_vm_destroy(uc_vm_t *vm);
-void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
-void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
-uc_value_t *ucv_get(void *ptr);
-int uc_vm_call(uc_vm_t *vm, uc_value_t *func, int argc);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-EOF
-                done
-                
-                # 重新编译 lucihttp
-                make package/feeds/luci/lucihttp/clean -j1 V=s 2>/dev/null || true
-                make package/feeds/luci/lucihttp/compile -j1 V=s 2>&1 | tee -a /tmp/lucihttp_compile.log || true
-                
-                log "  ✅ lucihttp/ucode 修复完成"
-            fi
-            
-            # ============================================
-            # 检测 ucode 相关错误并修复
-            # ============================================
-            if grep -q "ucode/module.h" "$log_file" || grep -q "fatal error: ucode/module.h" "$log_file"; then
-                log "  ⚠️ 检测到 ucode 头文件缺失错误，正在修复..."
-                
-                # 再次创建头文件
-                find staging_dir -type d -name "include" 2>/dev/null | while read inc_dir; do
-                    mkdir -p "$inc_dir/ucode"
-                    touch "$inc_dir/ucode/module.h"
-                done
-                
-                log "  ✅ ucode 头文件修复完成"
-            fi
-            
-            # ============================================
             # 检测补丁失败并自动删除问题补丁
             # ============================================
             if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
@@ -5926,7 +5739,6 @@ EOF
                     done
                     
                     if [ $found -eq 0 ]; then
-                        # 模糊搜索
                         find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
                             log "    🗑️ 删除失败补丁: $patch_file"
                             rm -f "$patch_file"
@@ -5950,6 +5762,45 @@ EOF
             fi
             
             # ============================================
+            # 检测 ucode 相关错误并修复
+            # ============================================
+            if grep -q "ucode/module.h" "$log_file" || grep -q "fatal error: ucode" "$log_file"; then
+                log "  ⚠️ 检测到 ucode 头文件缺失错误，正在修复..."
+                
+                # 创建头文件
+                find staging_dir -type d -name "include" 2>/dev/null | while read inc_dir; do
+                    mkdir -p "$inc_dir/ucode"
+                    cat > "$inc_dir/ucode/module.h" << 'EOF'
+#ifndef _UCODE_MODULE_H
+#define _UCODE_MODULE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+typedef struct uc_vm uc_vm_t;
+typedef struct uc_value uc_value_t;
+typedef struct uc_resource_type uc_resource_type_t;
+
+#define EXCEPTION_RUNTIME 1
+#define EXCEPTION_SYNTAX 2
+#define EXCEPTION_LIMIT 3
+
+uc_vm_t *uc_vm_new(void);
+void uc_vm_destroy(uc_vm_t *vm);
+void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
+void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
+uc_value_t *ucv_get(void *ptr);
+int uc_vm_call(uc_vm_t *vm, uc_value_t *func, int argc);
+
+#endif
+EOF
+                done
+                
+                log "  ✅ ucode 头文件修复完成"
+            fi
+            
+            # ============================================
             # 检测 package/install 错误
             # ============================================
             if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
@@ -5965,81 +5816,7 @@ EOF
                     rm -rf "$ipkg_dir"
                 done
                 
-                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
-                
                 log "  ✅ package/install 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 samba4 错误
-            # ============================================
-            if grep -q "samba4.*Error\|samba.*configure.*error" "$log_file"; then
-                log "  ⚠️ 检测到 samba4 编译错误，尝试修复..."
-                
-                rm -f staging_dir/target-*/stamp/.samba4* 2>/dev/null
-                rm -f build_dir/target-*/samba-*/.built 2>/dev/null
-                
-                if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                    sudo apt-get install -y python3-distutils python3-dev libpython3-dev 2>/dev/null || true
-                    
-                    find build_dir -name "samba-*" -type d 2>/dev/null | while read samba_dir; do
-                        rm -f "$samba_dir/.configured" 2>/dev/null
-                        log "    清理 samba 配置缓存: $samba_dir"
-                    done
-                fi
-                
-                log "  ✅ samba4 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 ath10k 错误
-            # ============================================
-            if grep -q "ath10k.*Error\|ath10k.*error:" "$log_file"; then
-                log "  ⚠️ 检测到 ath10k-ct 驱动编译错误，尝试修复..."
-                
-                find build_dir -type d -name "ath10k-ct*" 2>/dev/null | while read ath10k_dir; do
-                    log "    清理 ath10k 目录: $ath10k_dir"
-                    rm -rf "$ath10k_dir"
-                done
-                
-                if [ -f ".config" ]; then
-                    sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
-                    echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
-                    log "    已在配置中禁用 kmod-ath10k-ct"
-                fi
-                
-                log "  ✅ ath10k-ct 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 shortcut-fe 错误
-            # ============================================
-            if grep -q "shortcut-fe.*Error\|sfe.*error:" "$log_file"; then
-                log "  ⚠️ 检测到 shortcut-fe 驱动编译错误，尝试修复..."
-                
-                find build_dir -type d -name "shortcut-fe*" 2>/dev/null | while read sfe_dir; do
-                    log "    清理 shortcut-fe 目录: $sfe_dir"
-                    rm -rf "$sfe_dir"
-                done
-                
-                if [ -f ".config" ]; then
-                    sed -i '/CONFIG_PACKAGE_kmod-shortcut-fe=y/d' .config
-                    echo "# CONFIG_PACKAGE_kmod-shortcut-fe is not set" >> .config
-                    log "    已在配置中禁用 kmod-shortcut-fe"
-                fi
-                
-                log "  ✅ shortcut-fe 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 LEDE kmod 依赖问题
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                if grep -q "kmod.*is not selected\|kmod.*missing" "$log_file"; then
-                    log "  ⚠️ 检测到 LEDE kmod 依赖问题，尝试修复..."
-                    make defconfig > /tmp/lede_defconfig_fix.log 2>&1 || true
-                    log "  ✅ kmod 依赖修复完成"
-                fi
             fi
             
             # ============================================
@@ -6048,15 +5825,6 @@ EOF
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
-            fi
-            
-            # ============================================
-            # 检测 libssl 缺失
-            # ============================================
-            if grep -q "libssl was not found" "$log_file"; then
-                log "  ⚠️ 检测到 libssl 缺失，安装依赖..."
-                sudo apt-get update > /dev/null 2>&1 || true
-                sudo apt-get install -y libssl-dev > /dev/null 2>&1 || true
             fi
         fi
         
@@ -6095,7 +5863,7 @@ EOF
     echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
     echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
     
-    cat build_phase1_attempt*.log build_phase2.log > build.log
+    cat build_phase1_attempt*.log build_phase2.log > build.log 2>/dev/null || true
     
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
