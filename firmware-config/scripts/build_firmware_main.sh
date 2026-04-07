@@ -5541,41 +5541,107 @@ workflow_step25_build_firmware() {
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 对于 MT798x 源码，彻底禁用有问题的 ucode 相关包
+    # 对于 MT798x 源码，彻底禁用有问题的 ucode 和 lucihttp 相关包
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        log "🔧 [MT798x] 检测到 MT798x 源码，彻底禁用有问题的 ucode 相关包..."
+        log "🔧 [MT798x] 检测到 MT798x 源码，彻底禁用有问题的 ucode/lucihttp 相关包..."
         
-        # 删除 ucode-mod-html 源文件
+        # 1. 删除源文件目录
+        log "  🗑️ 删除有问题的源文件目录..."
+        
+        # 删除 ucode-mod-html
         if [ -d "package/feeds/luci/ucode-mod-html" ]; then
             rm -rf package/feeds/luci/ucode-mod-html
-            log "  🗑️ 删除 package/feeds/luci/ucode-mod-html"
+            log "    ✅ 删除 package/feeds/luci/ucode-mod-html"
         fi
         if [ -d "feeds/luci/ucode-mod-html" ]; then
             rm -rf feeds/luci/ucode-mod-html
-            log "  🗑️ 删除 feeds/luci/ucode-mod-html"
+            log "    ✅ 删除 feeds/luci/ucode-mod-html"
         fi
         
-        # 删除 lucihttp-ucode 相关文件
+        # 删除 lucihttp 中的 ucode 相关文件
         if [ -d "package/feeds/luci/lucihttp" ]; then
-            # 只删除 ucode 相关文件，保留 lucihttp 主包
             find package/feeds/luci/lucihttp -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
-            log "  🗑️ 删除 lucihttp 中的 ucode 相关文件"
+            log "    ✅ 清理 lucihttp 中的 ucode 文件"
+        fi
+        if [ -d "feeds/luci/lucihttp" ]; then
+            find feeds/luci/lucihttp -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
+            log "    ✅ 清理 feeds/luci/lucihttp 中的 ucode 文件"
         fi
         
-        # 在 .config 中禁用相关包
+        # 2. 在 .config 中禁用相关包
+        log "  📝 在 .config 中禁用相关包..."
         if [ -f ".config" ]; then
             sed -i '/CONFIG_PACKAGE_ucode-mod-html/d' .config
             sed -i '/CONFIG_PACKAGE_lucihttp-ucode/d' .config
             sed -i '/CONFIG_PACKAGE_luci-app-turboacc/d' .config
             echo "# CONFIG_PACKAGE_ucode-mod-html is not set" >> .config
             echo "# CONFIG_PACKAGE_lucihttp-ucode is not set" >> .config
-            log "  ✅ 已在配置中禁用 ucode-mod-html 和 lucihttp-ucode"
+            log "    ✅ 已禁用 ucode-mod-html 和 lucihttp-ucode"
         fi
         
-        # 重新运行 defconfig
+        # 3. 创建模拟的 ucode 头文件
+        log "  📁 创建模拟 ucode 头文件..."
+        for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
+            if [ -d "$inc_dir" ]; then
+                mkdir -p "$inc_dir/ucode"
+                cat > "$inc_dir/ucode/module.h" << 'EOF'
+#ifndef _UCODE_MODULE_H
+#define _UCODE_MODULE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct uc_vm uc_vm_t;
+typedef struct uc_value uc_value_t;
+typedef struct uc_resource_type uc_resource_type_t;
+
+#define EXCEPTION_NONE 0
+#define EXCEPTION_RUNTIME 1
+#define EXCEPTION_SYNTAX 2
+#define EXCEPTION_LIMIT 3
+
+#define UC_STRING 1
+#define UC_NUMBER 2
+#define UC_BOOLEAN 3
+#define UC_NULL 4
+#define UC_ARRAY 5
+#define UC_OBJECT 6
+
+uc_vm_t *uc_vm_new(void);
+void uc_vm_destroy(uc_vm_t *vm);
+void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
+void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
+int uc_vm_call(uc_vm_t *vm, int argc, int flags);
+int uc_vm_call(uc_vm_t *vm, bool unused, int argc, ...);
+uc_value_t *ucv_get(void *ptr);
+uc_value_t *ucv_string(const char *str);
+uc_value_t *ucv_number(double num);
+uc_value_t *ucv_boolean(int val);
+uc_value_t *ucv_null(void);
+uc_value_t *ucv_array_new(void);
+uc_value_t *ucv_object_new(void);
+void ucv_put(uc_value_t *val);
+int ucv_type(uc_value_t *val);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+EOF
+                log "    ✅ 创建 $inc_dir/ucode/module.h"
+            fi
+        done
+        
+        # 4. 重新运行 defconfig
         make defconfig > /tmp/build-logs/defconfig_disable_ucode.log 2>&1 || true
-        log "  ✅ ucode 相关包已彻底禁用"
+        log "  ✅ ucode/lucihttp 相关包已彻底禁用"
     fi
     
     log "🔧 创建双固件保护脚本..."
@@ -5729,26 +5795,30 @@ EOF
         
         if [ -f "$log_file" ]; then
             # ============================================
-            # 检测 ucode-mod-html 错误并修复（仅 MT798x）
+            # 检测 lucihttp/ucode 错误并修复（仅 MT798x）
             # ============================================
             if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                if grep -q "ucode-mod-html" "$log_file" || grep -q "lucihttp-ucode" "$log_file"; then
-                    log "  ⚠️ [MT798x] 检测到 ucode-mod-html 编译错误，正在彻底禁用..."
+                if grep -q "lucihttp" "$log_file" || grep -q "ucode" "$log_file"; then
+                    log "  ⚠️ [MT798x] 检测到 lucihttp/ucode 编译错误，正在彻底禁用..."
                     
-                    # 彻底删除 ucode-mod-html
+                    # 彻底删除相关目录
+                    find . -type d -name "lucihttp" -exec rm -rf {} \; 2>/dev/null || true
                     find . -type d -name "ucode-mod-html" -exec rm -rf {} \; 2>/dev/null || true
-                    find . -type d -name "*ucode*html*" -exec rm -rf {} \; 2>/dev/null || true
+                    find . -type d -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
                     
                     # 清理构建目录
-                    rm -rf build_dir/target-*/ucode-mod-html* 2>/dev/null || true
-                    rm -rf staging_dir/target-*/.stamp_ucode* 2>/dev/null || true
+                    rm -rf build_dir/target-*/lucihttp* 2>/dev/null || true
+                    rm -rf build_dir/target-*/ucode* 2>/dev/null || true
                     
                     # 再次在 .config 中禁用
-                    sed -i '/CONFIG_PACKAGE_ucode-mod-html/d' .config
+                    sed -i '/CONFIG_PACKAGE_lucihttp/d' .config
+                    sed -i '/CONFIG_PACKAGE_ucode/d' .config
+                    echo "# CONFIG_PACKAGE_lucihttp is not set" >> .config
+                    echo "# CONFIG_PACKAGE_lucihttp-ucode is not set" >> .config
                     echo "# CONFIG_PACKAGE_ucode-mod-html is not set" >> .config
                     
                     make defconfig > /tmp/build-logs/defconfig_remove_ucode.log 2>&1 || true
-                    log "  ✅ [MT798x] ucode-mod-html 已彻底禁用"
+                    log "  ✅ [MT798x] lucihttp/ucode 相关包已彻底禁用"
                 fi
             fi
             
