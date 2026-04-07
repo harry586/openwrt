@@ -28,8 +28,8 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic bcm47189"
 DEVICES["asus_rt-ac42u"]="ipq40xx generic bcm47189"
-DEVICES["cmcc_rax3000m"]="mediatek filogic mt7981"
-DEVICES["cmcc_rax3000m-nand"]="mediatek filogic mt7981"
+DEVICES["cmcc_rax3000m"]="mediatek mt7981 mt7981"
+DEVICES["cmcc_rax3000m-nand"]="mediatek mt7981 mt7981"
 DEVICES["netgear_wndr3800"]="ath79 generic ar7161"
 #【support.sh-03-end】
 
@@ -681,7 +681,7 @@ full_config_process() {
             converted_device="cmcc_rax3000m"
             log "🔧 设备名转换: $device_name -> $converted_device (使用 DTS overlay)"
             ;;
-        ac42u)
+        ac42u|rt-ac42u)
             converted_device="asus_rt-ac42u"
             log "🔧 设备名转换: $device_name -> $converted_device"
             ;;
