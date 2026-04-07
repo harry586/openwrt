@@ -5249,31 +5249,51 @@ workflow_step23_pre_build_check() {
     # 根据源码类型确定设备配置格式（仅 MT798x 特殊处理）
     # ============================================
     local expected_config=""
+    local search_pattern=""
     
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
         # MT798x 源码特殊处理
         if [ "$TARGET" = "mediatek" ]; then
             expected_config="CONFIG_TARGET_mediatek_mt7986_DEVICE_${DEVICE}=y"
+            search_pattern="CONFIG_TARGET_mediatek_mt7986_DEVICE_${DEVICE}"
             log "🔧 [MT798x] mediatek平台，期望配置: $expected_config"
         else
             expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+            search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
             log "🔧 [MT798x] 其他平台，期望配置: $expected_config"
         fi
     else
         # 非 MT798x 源码，使用标准格式
         expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+        search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
         log "🔧 标准格式，期望配置: $expected_config"
     fi
     
-    if ! grep -q "^${expected_config}$" .config; then
-        log "⚠️ 设备配置丢失，重新添加: $expected_config"
+    # 检查设备配置是否存在（支持 =y 或 is not set 两种形式）
+    local config_exists=0
+    if grep -q "^${expected_config}$" .config 2>/dev/null; then
+        config_exists=1
+    elif grep -q "^${search_pattern}=y" .config 2>/dev/null; then
+        config_exists=1
+        expected_config=$(grep "^${search_pattern}=y" .config | head -1)
+    elif grep -q "^# ${search_pattern} is not set" .config 2>/dev/null; then
+        config_exists=1
+        # 如果被禁用，需要启用它
+        log "⚠️ 设备配置被禁用，正在启用..."
+        sed -i "/^# ${search_pattern} is not set/d" .config
+        echo "${search_pattern}=y" >> .config
+        config_exists=0
+    fi
+    
+    if [ $config_exists -eq 0 ]; then
+        log "⚠️ 设备配置丢失，重新添加: ${search_pattern}=y"
         
         # 删除所有同平台的设备配置
         sed -i "/^CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         sed -i "/^# CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         
         # 添加正确的设备配置
-        echo "${expected_config}" >> .config
+        echo "${search_pattern}=y" >> .config
         
         # 去重
         sort -u .config > .config.tmp
@@ -5322,18 +5342,23 @@ workflow_step23_pre_build_check() {
         
         # 直接使用 DEVICE 变量的值检查
         local device_for_check="$DEVICE"
-        local check_config=""
+        local check_pattern=""
         
         if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
-            check_config="CONFIG_TARGET_mediatek_mt7986_DEVICE_${device_for_check}=y"
+            check_pattern="CONFIG_TARGET_mediatek_mt7986_DEVICE_${device_for_check}"
         else
-            check_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}=y"
+            check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
         fi
         
-        if grep -q "^${check_config}$" .config; then
-            echo "   ✅ 设备配置正确: $check_config"
+        if grep -q "^${check_pattern}=y" .config; then
+            echo "   ✅ 设备配置正确: $(grep "^${check_pattern}=y" .config | head -1)"
+        elif grep -q "^# ${check_pattern} is not set" .config; then
+            echo "   ⚠️ 设备配置被禁用，尝试自动修复..."
+            sed -i "/^# ${check_pattern} is not set/d" .config
+            echo "${check_pattern}=y" >> .config
+            echo "   ✅ 已重新启用设备配置"
         else
-            echo "   ❌ 设备配置可能不正确，未找到: $check_config"
+            echo "   ❌ 设备配置可能不正确，未找到: ${check_pattern}"
             error_count=$((error_count + 1))
         fi
     else
@@ -5501,35 +5526,22 @@ workflow_step25_build_firmware() {
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 预编译 ucode 基础包（修复头文件缺失问题）- 仅适用于有 ucode 的源码
+    # 对于 MT798x 源码，禁用有问题的 ucode 相关包
     # ============================================
-    log "🔧 预编译 ucode 基础包（修复 ucode 头文件缺失）..."
-    
-    # 检查是否存在 ucode 包
-    local has_ucode=0
-    if [ -d "feeds/luci/ucode" ] || [ -d "package/feeds/luci/ucode" ]; then
-        has_ucode=1
-        log "  ✅ 发现 ucode 包"
-    else
-        log "  ℹ️ 未发现 ucode 包，跳过 ucode 预编译"
-    fi
-    
-    if [ $has_ucode -eq 1 ]; then
-        # 安装 ucode 相关包（静默模式，避免过多输出）
-        ./scripts/feeds install ucode 2>/dev/null || true
-        ./scripts/feeds install ucode-mod-html 2>/dev/null || true
-        ./scripts/feeds install ucode-mod-ucode 2>/dev/null || true
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+        log "🔧 [MT798x] 检测到 MT798x 源码，禁用有问题的 ucode 相关包..."
         
-        # 先编译 ucode 基础包
-        log "  📦 编译 ucode 基础包..."
-        if make package/feeds/luci/ucode/compile -j1 V=s > /tmp/ucode_compile.log 2>&1; then
-            log "  ✅ ucode 编译成功"
-        else
-            log "  ⚠️ ucode 编译失败，将创建模拟头文件"
+        # 在配置中禁用 ucode-mod-html 和 lucihttp-ucode
+        if [ -f ".config" ]; then
+            sed -i '/CONFIG_PACKAGE_ucode-mod-html/d' .config
+            sed -i '/CONFIG_PACKAGE_lucihttp-ucode/d' .config
+            echo "# CONFIG_PACKAGE_ucode-mod-html is not set" >> .config
+            echo "# CONFIG_PACKAGE_lucihttp-ucode is not set" >> .config
+            log "  ✅ 已禁用 ucode-mod-html 和 lucihttp-ucode"
         fi
         
-        # 创建 ucode 头文件
-        log "  📁 创建 ucode 头文件..."
+        # 创建完整的 ucode 头文件
+        log "  📁 创建完整的 ucode 头文件..."
         for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
             if [ -d "$inc_dir" ]; then
                 mkdir -p "$inc_dir/ucode"
@@ -5540,27 +5552,70 @@ workflow_step25_build_firmware() {
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Opaque types */
 typedef struct uc_vm uc_vm_t;
 typedef struct uc_value uc_value_t;
 typedef struct uc_resource_type uc_resource_type_t;
 
+/* String buffer type */
+typedef struct uc_stringbuf uc_stringbuf_t;
+
+/* Exception types */
 #define EXCEPTION_RUNTIME 1
 #define EXCEPTION_SYNTAX 2
 #define EXCEPTION_LIMIT 3
 
+/* VM functions */
 uc_vm_t *uc_vm_new(void);
 void uc_vm_destroy(uc_vm_t *vm);
 void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
 void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
-uc_value_t *ucv_get(void *ptr);
 int uc_vm_call(uc_vm_t *vm, uc_value_t *func, int argc);
+
+/* Value functions */
+uc_value_t *ucv_get(void *ptr);
+uc_value_t *ucv_string(const char *str);
+uc_value_t *ucv_number(double num);
+uc_value_t *ucv_boolean(int val);
+uc_value_t *ucv_null(void);
+uc_value_t *ucv_array_new(void);
+uc_value_t *ucv_object_new(void);
+void ucv_put(uc_value_t *val);
+
+/* String buffer functions */
+uc_stringbuf_t *uc_stringbuf_new(void);
+void uc_stringbuf_free(uc_stringbuf_t *buf);
+void uc_stringbuf_add(uc_stringbuf_t *buf, const char *str, size_t len);
+void uc_stringbuf_addc(uc_stringbuf_t *buf, char c);
+void uc_stringbuf_addutf8(uc_stringbuf_t *buf, unsigned int code);
+const char *uc_stringbuf_get(uc_stringbuf_t *buf);
+size_t uc_stringbuf_len(uc_stringbuf_t *buf);
+void uc_stringbuf_clear(uc_stringbuf_t *buf);
+
+/* Resource type functions */
+uc_resource_type_t *uc_resource_type_new(uc_vm_t *vm, const char *name,
+    void (*dtor)(uc_vm_t *, uc_value_t *),
+    void (*gc)(uc_vm_t *, uc_value_t *));
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 EOF
+                log "  ✅ 创建 $inc_dir/ucode/module.h"
             fi
         done
-        log "  ✅ ucode 头文件创建完成"
+        
+        # 重新运行 defconfig 使禁用生效
+        make defconfig > /tmp/build-logs/defconfig_disable_ucode.log 2>&1 || true
+        log "  ✅ ucode 相关包已禁用"
     fi
     
     log "🔧 创建双固件保护脚本..."
@@ -5665,7 +5720,6 @@ EOF
     # ============================================
     log "🔧 预删除已知有问题的补丁..."
     
-    # 删除 ipq40xx 问题补丁
     local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
     if [ -d "$problem_patches_dir" ]; then
         local problem_patches=(
@@ -5715,12 +5769,34 @@ EOF
         
         if [ -f "$log_file" ]; then
             # ============================================
+            # 检测 ucode 相关错误并修复（仅 MT798x 特殊处理）
+            # ============================================
+            if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+                if grep -q "ucode" "$log_file" || grep -q "lucihttp" "$log_file"; then
+                    log "  ⚠️ [MT798x] 检测到 ucode/lucihttp 错误，尝试禁用相关包..."
+                    
+                    # 强制禁用有问题的包
+                    sed -i '/CONFIG_PACKAGE_ucode-mod-html/d' .config
+                    sed -i '/CONFIG_PACKAGE_lucihttp-ucode/d' .config
+                    sed -i '/CONFIG_PACKAGE_lucihttp/d' .config
+                    echo "# CONFIG_PACKAGE_ucode-mod-html is not set" >> .config
+                    echo "# CONFIG_PACKAGE_lucihttp-ucode is not set" >> .config
+                    
+                    # 清理构建目录
+                    rm -rf build_dir/target-*/ucode-mod-html* 2>/dev/null || true
+                    rm -rf build_dir/target-*/lucihttp* 2>/dev/null || true
+                    
+                    make defconfig > /tmp/build-logs/defconfig_fix_ucode.log 2>&1 || true
+                    log "  ✅ [MT798x] ucode/lucihttp 包已禁用"
+                fi
+            fi
+            
+            # ============================================
             # 检测补丁失败并自动删除问题补丁
             # ============================================
             if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
                 log "  ⚠️ 检测到补丁失败，正在自动修复..."
                 
-                # 提取失败的补丁名
                 local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
                 
                 if [ -z "$failed_patches" ]; then
@@ -5728,7 +5804,6 @@ EOF
                 fi
                 
                 for patch_name in $failed_patches; do
-                    # 在多个可能的目录中查找补丁
                     local found=0
                     for patch_dir in target/linux/*/patches-*; do
                         if [ -f "$patch_dir/$patch_name" ]; then
@@ -5746,58 +5821,16 @@ EOF
                     fi
                 done
                 
-                # 特别处理 ipq40xx 的 mmc 补丁
                 local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
                 if [ -f "$ipq40xx_patch" ]; then
                     log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
                     rm -f "$ipq40xx_patch"
                 fi
                 
-                # 清理内核构建目录
-                log "    🔄 清理内核构建目录..."
                 rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
                 rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
                 
                 log "  ✅ 补丁修复完成，将重试编译"
-            fi
-            
-            # ============================================
-            # 检测 ucode 相关错误并修复
-            # ============================================
-            if grep -q "ucode/module.h" "$log_file" || grep -q "fatal error: ucode" "$log_file"; then
-                log "  ⚠️ 检测到 ucode 头文件缺失错误，正在修复..."
-                
-                # 创建头文件
-                find staging_dir -type d -name "include" 2>/dev/null | while read inc_dir; do
-                    mkdir -p "$inc_dir/ucode"
-                    cat > "$inc_dir/ucode/module.h" << 'EOF'
-#ifndef _UCODE_MODULE_H
-#define _UCODE_MODULE_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-
-typedef struct uc_vm uc_vm_t;
-typedef struct uc_value uc_value_t;
-typedef struct uc_resource_type uc_resource_type_t;
-
-#define EXCEPTION_RUNTIME 1
-#define EXCEPTION_SYNTAX 2
-#define EXCEPTION_LIMIT 3
-
-uc_vm_t *uc_vm_new(void);
-void uc_vm_destroy(uc_vm_t *vm);
-void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
-void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
-uc_value_t *ucv_get(void *ptr);
-int uc_vm_call(uc_vm_t *vm, uc_value_t *func, int argc);
-
-#endif
-EOF
-                done
-                
-                log "  ✅ ucode 头文件修复完成"
             fi
             
             # ============================================
