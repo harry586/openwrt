@@ -5538,18 +5538,30 @@ workflow_step25_build_firmware() {
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 [LEDE] 检测到 LEDE 源码，执行特殊预处理..."
         
-        # 删除有问题的 vsftpd-alt 包（避免依赖冲突）
+        # 1. 删除有问题的 vsftpd-alt 包（避免依赖冲突）
         find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
         find . -type d -name "*vsftpd*" -path "*/vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
         
-        # 在 .config 中禁用 vsftpd-alt
+        # 2. 在 .config 中禁用 vsftpd-alt
         if [ -f ".config" ]; then
             sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
             echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
         fi
         
-        # 重新安装 feeds
+        # 3. 重新安装 feeds
         ./scripts/feeds install -a > /tmp/feeds_install_lede.log 2>&1 || true
+        
+        # 4. 预编译可能缺失的依赖包（解决 package/install 依赖问题）
+        log "  📦 预编译 LEDE 依赖包..."
+        
+        # 编译 liblua
+        make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_compile.log 2>&1 || true
+        
+        # 编译 luci-lib-fs
+        make package/feeds/luci/luci-lib-fs/compile -j1 V=s > /tmp/luci_lib_fs_compile.log 2>&1 || true
+        
+        # 编译 rpcd
+        make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_compile.log 2>&1 || true
         
         log "  ✅ LEDE 预处理完成"
     fi
@@ -5717,6 +5729,14 @@ EOF
                 
                 # 重新安装 feeds
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+                
+                # LEDE 源码额外处理：预编译缺失的依赖
+                if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                    log "  🔧 [LEDE] 预编译缺失的依赖包..."
+                    make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_retry.log 2>&1 || true
+                    make package/feeds/luci/luci-lib-fs/compile -j1 V=s > /tmp/luci_lib_fs_retry.log 2>&1 || true
+                    make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_retry.log 2>&1 || true
+                fi
                 
                 log "  ✅ package/install 错误修复完成"
             fi
