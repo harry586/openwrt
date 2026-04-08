@@ -883,13 +883,25 @@ src-git telephony https://github.com/openwrt/telephony.git;$branch_suffix
 EOF
             ;;
         "immortalwrt-mt798x")
-            log "🔧 ImmortalWrt MT798x源码模式: 使用MT798x专用feeds"
-            cat >> feeds.conf.default << 'EOF'
+            log "🔧 ImmortalWrt MT798x源码模式: 使用旧版 feeds (兼容 21.02)"
+            # 对于 21.02 分支，需要使用旧版本的 feeds 避免 ucode 依赖
+            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
+                cat >> feeds.conf.default << 'EOF'
+src-git packages https://github.com/immortalwrt/packages.git;openwrt-21.02
+src-git luci https://github.com/immortalwrt/luci.git;openwrt-21.02
+src-git routing https://github.com/openwrt/routing.git;openwrt-21.02
+src-git telephony https://github.com/openwrt/telephony.git;openwrt-21.02
+EOF
+                log "  ✅ 使用 21.02 兼容的 feeds 源"
+            else
+                cat >> feeds.conf.default << 'EOF'
 src-git packages https://github.com/immortalwrt/packages.git;openwrt-23.05
 src-git luci https://github.com/immortalwrt/luci.git;openwrt-23.05
 src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
 src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
 EOF
+                log "  ✅ 使用 23.05 兼容的 feeds 源"
+            fi
             ;;
         *)
             log "⚠️ 未知源码类型，使用通用feeds配置"
@@ -902,9 +914,10 @@ EOF
             ;;
     esac
     
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+    # 只有非 MT798x 源码才添加 TurboACC
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "immortalwrt-mt798x" ]; then
         case "$SOURCE_REPO_TYPE" in
-            "immortalwrt"|"lede"|"immortalwrt-mt798x")
+            "immortalwrt"|"lede")
                 echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
                 log "✅ 添加TurboACC feed"
                 ;;
@@ -941,6 +954,17 @@ EOF
             log "  🗑️ 删除 package 目录: $dir"
             rm -rf "$dir"
         done
+    fi
+    
+    # 对于 MT798x 源码，删除所有 ucode 相关包
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+        log "🔧 MT798x源码：删除所有 ucode 相关包"
+        
+        find package/feeds -type d -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
+        find feeds -type d -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
+        find package -type d -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
+        
+        log "  ✅ 已删除所有 ucode 相关包"
     fi
     
     log "=== 安装Feeds ==="
