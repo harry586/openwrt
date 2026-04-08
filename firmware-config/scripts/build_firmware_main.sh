@@ -5566,71 +5566,40 @@ workflow_step25_build_firmware() {
     
     # ============================================
     # 对于 MT798x 源码 21.02 分支，彻底禁用所有 ucode 相关包
+    # 仅在选择 immortalwrt-mt798x 源码时生效
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        log "🔧 [MT798x] 检测到 MT798x 源码 21.02 分支，彻底禁用所有 ucode 相关包..."
+        log "🔧 [MT798x] 检测到 MT798x 源码，彻底禁用所有 ucode 相关包..."
         
         # 1. 删除所有 ucode 相关的源文件目录
         log "  🗑️ 删除所有 ucode 相关源文件目录..."
-        
-        # 删除 ucode-mod-html
-        find . -type d -name "ucode-mod-html" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 ucode-mod-lua (新出现的)
-        find . -type d -name "ucode-mod-lua" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 ucode-mod-js
-        find . -type d -name "ucode-mod-js" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 ucode-mod-ubus
-        find . -type d -name "ucode-mod-ubus" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 ucode-mod-fs
-        find . -type d -name "ucode-mod-fs" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 ucode-mod-rtnl
-        find . -type d -name "ucode-mod-rtnl" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 ucode-mod-ulog
-        find . -type d -name "ucode-mod-ulog" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 lucihttp 中的 ucode 相关文件
+        find . -type d -name "ucode*" -exec rm -rf {} \; 2>/dev/null || true
+        find . -type d -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
         find . -type d -name "lucihttp" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 rpcd-mod-luci (依赖 ucode)
         find . -type d -name "rpcd-mod-luci" -exec rm -rf {} \; 2>/dev/null || true
-        
         log "    ✅ 已删除所有 ucode 相关源文件"
         
         # 2. 在 .config 中禁用所有 ucode 相关包
         log "  📝 在 .config 中禁用所有 ucode 相关包..."
         if [ -f ".config" ]; then
-            # 禁用所有 ucode 开头的包
             sed -i '/CONFIG_PACKAGE_ucode/d' .config
-            # 禁用 lucihttp-ucode
             sed -i '/CONFIG_PACKAGE_lucihttp-ucode/d' .config
-            # 禁用 rpcd-mod-luci
             sed -i '/CONFIG_PACKAGE_rpcd-mod-luci/d' .config
-            # 禁用 swconfig (之前也出过错)
-            sed -i '/CONFIG_PACKAGE_swconfig/d' .config
-            
-            # 添加禁用的配置
             echo "# CONFIG_PACKAGE_ucode is not set" >> .config
             echo "# CONFIG_PACKAGE_ucode-mod-html is not set" >> .config
             echo "# CONFIG_PACKAGE_ucode-mod-lua is not set" >> .config
-            echo "# CONFIG_PACKAGE_ucode-mod-js is not set" >> .config
-            echo "# CONFIG_PACKAGE_ucode-mod-ubus is not set" >> .config
-            echo "# CONFIG_PACKAGE_ucode-mod-fs is not set" >> .config
-            echo "# CONFIG_PACKAGE_ucode-mod-rtnl is not set" >> .config
-            echo "# CONFIG_PACKAGE_ucode-mod-ulog is not set" >> .config
             echo "# CONFIG_PACKAGE_lucihttp-ucode is not set" >> .config
             echo "# CONFIG_PACKAGE_rpcd-mod-luci is not set" >> .config
-            echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-            
             log "    ✅ 已禁用所有 ucode 相关包"
         fi
         
-        # 3. 创建模拟的 ucode 头文件（防止依赖检查失败）
+        # 3. 删除其他有问题的包
+        log "  🗑️ 删除其他有问题的包..."
+        find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
+        find . -type d -name "luci-app-turboacc" -exec rm -rf {} \; 2>/dev/null || true
+        log "    ✅ 已删除 swconfig 和 luci-app-turboacc"
+        
+        # 4. 创建模拟的 ucode 头文件
         log "  📁 创建模拟 ucode 头文件..."
         for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
             if [ -d "$inc_dir" ]; then
@@ -5642,10 +5611,6 @@ workflow_step25_build_firmware() {
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 typedef struct uc_vm uc_vm_t;
 typedef struct uc_value uc_value_t;
@@ -5679,28 +5644,14 @@ uc_value_t *ucv_object_new(void);
 void ucv_put(uc_value_t *val);
 int ucv_type(uc_value_t *val);
 
-#ifdef __cplusplus
-}
-#endif
-
 #endif
 EOF
-                log "    ✅ 创建 $inc_dir/ucode/module.h"
             fi
         done
-        
-        # 4. 清理构建目录中残留的 ucode 构建文件
-        log "  🧹 清理构建目录中残留的 ucode 文件..."
-        rm -rf build_dir/target-*/ucode* 2>/dev/null || true
-        rm -rf build_dir/target-*/lucihttp* 2>/dev/null || true
-        rm -rf build_dir/target-*/rpcd-mod-luci* 2>/dev/null || true
-        rm -rf staging_dir/target-*/.stamp_ucode* 2>/dev/null || true
-        rm -rf staging_dir/target-*/.stamp_lucihttp* 2>/dev/null || true
-        rm -rf staging_dir/target-*/.stamp_rpcd* 2>/dev/null || true
-        log "    ✅ 清理完成"
+        log "    ✅ 模拟头文件创建完成"
         
         # 5. 重新运行 defconfig
-        make defconfig > /tmp/build-logs/defconfig_disable_all_ucode.log 2>&1 || true
+        make defconfig > /tmp/build-logs/defconfig_disable_ucode.log 2>&1 || true
         log "  ✅ 所有 ucode 相关包已彻底禁用"
     fi
     
@@ -5802,26 +5753,28 @@ EOF
     fi
     
     # ============================================
-    # 预删除已知有问题的补丁
+    # 预删除已知有问题的补丁（仅 MT798x 源码）
     # ============================================
-    log "🔧 预删除已知有问题的补丁..."
-    
-    local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
-    if [ -d "$problem_patches_dir" ]; then
-        local problem_patches=(
-            "401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-        )
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+        log "🔧 [MT798x] 预删除已知有问题的补丁..."
         
-        for patch in "${problem_patches[@]}"; do
-            if [ -f "$problem_patches_dir/$patch" ]; then
-                log "  🗑️ 预删除补丁: $patch"
-                rm -f "$problem_patches_dir/$patch"
-            fi
-        done
+        local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
+        if [ -d "$problem_patches_dir" ]; then
+            local problem_patches=(
+                "401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+            )
+            
+            for patch in "${problem_patches[@]}"; do
+                if [ -f "$problem_patches_dir/$patch" ]; then
+                    log "  🗑️ 预删除补丁: $patch"
+                    rm -f "$problem_patches_dir/$patch"
+                fi
+            done
+        fi
     fi
     
     # ============================================
-    # 编译循环 - 自动检测并修复失败
+    # 编译循环 - 自动检测并修复失败（仅 MT798x 源码执行特殊修复）
     # ============================================
     local max_attempts=3
     local attempt=1
@@ -5855,32 +5808,47 @@ EOF
         
         if [ -f "$log_file" ]; then
             # ============================================
-            # 检测任何 ucode 相关错误并自动修复
+            # 检测 package/install Error 255 并修复（仅 MT798x 源码）
+            # ============================================
+            if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+                if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
+                    log "  ⚠️ [MT798x] 检测到 package/install 错误 (Error 255)，正在修复..."
+                    
+                    # 删除可能损坏的包安装标记
+                    rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
+                    rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
+                    rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
+                    
+                    # 删除 ipkg 缓存
+                    find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
+                    
+                    # 清理 tmp 目录
+                    rm -rf tmp/info/.packageinfo-* 2>/dev/null || true
+                    
+                    # 重新运行 defconfig
+                    make defconfig > /tmp/build-logs/defconfig_fix_install.log 2>&1 || true
+                    
+                    log "  ✅ [MT798x] package/install 错误修复完成，将重试"
+                fi
+            fi
+            
+            # ============================================
+            # 检测任何 ucode 相关错误并自动修复（仅 MT798x 源码）
             # ============================================
             if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
                 if grep -q "ucode" "$log_file" || grep -q "lucihttp" "$log_file" || grep -q "rpcd-mod-luci" "$log_file"; then
                     log "  ⚠️ [MT798x] 检测到 ucode 相关编译错误，正在自动修复..."
                     
-                    # 再次删除所有 ucode 相关目录
                     find . -type d -name "ucode*" -exec rm -rf {} \; 2>/dev/null || true
                     find . -type d -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
                     find . -type d -name "lucihttp" -exec rm -rf {} \; 2>/dev/null || true
                     find . -type d -name "rpcd-mod-luci" -exec rm -rf {} \; 2>/dev/null || true
                     
-                    # 清理构建目录
                     rm -rf build_dir/target-*/ucode* 2>/dev/null || true
                     rm -rf build_dir/target-*/lucihttp* 2>/dev/null || true
-                    rm -rf build_dir/target-*/rpcd-mod-luci* 2>/dev/null || true
                     
-                    # 再次在 .config 中禁用
                     sed -i '/CONFIG_PACKAGE_ucode/d' .config
-                    sed -i '/CONFIG_PACKAGE_lucihttp-ucode/d' .config
-                    sed -i '/CONFIG_PACKAGE_rpcd-mod-luci/d' .config
                     echo "# CONFIG_PACKAGE_ucode is not set" >> .config
-                    echo "# CONFIG_PACKAGE_ucode-mod-html is not set" >> .config
-                    echo "# CONFIG_PACKAGE_ucode-mod-lua is not set" >> .config
-                    echo "# CONFIG_PACKAGE_lucihttp-ucode is not set" >> .config
-                    echo "# CONFIG_PACKAGE_rpcd-mod-luci is not set" >> .config
                     
                     make defconfig > /tmp/build-logs/defconfig_auto_fix_ucode.log 2>&1 || true
                     log "  ✅ [MT798x] ucode 相关包已自动禁用"
@@ -5888,7 +5856,7 @@ EOF
             fi
             
             # ============================================
-            # 检测 swconfig 错误并修复
+            # 检测 swconfig 错误并修复（仅 MT798x 源码）
             # ============================================
             if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
                 if grep -q "swconfig" "$log_file" || grep -q "SWITCH_LINK_FLAG" "$log_file"; then
@@ -5906,7 +5874,7 @@ EOF
             fi
             
             # ============================================
-            # 检测补丁失败并自动删除问题补丁
+            # 检测补丁失败并自动删除问题补丁（所有源码通用）
             # ============================================
             if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
                 log "  ⚠️ 检测到补丁失败，正在自动修复..."
@@ -5935,10 +5903,13 @@ EOF
                     fi
                 done
                 
-                local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                if [ -f "$ipq40xx_patch" ]; then
-                    log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
-                    rm -f "$ipq40xx_patch"
+                # 仅 MT798x 源码删除 ipq40xx 补丁
+                if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+                    local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+                    if [ -f "$ipq40xx_patch" ]; then
+                        log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
+                        rm -f "$ipq40xx_patch"
+                    fi
                 fi
                 
                 rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
@@ -5948,26 +5919,7 @@ EOF
             fi
             
             # ============================================
-            # 检测 package/install 错误
-            # ============================================
-            if grep -q "package/install.*Error 255\|package/install.*Error" "$log_file"; then
-                log "  ⚠️ 检测到 package/install 错误，尝试修复..."
-                
-                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
-                rm -f tmp/info/.packageinfo-* 2>/dev/null
-                
-                find build_dir -type d -name "ipkg-*" 2>/dev/null | while read ipkg_dir; do
-                    log "    清理 ipkg 目录: $ipkg_dir"
-                    rm -rf "$ipkg_dir"
-                done
-                
-                log "  ✅ package/install 错误修复完成"
-            fi
-            
-            # ============================================
-            # 检测 Broken pipe 错误
+            # 检测 Broken pipe 错误（所有源码通用）
             # ============================================
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
