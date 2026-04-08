@@ -1621,11 +1621,13 @@ generate_config() {
     
     # ============================================
     # 根据源码类型确定设备配置变量格式
+    # 仅 immortalwrt-mt798x 源码使用特殊格式
     # ============================================
     local device_config=""
     local platform_sub=""
     
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
+        # MT798x 源码特殊处理：使用 mt7981 子平台
         local mk_file=""
         for mkf in target/linux/mediatek/image/*.mk; do
             if [ -f "$mkf" ] && grep -q "define Device.*$correct_device" "$mkf" 2>/dev/null; then
@@ -1643,10 +1645,8 @@ generate_config() {
             device_config="CONFIG_TARGET_mediatek_mt7981_DEVICE_${correct_device}=y"
             log "🔧 [MT798x] 未找到设备定义文件，使用默认 mt7981 格式: $device_config"
         fi
-    elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
-        device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
-        log "🔧 [MT798x] ipq40xx平台，使用标准格式: $device_config"
     else
+        # 非 MT798x 源码（immortalwrt、openwrt、lede）使用标准格式
         device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
         log "🔧 标准设备配置格式: $device_config"
     fi
@@ -1756,9 +1756,6 @@ EOF
         done
     fi
     
-    # ============================================
-    # 对于 MT798x 源码，禁用有问题的 swconfig（不影响 Luci）
-    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
         log "🔧 [MT798x] 禁用有问题的 swconfig..."
         echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
@@ -1770,13 +1767,11 @@ EOF
         log "✅ TCP BBR已启用"
     fi
     
-    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
+    if [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         log "✅ TurboACC已启用"
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-    elif [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
@@ -5247,9 +5242,6 @@ workflow_step23_pre_build_check() {
     
     cd $BUILD_DIR
     
-    # ============================================
-    # 在检查前，确保设备配置存在
-    # ============================================
     log "🔧 确保设备配置存在..."
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -5257,15 +5249,11 @@ workflow_step23_pre_build_check() {
         log "✅ 加载环境变量: DEVICE=$DEVICE, TARGET=$TARGET"
     fi
     
-    # ============================================
-    # 根据源码类型和设备定义文件确定设备配置格式
-    # ============================================
     local expected_config=""
     local search_pattern=""
     local platform_sub=""
     
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
-        # 从 mk 文件中提取正确的子平台名称
         local mk_file=""
         for mkf in target/linux/mediatek/image/*.mk; do
             if [ -f "$mkf" ] && grep -q "define Device.*$DEVICE" "$mkf" 2>/dev/null; then
@@ -5285,17 +5273,12 @@ workflow_step23_pre_build_check() {
             search_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${DEVICE}"
             log "🔧 [MT798x] 未找到设备定义文件，使用默认 mt7981 格式"
         fi
-    elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
-        expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-        search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
-        log "🔧 [MT798x] ipq40xx平台，期望配置: $expected_config"
     else
         expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
         search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
         log "🔧 标准格式，期望配置: $expected_config"
     fi
     
-    # 检查设备配置是否存在
     local config_exists=0
     if grep -q "^${expected_config}$" .config 2>/dev/null; then
         config_exists=1
@@ -5361,7 +5344,6 @@ workflow_step23_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        # 直接使用 DEVICE 变量的值检查
         local device_for_check="$DEVICE"
         local check_pattern=""
         
@@ -5371,8 +5353,6 @@ workflow_step23_pre_build_check() {
             else
                 check_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${device_for_check}"
             fi
-        elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
-            check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
         else
             check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
         fi
@@ -5698,34 +5678,48 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            if grep -q "swconfig" "$log_file" || grep -q "SWITCH_LINK_FLAG" "$log_file"; then
-                log "  ⚠️ 检测到 swconfig 编译错误，正在彻底禁用..."
-                
-                find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-                sed -i '/CONFIG_PACKAGE_swconfig/d' .config
-                echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-                
-                rm -rf build_dir/target-*/swconfig* 2>/dev/null || true
-                
-                make defconfig > /tmp/build-logs/defconfig_fix_swconfig.log 2>&1 || true
-                log "  ✅ swconfig 已彻底禁用"
-            fi
-            
+            # ============================================
+            # 全局通用：检测 package/install Error 255 并修复
+            # ============================================
             if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误 (Error 255)，正在修复..."
                 
+                # 删除可能损坏的包安装标记
                 rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
                 rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
                 rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
                 rm -f tmp/info/.packageinfo-* 2>/dev/null
                 
+                # 删除 ipkg 缓存
                 find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
                 
+                # 重新安装 feeds（适用于所有源码）
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 
                 log "  ✅ package/install 错误修复完成"
             fi
             
+            # ============================================
+            # MT798x 专用：检测 swconfig 错误并修复
+            # ============================================
+            if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+                if grep -q "swconfig" "$log_file" || grep -q "SWITCH_LINK_FLAG" "$log_file"; then
+                    log "  ⚠️ [MT798x] 检测到 swconfig 编译错误，正在彻底禁用..."
+                    
+                    find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
+                    sed -i '/CONFIG_PACKAGE_swconfig/d' .config
+                    echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
+                    
+                    rm -rf build_dir/target-*/swconfig* 2>/dev/null || true
+                    
+                    make defconfig > /tmp/build-logs/defconfig_fix_swconfig.log 2>&1 || true
+                    log "  ✅ [MT798x] swconfig 已彻底禁用"
+                fi
+            fi
+            
+            # ============================================
+            # 全局通用：检测补丁失败并自动删除问题补丁
+            # ============================================
             if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
                 log "  ⚠️ 检测到补丁失败，正在自动修复..."
                 
@@ -5753,10 +5747,13 @@ EOF
                     fi
                 done
                 
-                local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                if [ -f "$ipq40xx_patch" ]; then
-                    log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
-                    rm -f "$ipq40xx_patch"
+                # MT798x 专用：删除 ipq40xx 补丁
+                if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+                    local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+                    if [ -f "$ipq40xx_patch" ]; then
+                        log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
+                        rm -f "$ipq40xx_patch"
+                    fi
                 fi
                 
                 rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
@@ -5765,6 +5762,9 @@ EOF
                 log "  ✅ 补丁修复完成，将重试编译"
             fi
             
+            # ============================================
+            # 全局通用：检测 Broken pipe 错误
+            # ============================================
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
