@@ -5532,6 +5532,28 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
+    # ============================================
+    # LEDE 源码特殊预处理
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 [LEDE] 检测到 LEDE 源码，执行特殊预处理..."
+        
+        # 删除有问题的 vsftpd-alt 包（避免依赖冲突）
+        find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
+        find . -type d -name "*vsftpd*" -path "*/vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
+        
+        # 在 .config 中禁用 vsftpd-alt
+        if [ -f ".config" ]; then
+            sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
+            echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        fi
+        
+        # 重新安装 feeds
+        ./scripts/feeds install -a > /tmp/feeds_install_lede.log 2>&1 || true
+        
+        log "  ✅ LEDE 预处理完成"
+    fi
+    
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -5693,7 +5715,7 @@ EOF
                 # 删除 ipkg 缓存
                 find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
                 
-                # 重新安装 feeds（适用于所有源码）
+                # 重新安装 feeds
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 
                 log "  ✅ package/install 错误修复完成"
@@ -5747,7 +5769,6 @@ EOF
                     fi
                 done
                 
-                # MT798x 专用：删除 ipq40xx 补丁
                 if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
                     local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
                     if [ -f "$ipq40xx_patch" ]; then
