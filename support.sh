@@ -30,6 +30,8 @@ DEVICES["ac42u"]="ipq40xx generic bcm47189"
 DEVICES["asus_rt-ac42u"]="ipq40xx generic bcm47189"
 DEVICES["cmcc_rax3000m"]="mediatek mt7981 mt7981"
 DEVICES["cmcc_rax3000m-nand"]="mediatek mt7981 mt7981"
+DEVICES["cmcc_rax3000m-nand-ubootmod"]="mediatek mt7981 mt7981"
+DEVICES["cmcc_rax3000m-emmc"]="mediatek mt7981 mt7981"
 DEVICES["netgear_wndr3800"]="ath79 generic ar7161"
 #【support.sh-03-end】
 
@@ -186,7 +188,7 @@ get_device_platform() {
     # 设备名映射（仅针对 MT798x 相关设备）
     local mapped_name="$device_name"
     case "$device_name" in
-        cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
+        cmcc_rax3000m-nand|cmcc_rax3000m-nand-ubootmod|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
             mapped_name="cmcc_rax3000m"
             log "🔧 设备名映射: $device_name -> $mapped_name"
             ;;
@@ -674,12 +676,12 @@ full_config_process() {
     log "构建目录: $build_dir"
     log "额外包: $extra_packages"
     
-    # 设备名转换：将带后缀的设备名转换为基础设备名
+    # 设备名转换
     local converted_device="$device_name"
     case "$device_name" in
-        cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
+        cmcc_rax3000m-nand|cmcc_rax3000m-nand-ubootmod|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
             converted_device="cmcc_rax3000m"
-            log "🔧 设备名转换: $device_name -> $converted_device (使用 DTS overlay)"
+            log "🔧 设备名转换: $device_name -> $converted_device"
             ;;
         ac42u|rt-ac42u)
             converted_device="asus_rt-ac42u"
