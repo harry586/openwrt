@@ -884,7 +884,6 @@ EOF
             ;;
         "immortalwrt-mt798x")
             log "🔧 ImmortalWrt MT798x源码模式: 使用旧版 feeds (兼容 21.02)"
-            # 对于 21.02 分支，需要使用旧版本的 feeds 避免 ucode 依赖
             if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
                 cat >> feeds.conf.default << 'EOF'
 src-git packages https://github.com/immortalwrt/packages.git;openwrt-21.02
@@ -914,7 +913,6 @@ EOF
             ;;
     esac
     
-    # 只有非 MT798x 源码才添加 TurboACC
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "immortalwrt-mt798x" ]; then
         case "$SOURCE_REPO_TYPE" in
             "immortalwrt"|"lede")
@@ -954,17 +952,6 @@ EOF
             log "  🗑️ 删除 package 目录: $dir"
             rm -rf "$dir"
         done
-    fi
-    
-    # 对于 MT798x 源码，删除所有 ucode 相关包
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        log "🔧 MT798x源码：删除所有 ucode 相关包"
-        
-        find package/feeds -type d -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
-        find feeds -type d -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
-        find package -type d -name "*ucode*" -exec rm -rf {} \; 2>/dev/null || true
-        
-        log "  ✅ 已删除所有 ucode 相关包"
     fi
     
     log "=== 安装Feeds ==="
@@ -5565,102 +5552,6 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # ============================================
-    # 对于 MT798x 源码 21.02 分支，修复 ucode 编译
-    # 仅在选择 immortalwrt-mt798x 源码时生效
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        log "🔧 [MT798x] 检测到 MT798x 源码，修复 ucode 编译..."
-        
-        # 1. 先编译 ucode 基础包
-        log "  📦 先编译 ucode 基础包..."
-        
-        # 更新 feeds
-        ./scripts/feeds update -a > /tmp/feeds_update.log 2>&1 || true
-        ./scripts/feeds install ucode > /tmp/feeds_install_ucode.log 2>&1 || true
-        
-        # 编译 ucode
-        if make package/feeds/luci/ucode/compile -j1 V=s > /tmp/ucode_compile.log 2>&1; then
-            log "  ✅ ucode 编译成功"
-        else
-            log "  ⚠️ ucode 编译失败，尝试修复头文件..."
-            
-            # 创建缺失的头文件
-            for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
-                if [ -d "$inc_dir" ]; then
-                    mkdir -p "$inc_dir/ucode"
-                    cat > "$inc_dir/ucode/module.h" << 'EOF'
-#ifndef _UCODE_MODULE_H
-#define _UCODE_MODULE_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-
-typedef struct uc_vm uc_vm_t;
-typedef struct uc_value uc_value_t;
-typedef struct uc_resource_type uc_resource_type_t;
-typedef struct uc_stringbuf uc_stringbuf_t;
-
-#define EXCEPTION_NONE 0
-#define EXCEPTION_RUNTIME 1
-#define EXCEPTION_SYNTAX 2
-#define EXCEPTION_LIMIT 3
-
-#define UC_STRING 1
-#define UC_NUMBER 2
-#define UC_BOOLEAN 3
-#define UC_NULL 4
-#define UC_ARRAY 5
-#define UC_OBJECT 6
-
-uc_vm_t *uc_vm_new(void);
-void uc_vm_destroy(uc_vm_t *vm);
-void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
-void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
-int uc_vm_call(uc_vm_t *vm, int flags, int argc, ...);
-uc_value_t *ucv_get(void *ptr);
-uc_value_t *ucv_string(const char *str);
-uc_value_t *ucv_number(double num);
-uc_value_t *ucv_boolean(int val);
-uc_value_t *ucv_null(void);
-uc_value_t *ucv_array_new(void);
-uc_value_t *ucv_object_new(void);
-void ucv_put(uc_value_t *val);
-int ucv_type(uc_value_t *val);
-
-#endif
-EOF
-                fi
-            done
-            log "  ✅ 已创建模拟头文件"
-        fi
-        
-        # 2. 编译 liblucihttp
-        log "  📦 编译 liblucihttp..."
-        ./scripts/feeds install liblucihttp > /tmp/feeds_install_liblucihttp.log 2>&1 || true
-        make package/feeds/luci/liblucihttp/compile -j1 V=s > /tmp/liblucihttp_compile.log 2>&1 || {
-            log "  ⚠️ liblucihttp 编译有警告，继续"
-        }
-        
-        # 3. 编译 rpcd-mod-luci
-        log "  📦 编译 rpcd-mod-luci..."
-        ./scripts/feeds install rpcd-mod-luci > /tmp/feeds_install_rpcd.log 2>&1 || true
-        make package/feeds/luci/rpcd-mod-luci/compile -j1 V=s > /tmp/rpcd_compile.log 2>&1 || {
-            log "  ⚠️ rpcd-mod-luci 编译有警告，继续"
-        }
-        
-        # 4. 删除有问题的 swconfig
-        log "  🗑️ 删除有问题的 swconfig..."
-        find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-        sed -i '/CONFIG_PACKAGE_swconfig/d' .config
-        echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-        
-        # 5. 重新运行 defconfig
-        make defconfig > /tmp/build-logs/defconfig_fix_mt798x.log 2>&1 || true
-        log "  ✅ MT798x 源码修复完成"
-    fi
-    
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -5758,9 +5649,6 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    # ============================================
-    # 预删除已知有问题的补丁（仅 MT798x 源码）
-    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
         log "🔧 [MT798x] 预删除已知有问题的补丁..."
         
@@ -5779,9 +5667,6 @@ EOF
         fi
     fi
     
-    # ============================================
-    # 编译循环 - 自动检测并修复失败
-    # ============================================
     local max_attempts=3
     local attempt=1
     local compile_success=0
@@ -5813,110 +5698,34 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            # ============================================
-            # 检测 ucode 相关错误并修复（仅 MT798x 源码）
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                if grep -q "ucode" "$log_file" || grep -q "lucihttp" "$log_file" || grep -q "rpcd-mod-luci" "$log_file"; then
-                    log "  ⚠️ [MT798x] 检测到 ucode 相关编译错误，正在修复..."
-                    
-                    # 创建头文件
-                    for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
-                        if [ -d "$inc_dir" ]; then
-                            mkdir -p "$inc_dir/ucode"
-                            cat > "$inc_dir/ucode/module.h" << 'EOF'
-#ifndef _UCODE_MODULE_H
-#define _UCODE_MODULE_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include <stddef.h>
-
-typedef struct uc_vm uc_vm_t;
-typedef struct uc_value uc_value_t;
-typedef struct uc_resource_type uc_resource_type_t;
-typedef struct uc_stringbuf uc_stringbuf_t;
-
-#define EXCEPTION_NONE 0
-#define EXCEPTION_RUNTIME 1
-#define EXCEPTION_SYNTAX 2
-#define EXCEPTION_LIMIT 3
-
-#define UC_STRING 1
-#define UC_NUMBER 2
-#define UC_BOOLEAN 3
-#define UC_NULL 4
-#define UC_ARRAY 5
-#define UC_OBJECT 6
-
-uc_vm_t *uc_vm_new(void);
-void uc_vm_destroy(uc_vm_t *vm);
-void uc_vm_raise_exception(uc_vm_t *vm, int type, const char *fmt, ...);
-void uc_vm_stack_push(uc_vm_t *vm, uc_value_t *val);
-int uc_vm_call(uc_vm_t *vm, int flags, int argc, ...);
-uc_value_t *ucv_get(void *ptr);
-uc_value_t *ucv_string(const char *str);
-uc_value_t *ucv_number(double num);
-uc_value_t *ucv_boolean(int val);
-uc_value_t *ucv_null(void);
-uc_value_t *ucv_array_new(void);
-uc_value_t *ucv_object_new(void);
-void ucv_put(uc_value_t *val);
-int ucv_type(uc_value_t *val);
-
-#endif
-EOF
-                        fi
-                    done
-                    
-                    # 重新编译依赖包
-                    make package/feeds/luci/ucode/compile -j1 V=s > /tmp/ucode_retry.log 2>&1 || true
-                    make package/feeds/luci/liblucihttp/compile -j1 V=s > /tmp/liblucihttp_retry.log 2>&1 || true
-                    make package/feeds/luci/rpcd-mod-luci/compile -j1 V=s > /tmp/rpcd_retry.log 2>&1 || true
-                    
-                    log "  ✅ [MT798x] ucode 修复完成"
-                fi
+            if grep -q "swconfig" "$log_file" || grep -q "SWITCH_LINK_FLAG" "$log_file"; then
+                log "  ⚠️ 检测到 swconfig 编译错误，正在彻底禁用..."
+                
+                find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
+                sed -i '/CONFIG_PACKAGE_swconfig/d' .config
+                echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
+                
+                rm -rf build_dir/target-*/swconfig* 2>/dev/null || true
+                
+                make defconfig > /tmp/build-logs/defconfig_fix_swconfig.log 2>&1 || true
+                log "  ✅ swconfig 已彻底禁用"
             fi
             
-            # ============================================
-            # 检测 swconfig 错误并修复（仅 MT798x 源码）
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                if grep -q "swconfig" "$log_file" || grep -q "SWITCH_LINK_FLAG" "$log_file"; then
-                    log "  ⚠️ [MT798x] 检测到 swconfig 编译错误，正在彻底禁用..."
-                    
-                    find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-                    sed -i '/CONFIG_PACKAGE_swconfig/d' .config
-                    echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-                    
-                    rm -rf build_dir/target-*/swconfig* 2>/dev/null || true
-                    
-                    make defconfig > /tmp/build-logs/defconfig_fix_swconfig.log 2>&1 || true
-                    log "  ✅ [MT798x] swconfig 已彻底禁用"
-                fi
+            if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
+                log "  ⚠️ 检测到 package/install 错误 (Error 255)，正在修复..."
+                
+                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
+                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
+                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
+                rm -f tmp/info/.packageinfo-* 2>/dev/null
+                
+                find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
+                
+                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+                
+                log "  ✅ package/install 错误修复完成"
             fi
             
-            # ============================================
-            # 检测 package/install Error 255 并修复（仅 MT798x 源码）
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
-                    log "  ⚠️ [MT798x] 检测到 package/install 错误 (Error 255)，正在修复..."
-                    
-                    # 删除可能损坏的包安装标记
-                    rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
-                    rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
-                    
-                    # 重新运行 defconfig
-                    make defconfig > /tmp/build-logs/defconfig_fix_install.log 2>&1 || true
-                    
-                    log "  ✅ [MT798x] package/install 错误修复完成"
-                fi
-            fi
-            
-            # ============================================
-            # 检测补丁失败并自动删除问题补丁（所有源码通用）
-            # ============================================
             if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
                 log "  ⚠️ 检测到补丁失败，正在自动修复..."
                 
@@ -5944,12 +5753,10 @@ EOF
                     fi
                 done
                 
-                if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                    local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                    if [ -f "$ipq40xx_patch" ]; then
-                        log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
-                        rm -f "$ipq40xx_patch"
-                    fi
+                local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+                if [ -f "$ipq40xx_patch" ]; then
+                    log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
+                    rm -f "$ipq40xx_patch"
                 fi
                 
                 rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
@@ -5958,9 +5765,6 @@ EOF
                 log "  ✅ 补丁修复完成，将重试编译"
             fi
             
-            # ============================================
-            # 检测 Broken pipe 错误（所有源码通用）
-            # ============================================
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
