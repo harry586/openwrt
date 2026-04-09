@@ -1759,10 +1759,11 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 [LEDE] 禁用有问题的包..."
         
-        echo "# CONFIG_PACKAGE_wol is not set" >> .config
-        echo "# CONFIG_PACKAGE_urngd is not set" >> .config
         echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
         echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        echo "# CONFIG_PACKAGE_wol is not set" >> .config
+        echo "# CONFIG_PACKAGE_urngd is not set" >> .config
+        echo "# CONFIG_PACKAGE_wget-ssl is not set" >> .config
         
         if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
             echo "CONFIG_PACKAGE_vsftpd=y" >> .config
@@ -1777,10 +1778,11 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
         log "🔧 [OpenWrt] 禁用有问题的包..."
         
+        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
         echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-ipt-offload is not set" >> .config
         echo "# CONFIG_PACKAGE_wget-ssl is not set" >> .config
         echo "# CONFIG_PACKAGE_urngd is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-ipt-offload is not set" >> .config
         
         if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
             echo "CONFIG_PACKAGE_vsftpd=y" >> .config
@@ -1795,6 +1797,34 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
         log "🔧 [MT798x] 禁用有问题的 swconfig..."
         echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
+    fi
+    
+    # ============================================
+    # MT798x 源码 ipq40xx 平台引导修复（仅 MT798x + ipq40xx 生效）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
+        log "🔧 [MT798x] 修复 ipq40xx 平台引导配置..."
+        
+        if [ -f "target/linux/ipq40xx/config-5.4" ] && [ ! -f "target/linux/ipq40xx/config-5.15" ]; then
+            cp target/linux/ipq40xx/config-5.4 target/linux/ipq40xx/config-5.15 2>/dev/null || true
+            log "  ✅ 复制 config-5.4 到 config-5.15"
+        fi
+        
+        cat >> .config << 'EOF'
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
+CONFIG_TARGET_INITRAMFS_COMPRESSION_GZIP=y
+CONFIG_KERNEL_ELF=y
+CONFIG_KERNEL_CORE_DUMP_DEFAULT_ELF_HEADERS=y
+CONFIG_KERNEL_DEBUG_INFO=y
+CONFIG_KERNEL_DEBUG_KERNEL=y
+CONFIG_TARGET_IMAGES_FIT=y
+CONFIG_TARGET_IMAGES_FIT_SIGNATURE=n
+CONFIG_KERNEL_LZMA=y
+CONFIG_KERNEL_LZO=y
+CONFIG_KERNEL_OF=y
+CONFIG_KERNEL_OF_EARLY_FLATTREE=y
+EOF
+        log "  ✅ ipq40xx 引导配置已添加"
     fi
     
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
@@ -1824,8 +1854,10 @@ EOF
     log "🔧 强制配置生成固件..."
     
     if grep -q "CONFIG_TARGET_IMAGES_FIT=y" .config; then
-        sed -i 's/^CONFIG_TARGET_IMAGES_FIT=y/# CONFIG_TARGET_IMAGES_FIT is not set/' .config
-        log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT"
+        if [ "$SOURCE_REPO_TYPE" != "immortalwrt-mt798x" ] || [ "$TARGET" != "ipq40xx" ]; then
+            sed -i 's/^CONFIG_TARGET_IMAGES_FIT=y/# CONFIG_TARGET_IMAGES_FIT is not set/' .config
+            log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT"
+        fi
     fi
     
     if ! grep -q "CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config; then
@@ -1870,14 +1902,10 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # ============================================
-    # 自动检测并使用最合适的内核配置文件（通用功能）
-    # ============================================
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
     
-    # 内核版本优先级顺序（从高到低）
     local kernel_priority=("6.6" "6.1" "5.15" "5.10" "5.4" "4.19" "4.14")
     
     if [ -d "target/linux/$TARGET" ]; then
@@ -2164,9 +2192,6 @@ EOF
         fi
     fi
     
-    # ============================================
-    # 验证设备配置
-    # ============================================
     log "🔍 正在验证设备 $correct_device 是否被选中..."
     
     make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || true
@@ -5579,20 +5604,37 @@ workflow_step25_build_firmware() {
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 [LEDE] 检测到 LEDE 源码，执行特殊预处理..."
         
+        # 1. 删除有问题的包源文件
         find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
-        find . -type d -name "*vsftpd*" -path "*/vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
-        find . -type d -name "luci-lib-fs" -exec rm -rf {} \; 2>/dev/null || true
+        find . -type d -name "*luci-lib-fs*" -exec rm -rf {} \; 2>/dev/null || true
+        find . -type d -name "*wol*" -exec rm -rf {} \; 2>/dev/null || true
+        find . -type d -name "*urngd*" -exec rm -rf {} \; 2>/dev/null || true
         
+        # 2. 在 .config 中禁用有问题的包
         if [ -f ".config" ]; then
             sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
             sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
+            sed -i '/CONFIG_PACKAGE_wol/d' .config
+            sed -i '/CONFIG_PACKAGE_urngd/d' .config
             echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
             echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
+            echo "# CONFIG_PACKAGE_wol is not set" >> .config
+            echo "# CONFIG_PACKAGE_urngd is not set" >> .config
         fi
         
+        # 3. 确保 vsftpd 被启用
+        if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
+            echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        fi
+        
+        # 4. 重新安装 feeds
         ./scripts/feeds install -a > /tmp/feeds_install_lede.log 2>&1 || true
-        make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_compile.log 2>&1 || true
-        make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_compile.log 2>&1 || true
+        
+        # 5. 预编译可能缺失的依赖包
+        log "  📦 预编译 LEDE 依赖包..."
+        make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_lede.log 2>&1 || true
+        make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_lede.log 2>&1 || true
+        make package/network/services/dnsmasq/compile -j1 V=s > /tmp/dnsmasq_lede.log 2>&1 || true
         
         log "  ✅ LEDE 预处理完成"
     fi
@@ -5603,27 +5645,22 @@ workflow_step25_build_firmware() {
     if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
         log "🔧 [OpenWrt] 检测到 OpenWrt 源码，执行特殊预处理..."
         
-        # 1. 删除有问题的 vsftpd-alt 包
         find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
         
-        # 2. 在 .config 中禁用 vsftpd-alt
         if [ -f ".config" ]; then
             sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
             echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
         fi
         
-        # 3. 确保 vsftpd 被正确启用
         if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
             echo "CONFIG_PACKAGE_vsftpd=y" >> .config
             log "  ✅ 启用 vsftpd"
         fi
         
-        # 4. 预编译可能缺失的依赖包
         log "  📦 预编译 OpenWrt 依赖包..."
         make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_openwrt.log 2>&1 || true
         make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_openwrt.log 2>&1 || true
         
-        # 5. 重新安装 feeds
         ./scripts/feeds install -a > /tmp/feeds_install_openwrt.log 2>&1 || true
         
         log "  ✅ OpenWrt 预处理完成"
@@ -5795,38 +5832,17 @@ EOF
                 
                 # LEDE 源码额外处理
                 if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                    log "  🔧 [LEDE] 删除有问题的包目录..."
-                    find . -type d -name "luci-lib-fs" -exec rm -rf {} \; 2>/dev/null || true
-                    find . -type d -name "vsftpd-alt" -exec rm -rf {} \; 2>/dev/null || true
-                    
-                    sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
-                    sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
-                    echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
-                    echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-                    
+                    log "  🔧 [LEDE] 重新编译依赖包..."
                     make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_retry.log 2>&1 || true
                     make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_retry.log 2>&1 || true
-                    
-                    make defconfig > /tmp/build-logs/defconfig_fix_lede.log 2>&1 || true
+                    make package/network/services/dnsmasq/compile -j1 V=s > /tmp/dnsmasq_retry.log 2>&1 || true
                 fi
                 
                 # OpenWrt 源码额外处理
                 if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-                    log "  🔧 [OpenWrt] 删除有问题的包目录并重新编译依赖..."
-                    find . -type d -name "vsftpd-alt" -exec rm -rf {} \; 2>/dev/null || true
-                    
-                    sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
-                    echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-                    
-                    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
-                        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-                    fi
-                    
-                    # 重新编译依赖包
+                    log "  🔧 [OpenWrt] 重新编译依赖包..."
                     make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_openwrt_retry.log 2>&1 || true
                     make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_openwrt_retry.log 2>&1 || true
-                    
-                    make defconfig > /tmp/build-logs/defconfig_fix_openwrt.log 2>&1 || true
                 fi
                 
                 log "  ✅ package/install 错误修复完成"
