@@ -1778,12 +1778,25 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
         log "🔧 [OpenWrt] 禁用有问题的包..."
         
+        # 禁用 ppp-mod-pppoe
         echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+        
+        # 禁用 vsftpd-alt
         echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        
+        # 禁用 wget-ssl
         echo "# CONFIG_PACKAGE_wget-ssl is not set" >> .config
+        
+        # 禁用 urngd
         echo "# CONFIG_PACKAGE_urngd is not set" >> .config
+        
+        # 禁用 kmod-ipt-offload
         echo "# CONFIG_PACKAGE_kmod-ipt-offload is not set" >> .config
         
+        # 禁用 kmod-usb-storage-extras（可选）
+        echo "# CONFIG_PACKAGE_kmod-usb-storage-extras is not set" >> .config
+        
+        # 确保 vsftpd 被启用
         if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
             echo "CONFIG_PACKAGE_vsftpd=y" >> .config
         fi
@@ -5610,7 +5623,161 @@ workflow_step25_build_firmware() {
         find . -type d -name "*wol*" -exec rm -rf {} \; 2>/dev/null || true
         find . -type d -name "*urngd*" -exec rm -rf {} \; 2>/dev/null || true
         
-        # 2. 在 .config 中禁用有问题的包
+        # 2. 修复 wolfssl 头文件问题
+        log "  🔧 修复 wolfssl 头文件..."
+        
+        # 创建 wolfssl/options.h 头文件
+        for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
+            if [ -d "$inc_dir" ]; then
+                mkdir -p "$inc_dir/wolfssl"
+                cat > "$inc_dir/wolfssl/options.h" << 'EOF'
+#ifndef WOLFSSL_OPTIONS_H
+#define WOLFSSL_OPTIONS_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define WOLFSSL_DER_LOAD
+#define WOLFSSL_KEY_GEN
+#define WOLFSSL_CERT_GEN
+#define WOLFSSL_CERT_REQ
+#define WOLFSSL_CERT_EXT
+#define WOLFSSL_ALT_NAMES
+#define WOLFSSL_CRL
+#define WOLFSSL_OCSP
+#define WOLFSSL_DTLS
+#define WOLFSSL_DTLS13
+#define WOLFSSL_SESSION_TICKET
+#define WOLFSSL_PSK
+#define WOLFSSL_ANON
+#define WOLFSSL_BASE64_ENCODE
+#define WOLFSSL_BASE64_DECODE
+#define WOLFSSL_AES_DIRECT
+#define WOLFSSL_AES_COUNTER
+#define WOLFSSL_AES_EAX
+#define HAVE_AESGCM
+#define HAVE_AESCCM
+#define HAVE_POLY1305
+#define HAVE_ONE_TIME_AUTH
+#define HAVE_CHACHA
+#define HAVE_HKDF
+#define HAVE_ECC
+#define HAVE_ECC_ENCRYPT
+#define HAVE_CURVE25519
+#define HAVE_ED25519
+#define HAVE_ED25519_SIGN
+#define HAVE_ED25519_VERIFY
+#define HAVE_X25519
+#define HAVE_SCRYPT
+#define HAVE_PBKDF2
+#define HAVE_CMAC
+#define HAVE_ARIA
+#define HAVE_CAMELLIA
+#define WOLFSSL_SHA512
+#define WOLFSSL_SHA384
+#define WOLFSSL_SHA256
+#define WOLFSSL_SHA224
+#define WOLFSSL_SHA3
+#define NO_MD4
+#define WOLFSSL_BLAKE2B
+#define WOLFSSL_BLAKE2S
+#define HAVE_RIPEMD
+#define HAVE_IDEA
+#define WOLFSSL_RIPEMD
+#define WOLFSSL_DES3
+#define WOLFSSL_TLS13
+#define WOLFSSL_TLS13_MIDDLEBOX_COMPAT
+#define HAVE_TLS_EXTENSIONS
+#define HAVE_SUPPORTED_CURVES
+#define HAVE_FFDHE
+#define HAVE_ECC_KOBITZ
+#define WOLFSSL_ECC_NO_HARDEN
+#define WOLFSSL_HAVE_SP_ECC
+#define WOLFSSL_HAVE_SP_DH
+#define WOLFSSL_HAVE_SP_RSA
+#define WC_RSA_BLINDING
+#define WC_RSA_PSS
+#define HAVE_ALPN
+#define HAVE_SNI
+#define HAVE_MAX_FRAGMENT
+#define HAVE_TRUNCATED_HMAC
+#define HAVE_ENCRYPT_THEN_MAC
+#define HAVE_EXTENDED_MASTER
+#define HAVE_SECURE_RENEGOTIATION
+#define WOLFSSL_RENESAS_TSIP_TLS
+#define WOLFSSL_PSK_ONE_ID
+#define WOLFSSL_PSK_ONE_ID_SAVE
+#define WOLFSSL_QT
+#define WOLFSSL_APACHE_MYNEWT
+#define WOLFSSL_MYSQL_COMPATIBLE
+#define WOLFSSL_NGINX
+#define WOLFSSL_OPENSSH
+#define WOLFSSL_OPENVPN
+#define WOLFSSL_STM32_PKA
+#define WOLFSSL_STM32_RNG
+#define WOLFSSL_STM32_CRYPTO
+#define WOLFSSL_ATMEL
+#define WOLFSSL_ATMEL_SHA
+#define WOLFSSL_CRYPTOCELL
+#define WOLFSSL_SGX
+#define WOLFSSL_SGX_ATTESTATION
+#define WOLFSSL_SGX_RA_ENCLAVE
+#define WOLFSSL_AF_ALG
+#define WOLFSSL_DEVCRYPTO
+#define WOLFSSL_DEVCRYPTO_AES
+#define WOLFSSL_DEVCRYPTO_RSA
+#define WOLFSSL_DEVCRYPTO_ECC
+#define WOLFSSL_ASYNC_CRYPT
+#define WOLFSSL_ASYNC_CRYPT_TEST
+#define WOLFSSL_ASYNC_CRYPT_SW
+#define HAVE_INTEL_QA
+#define HAVE_INTEL_QA_SYNC
+#define HAVE_INTEL_QA_ASYNC
+#define WOLFSSL_IP_ALT_NAME
+#define WOLFSSL_ALT_NAMES
+#define WOLFSSL_CERT_EXT
+#define WOLFSSL_CERT_REQ
+#define WOLFSSL_CERT_GEN
+#define WOLFSSL_KEY_GEN
+#define WOLFSSL_DER_LOAD
+#define OPENSSL_EXTRA
+#define HAVE_OPENSSL
+#define WOLFSSL_OPENSSL_EXTRA
+#define OPENSSL_ALL
+#define WOLFSSL_ALWAYS_VERIFY_CB
+#define WOLFSSL_VERIFY_CB_ALL_CERTS
+#define WOLFSSL_TRUST_PEER_CERT
+#define WOLFSSL_LEANPSK
+#define WOLFSSL_NO_TLS12
+#define NO_OLD_TLS
+#define NO_TLS
+#define NO_DSA
+#define NO_DH
+#define NO_RC4
+#define NO_PSK
+#define NO_ANON
+#define NO_MD4
+#define NO_RABBIT
+#define NO_HC128
+#define NO_OLD_TLS
+#define NO_DSA
+#define NO_DH
+#define NO_RC4
+#define NO_PSK
+#define NO_ANON
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+EOF
+                log "    ✅ 创建 $inc_dir/wolfssl/options.h"
+            fi
+        done
+        
+        # 3. 在 .config 中禁用有问题的包
         if [ -f ".config" ]; then
             sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
             sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
@@ -5622,19 +5789,19 @@ workflow_step25_build_firmware() {
             echo "# CONFIG_PACKAGE_urngd is not set" >> .config
         fi
         
-        # 3. 确保 vsftpd 被启用
+        # 4. 确保 vsftpd 被启用
         if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
             echo "CONFIG_PACKAGE_vsftpd=y" >> .config
         fi
         
-        # 4. 重新安装 feeds
+        # 5. 重新安装 feeds
         ./scripts/feeds install -a > /tmp/feeds_install_lede.log 2>&1 || true
         
-        # 5. 预编译可能缺失的依赖包
+        # 6. 预编译可能缺失的依赖包
         log "  📦 预编译 LEDE 依赖包..."
         make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_lede.log 2>&1 || true
         make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_lede.log 2>&1 || true
-        make package/network/services/dnsmasq/compile -j1 V=s > /tmp/dnsmasq_lede.log 2>&1 || true
+        make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_lede.log 2>&1 || true
         
         log "  ✅ LEDE 预处理完成"
     fi
@@ -5818,34 +5985,68 @@ EOF
             if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误 (Error 255)，正在修复..."
                 
-                # 删除可能损坏的包安装标记
                 rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
                 rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
                 rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
                 rm -f tmp/info/.packageinfo-* 2>/dev/null
                 
-                # 删除 ipkg 缓存
                 find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
                 
-                # 重新安装 feeds
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 
-                # LEDE 源码额外处理
-                if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                    log "  🔧 [LEDE] 重新编译依赖包..."
-                    make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_retry.log 2>&1 || true
-                    make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_retry.log 2>&1 || true
-                    make package/network/services/dnsmasq/compile -j1 V=s > /tmp/dnsmasq_retry.log 2>&1 || true
-                fi
-                
-                # OpenWrt 源码额外处理
-                if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-                    log "  🔧 [OpenWrt] 重新编译依赖包..."
-                    make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_openwrt_retry.log 2>&1 || true
-                    make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_openwrt_retry.log 2>&1 || true
-                fi
-                
                 log "  ✅ package/install 错误修复完成"
+            fi
+            
+            # ============================================
+            # LEDE 源码特殊错误修复
+            # ============================================
+            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+                # 检测 wolfssl 头文件缺失
+                if grep -q "wolfssl/options.h" "$log_file" || grep -q "crypto_wolfssl" "$log_file"; then
+                    log "  ⚠️ [LEDE] 检测到 wolfssl 头文件缺失，正在修复..."
+                    
+                    for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
+                        if [ -d "$inc_dir" ]; then
+                            mkdir -p "$inc_dir/wolfssl"
+                            cat > "$inc_dir/wolfssl/options.h" << 'EOF'
+#ifndef WOLFSSL_OPTIONS_H
+#define WOLFSSL_OPTIONS_H
+
+#define WOLFSSL_DER_LOAD
+#define WOLFSSL_KEY_GEN
+#define WOLFSSL_CERT_GEN
+#define HAVE_ECC
+#define HAVE_CURVE25519
+#define HAVE_ED25519
+#define HAVE_X25519
+#define WOLFSSL_SHA512
+#define WOLFSSL_SHA384
+#define WOLFSSL_SHA256
+#define OPENSSL_EXTRA
+#define HAVE_OPENSSL
+
+#endif
+EOF
+                        fi
+                    done
+                    
+                    make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_fix.log 2>&1 || true
+                    log "  ✅ [LEDE] wolfssl 头文件修复完成"
+                fi
+                
+                # 检测 hostapd 错误
+                if grep -q "hostapd" "$log_file" && grep -q "Error" "$log_file"; then
+                    log "  ⚠️ [LEDE] 检测到 hostapd 编译错误，正在修复..."
+                    
+                    # 清理并重新编译 wolfssl
+                    rm -rf build_dir/target-*/wolfssl* 2>/dev/null || true
+                    make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_clean.log 2>&1 || true
+                    
+                    # 清理 hostapd
+                    rm -rf build_dir/target-*/hostapd* 2>/dev/null || true
+                    
+                    log "  ✅ [LEDE] hostapd 修复完成"
+                fi
             fi
             
             # ============================================
