@@ -1754,63 +1754,39 @@ EOF
     fi
     
     # ============================================
-    # LEDE 源码特殊处理：彻底删除有问题的包（仅 LEDE 生效）
+    # LEDE 源码特殊处理（仅 LEDE 生效）
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 [LEDE] 彻底删除有问题的包..."
+        log "🔧 [LEDE] 禁用有问题的包..."
         
-        find . -type d -name "*ppp-mod-pppoe*" -exec rm -rf {} \; 2>/dev/null || true
-        find . -type d -name "*dnsmasq-full*" -exec rm -rf {} \; 2>/dev/null || true
-        find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
-        find . -type d -name "*luci-lib-fs*" -exec rm -rf {} \; 2>/dev/null || true
-        
-        sed -i '/CONFIG_PACKAGE_ppp-mod-pppoe/d' .config
-        sed -i '/CONFIG_PACKAGE_dnsmasq-full/d' .config
-        sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
-        sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
-        
-        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
-        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
-        
-        log "  ✅ 已删除并禁用 ppp-mod-pppoe, dnsmasq-full, vsftpd-alt, luci-lib-fs"
-        log "  ✅ 已启用 dnsmasq 替代 dnsmasq-full"
-    fi
-    
-    # ============================================
-    # OpenWrt 源码特殊处理：彻底删除有问题的包（仅 OpenWrt 生效）
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "🔧 [OpenWrt] 彻底删除有问题的包..."
-        
-        # 删除 ppp-mod-pppoe 源文件
-        find . -type d -name "*ppp-mod-pppoe*" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 vsftpd-alt 源文件
-        find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 删除 urngd 源文件（可能导致 postinst 失败）
-        find . -type d -name "*urngd*" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 在 .config 中禁用有问题的包
-        sed -i '/CONFIG_PACKAGE_ppp-mod-pppoe/d' .config
-        sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
-        sed -i '/CONFIG_PACKAGE_urngd/d' .config
-        
-        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        echo "# CONFIG_PACKAGE_wol is not set" >> .config
         echo "# CONFIG_PACKAGE_urngd is not set" >> .config
+        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
         
-        # 确保 vsftpd 被启用
         if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
             echo "CONFIG_PACKAGE_vsftpd=y" >> .config
         fi
         
-        log "  ✅ 已删除并禁用 ppp-mod-pppoe, vsftpd-alt, urngd"
-        log "  ✅ 已启用 vsftpd"
+        log "  ✅ LEDE 特殊处理完成"
+    fi
+    
+    # ============================================
+    # OpenWrt 源码特殊处理（仅 OpenWrt 生效）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "🔧 [OpenWrt] 禁用有问题的包..."
+        
+        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        echo "# CONFIG_PACKAGE_kmod-ipt-offload is not set" >> .config
+        echo "# CONFIG_PACKAGE_wget-ssl is not set" >> .config
+        echo "# CONFIG_PACKAGE_urngd is not set" >> .config
+        
+        if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
+            echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        fi
+        
+        log "  ✅ OpenWrt 特殊处理完成"
     fi
     
     # ============================================
@@ -1894,45 +1870,50 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
+    # ============================================
+    # 自动检测并使用最合适的内核配置文件（通用功能）
+    # ============================================
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
     
-    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
-        if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-            local device_def_file=""
-            local mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
-            for mkfile in $mk_files; do
-                if grep -q "define Device.*$correct_device" "$mkfile" 2>/dev/null; then
-                    device_def_file="$mkfile"
-                    break
-                fi
+    # 内核版本优先级顺序（从高到低）
+    local kernel_priority=("6.6" "6.1" "5.15" "5.10" "5.4" "4.19" "4.14")
+    
+    if [ -d "target/linux/$TARGET" ]; then
+        log "🔍 自动检测内核配置文件..."
+        
+        local available_configs=()
+        while IFS= read -r file; do
+            available_configs+=("$file")
+        done < <(find "target/linux/$TARGET" -maxdepth 1 -name "config-*" 2>/dev/null | sort)
+        
+        if [ ${#available_configs[@]} -gt 0 ]; then
+            log "📋 找到以下内核配置文件:"
+            for cfg in "${available_configs[@]}"; do
+                local cfg_ver=$(basename "$cfg" | sed 's/config-//')
+                log "    - $cfg_ver"
             done
             
-            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
-                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
-                if [ -n "$kernel_version" ]; then
-                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
-                fi
-            fi
-        fi
-        
-        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
-            for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
-                kernel_config_file="target/linux/$TARGET/config-$ver"
-                if [ -f "$kernel_config_file" ]; then
-                    kernel_version="$ver"
-                    found_kernel=1
-                    break
-                fi
+            for pri_ver in "${kernel_priority[@]}"; do
+                for cfg in "${available_configs[@]}"; do
+                    local cfg_ver=$(basename "$cfg" | sed 's/config-//')
+                    if [ "$cfg_ver" = "$pri_ver" ]; then
+                        kernel_config_file="$cfg"
+                        kernel_version="$cfg_ver"
+                        found_kernel=1
+                        log "✅ 选择内核版本: $kernel_version"
+                        break 2
+                    fi
+                done
             done
         else
-            found_kernel=1
+            log "⚠️ 未找到内核配置文件"
         fi
     fi
     
     if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
-        log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
+        log "✅ 使用内核配置文件: $kernel_config_file"
         
         local kernel_patterns=(
             "^CONFIG_USB"
