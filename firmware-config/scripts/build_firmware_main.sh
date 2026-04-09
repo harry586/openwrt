@@ -5538,14 +5538,10 @@ workflow_step25_build_firmware() {
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 [LEDE] 检测到 LEDE 源码，执行特殊预处理..."
         
-        # 1. 删除有问题的 vsftpd-alt 包（避免依赖冲突）
         find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
         find . -type d -name "*vsftpd*" -path "*/vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 2. 删除有问题的 luci-lib-fs（如果存在）
         find . -type d -name "luci-lib-fs" -exec rm -rf {} \; 2>/dev/null || true
         
-        # 3. 在 .config 中禁用有问题的包
         if [ -f ".config" ]; then
             sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
             sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
@@ -5553,8 +5549,9 @@ workflow_step25_build_firmware() {
             echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
         fi
         
-        # 4. 重新安装 feeds
         ./scripts/feeds install -a > /tmp/feeds_install_lede.log 2>&1 || true
+        make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_compile.log 2>&1 || true
+        make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_compile.log 2>&1 || true
         
         log "  ✅ LEDE 预处理完成"
     fi
@@ -5565,7 +5562,7 @@ workflow_step25_build_firmware() {
     if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
         log "🔧 [OpenWrt] 检测到 OpenWrt 源码，执行特殊预处理..."
         
-        # 1. 删除有问题的 vsftpd-alt 包（如果存在）
+        # 1. 删除有问题的 vsftpd-alt 包
         find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
         
         # 2. 在 .config 中禁用 vsftpd-alt
@@ -5574,13 +5571,18 @@ workflow_step25_build_firmware() {
             echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
         fi
         
-        # 3. 确保 vsftpd 被正确启用（而不是 vsftpd-alt）
+        # 3. 确保 vsftpd 被正确启用
         if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
             echo "CONFIG_PACKAGE_vsftpd=y" >> .config
             log "  ✅ 启用 vsftpd"
         fi
         
-        # 4. 重新安装 feeds
+        # 4. 预编译可能缺失的依赖包
+        log "  📦 预编译 OpenWrt 依赖包..."
+        make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_openwrt.log 2>&1 || true
+        make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_openwrt.log 2>&1 || true
+        
+        # 5. 重新安装 feeds
         ./scripts/feeds install -a > /tmp/feeds_install_openwrt.log 2>&1 || true
         
         log "  ✅ OpenWrt 预处理完成"
@@ -5750,7 +5752,7 @@ EOF
                 # 重新安装 feeds
                 ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 
-                # LEDE 源码额外处理：删除有问题的包目录
+                # LEDE 源码额外处理
                 if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
                     log "  🔧 [LEDE] 删除有问题的包目录..."
                     find . -type d -name "luci-lib-fs" -exec rm -rf {} \; 2>/dev/null || true
@@ -5761,21 +5763,27 @@ EOF
                     echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
                     echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
                     
+                    make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_retry.log 2>&1 || true
+                    make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_retry.log 2>&1 || true
+                    
                     make defconfig > /tmp/build-logs/defconfig_fix_lede.log 2>&1 || true
                 fi
                 
                 # OpenWrt 源码额外处理
                 if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-                    log "  🔧 [OpenWrt] 删除有问题的包目录..."
+                    log "  🔧 [OpenWrt] 删除有问题的包目录并重新编译依赖..."
                     find . -type d -name "vsftpd-alt" -exec rm -rf {} \; 2>/dev/null || true
                     
                     sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
                     echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
                     
-                    # 确保 vsftpd 启用
                     if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
                         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
                     fi
+                    
+                    # 重新编译依赖包
+                    make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_openwrt_retry.log 2>&1 || true
+                    make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_openwrt_retry.log 2>&1 || true
                     
                     make defconfig > /tmp/build-logs/defconfig_fix_openwrt.log 2>&1 || true
                 fi
