@@ -1754,40 +1754,63 @@ EOF
     fi
     
     # ============================================
-    # LEDE 源码特殊处理：禁用有问题的包（仅 LEDE 生效）
+    # LEDE 源码特殊处理：彻底删除有问题的包（仅 LEDE 生效）
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 [LEDE] 禁用有问题的包..."
+        log "🔧 [LEDE] 彻底删除有问题的包..."
+        
+        find . -type d -name "*ppp-mod-pppoe*" -exec rm -rf {} \; 2>/dev/null || true
+        find . -type d -name "*dnsmasq-full*" -exec rm -rf {} \; 2>/dev/null || true
+        find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
+        find . -type d -name "*luci-lib-fs*" -exec rm -rf {} \; 2>/dev/null || true
+        
+        sed -i '/CONFIG_PACKAGE_ppp-mod-pppoe/d' .config
+        sed -i '/CONFIG_PACKAGE_dnsmasq-full/d' .config
+        sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
+        sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
         
         echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
+        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
         echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
         
-        if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
-            echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        fi
-        
-        log "  ✅ LEDE 特殊处理完成"
+        log "  ✅ 已删除并禁用 ppp-mod-pppoe, dnsmasq-full, vsftpd-alt, luci-lib-fs"
+        log "  ✅ 已启用 dnsmasq 替代 dnsmasq-full"
     fi
     
     # ============================================
-    # OpenWrt 源码特殊处理：禁用有问题的包（仅 OpenWrt 生效）
+    # OpenWrt 源码特殊处理：彻底删除有问题的包（仅 OpenWrt 生效）
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "🔧 [OpenWrt] 禁用有问题的包..."
+        log "🔧 [OpenWrt] 彻底删除有问题的包..."
         
-        # 禁用 ppp-mod-pppoe（base 模式不需要 PPPoE）
+        # 删除 ppp-mod-pppoe 源文件
+        find . -type d -name "*ppp-mod-pppoe*" -exec rm -rf {} \; 2>/dev/null || true
+        
+        # 删除 vsftpd-alt 源文件
+        find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
+        
+        # 删除 urngd 源文件（可能导致 postinst 失败）
+        find . -type d -name "*urngd*" -exec rm -rf {} \; 2>/dev/null || true
+        
+        # 在 .config 中禁用有问题的包
+        sed -i '/CONFIG_PACKAGE_ppp-mod-pppoe/d' .config
+        sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
+        sed -i '/CONFIG_PACKAGE_urngd/d' .config
+        
         echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        
-        # 禁用 vsftpd-alt（避免冲突）
         echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        echo "# CONFIG_PACKAGE_urngd is not set" >> .config
         
         # 确保 vsftpd 被启用
         if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
             echo "CONFIG_PACKAGE_vsftpd=y" >> .config
         fi
         
-        log "  ✅ OpenWrt 特殊处理完成"
+        log "  ✅ 已删除并禁用 ppp-mod-pppoe, vsftpd-alt, urngd"
+        log "  ✅ 已启用 vsftpd"
     fi
     
     # ============================================
