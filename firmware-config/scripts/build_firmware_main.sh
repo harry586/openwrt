@@ -1619,15 +1619,10 @@ generate_config() {
     local correct_device="$DEVICE"
     log "🔧 使用传入的设备名: $correct_device"
     
-    # ============================================
-    # 根据源码类型确定设备配置变量格式
-    # 仅 immortalwrt-mt798x 源码使用特殊格式
-    # ============================================
     local device_config=""
     local platform_sub=""
     
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
-        # MT798x 源码特殊处理：使用 mt7981 子平台
         local mk_file=""
         for mkf in target/linux/mediatek/image/*.mk; do
             if [ -f "$mkf" ] && grep -q "define Device.*$correct_device" "$mkf" 2>/dev/null; then
@@ -1645,8 +1640,10 @@ generate_config() {
             device_config="CONFIG_TARGET_mediatek_mt7981_DEVICE_${correct_device}=y"
             log "🔧 [MT798x] 未找到设备定义文件，使用默认 mt7981 格式: $device_config"
         fi
+    elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
+        device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
+        log "🔧 [MT798x] ipq40xx平台，使用标准格式: $device_config"
     else
-        # 非 MT798x 源码（immortalwrt、openwrt、lede）使用标准格式
         device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
         log "🔧 标准设备配置格式: $device_config"
     fi
@@ -1756,6 +1753,46 @@ EOF
         done
     fi
     
+    # ============================================
+    # LEDE 源码特殊处理：禁用有问题的包（仅 LEDE 生效）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 [LEDE] 禁用有问题的包..."
+        
+        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
+        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        
+        if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
+            echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        fi
+        
+        log "  ✅ LEDE 特殊处理完成"
+    fi
+    
+    # ============================================
+    # OpenWrt 源码特殊处理：禁用有问题的包（仅 OpenWrt 生效）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "🔧 [OpenWrt] 禁用有问题的包..."
+        
+        # 禁用 ppp-mod-pppoe（base 模式不需要 PPPoE）
+        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+        
+        # 禁用 vsftpd-alt（避免冲突）
+        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
+        
+        # 确保 vsftpd 被启用
+        if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
+            echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        fi
+        
+        log "  ✅ OpenWrt 特殊处理完成"
+    fi
+    
+    # ============================================
+    # MT798x 源码特殊处理：禁用 swconfig（仅 MT798x 生效）
+    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
         log "🔧 [MT798x] 禁用有问题的 swconfig..."
         echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
