@@ -1793,13 +1793,11 @@ EOF
         # 禁用 kmod-ipt-offload
         echo "# CONFIG_PACKAGE_kmod-ipt-offload is not set" >> .config
         
-        # 禁用 kmod-usb-storage-extras（可选）
+        # 禁用 kmod-usb-storage-extras
         echo "# CONFIG_PACKAGE_kmod-usb-storage-extras is not set" >> .config
         
-        # 确保 vsftpd 被启用
-        if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
-            echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        fi
+        # 禁用 vsftpd（暂时禁用，避免 postinst 错误）
+        echo "# CONFIG_PACKAGE_vsftpd is not set" >> .config
         
         log "  ✅ OpenWrt 特殊处理完成"
     fi
@@ -5626,146 +5624,29 @@ workflow_step25_build_firmware() {
         # 2. 修复 wolfssl 头文件问题
         log "  🔧 修复 wolfssl 头文件..."
         
-        # 创建 wolfssl/options.h 头文件
+        # 创建 wolfssl/wolfcrypt/md4.h 头文件
         for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
             if [ -d "$inc_dir" ]; then
-                mkdir -p "$inc_dir/wolfssl"
-                cat > "$inc_dir/wolfssl/options.h" << 'EOF'
-#ifndef WOLFSSL_OPTIONS_H
-#define WOLFSSL_OPTIONS_H
+                mkdir -p "$inc_dir/wolfssl/wolfcrypt"
+                cat > "$inc_dir/wolfssl/wolfcrypt/md4.h" << 'EOF'
+#ifndef WOLFCRYPT_MD4_H
+#define WOLFCRYPT_MD4_H
+
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define WOLFSSL_DER_LOAD
-#define WOLFSSL_KEY_GEN
-#define WOLFSSL_CERT_GEN
-#define WOLFSSL_CERT_REQ
-#define WOLFSSL_CERT_EXT
-#define WOLFSSL_ALT_NAMES
-#define WOLFSSL_CRL
-#define WOLFSSL_OCSP
-#define WOLFSSL_DTLS
-#define WOLFSSL_DTLS13
-#define WOLFSSL_SESSION_TICKET
-#define WOLFSSL_PSK
-#define WOLFSSL_ANON
-#define WOLFSSL_BASE64_ENCODE
-#define WOLFSSL_BASE64_DECODE
-#define WOLFSSL_AES_DIRECT
-#define WOLFSSL_AES_COUNTER
-#define WOLFSSL_AES_EAX
-#define HAVE_AESGCM
-#define HAVE_AESCCM
-#define HAVE_POLY1305
-#define HAVE_ONE_TIME_AUTH
-#define HAVE_CHACHA
-#define HAVE_HKDF
-#define HAVE_ECC
-#define HAVE_ECC_ENCRYPT
-#define HAVE_CURVE25519
-#define HAVE_ED25519
-#define HAVE_ED25519_SIGN
-#define HAVE_ED25519_VERIFY
-#define HAVE_X25519
-#define HAVE_SCRYPT
-#define HAVE_PBKDF2
-#define HAVE_CMAC
-#define HAVE_ARIA
-#define HAVE_CAMELLIA
-#define WOLFSSL_SHA512
-#define WOLFSSL_SHA384
-#define WOLFSSL_SHA256
-#define WOLFSSL_SHA224
-#define WOLFSSL_SHA3
-#define NO_MD4
-#define WOLFSSL_BLAKE2B
-#define WOLFSSL_BLAKE2S
-#define HAVE_RIPEMD
-#define HAVE_IDEA
-#define WOLFSSL_RIPEMD
-#define WOLFSSL_DES3
-#define WOLFSSL_TLS13
-#define WOLFSSL_TLS13_MIDDLEBOX_COMPAT
-#define HAVE_TLS_EXTENSIONS
-#define HAVE_SUPPORTED_CURVES
-#define HAVE_FFDHE
-#define HAVE_ECC_KOBITZ
-#define WOLFSSL_ECC_NO_HARDEN
-#define WOLFSSL_HAVE_SP_ECC
-#define WOLFSSL_HAVE_SP_DH
-#define WOLFSSL_HAVE_SP_RSA
-#define WC_RSA_BLINDING
-#define WC_RSA_PSS
-#define HAVE_ALPN
-#define HAVE_SNI
-#define HAVE_MAX_FRAGMENT
-#define HAVE_TRUNCATED_HMAC
-#define HAVE_ENCRYPT_THEN_MAC
-#define HAVE_EXTENDED_MASTER
-#define HAVE_SECURE_RENEGOTIATION
-#define WOLFSSL_RENESAS_TSIP_TLS
-#define WOLFSSL_PSK_ONE_ID
-#define WOLFSSL_PSK_ONE_ID_SAVE
-#define WOLFSSL_QT
-#define WOLFSSL_APACHE_MYNEWT
-#define WOLFSSL_MYSQL_COMPATIBLE
-#define WOLFSSL_NGINX
-#define WOLFSSL_OPENSSH
-#define WOLFSSL_OPENVPN
-#define WOLFSSL_STM32_PKA
-#define WOLFSSL_STM32_RNG
-#define WOLFSSL_STM32_CRYPTO
-#define WOLFSSL_ATMEL
-#define WOLFSSL_ATMEL_SHA
-#define WOLFSSL_CRYPTOCELL
-#define WOLFSSL_SGX
-#define WOLFSSL_SGX_ATTESTATION
-#define WOLFSSL_SGX_RA_ENCLAVE
-#define WOLFSSL_AF_ALG
-#define WOLFSSL_DEVCRYPTO
-#define WOLFSSL_DEVCRYPTO_AES
-#define WOLFSSL_DEVCRYPTO_RSA
-#define WOLFSSL_DEVCRYPTO_ECC
-#define WOLFSSL_ASYNC_CRYPT
-#define WOLFSSL_ASYNC_CRYPT_TEST
-#define WOLFSSL_ASYNC_CRYPT_SW
-#define HAVE_INTEL_QA
-#define HAVE_INTEL_QA_SYNC
-#define HAVE_INTEL_QA_ASYNC
-#define WOLFSSL_IP_ALT_NAME
-#define WOLFSSL_ALT_NAMES
-#define WOLFSSL_CERT_EXT
-#define WOLFSSL_CERT_REQ
-#define WOLFSSL_CERT_GEN
-#define WOLFSSL_KEY_GEN
-#define WOLFSSL_DER_LOAD
-#define OPENSSL_EXTRA
-#define HAVE_OPENSSL
-#define WOLFSSL_OPENSSL_EXTRA
-#define OPENSSL_ALL
-#define WOLFSSL_ALWAYS_VERIFY_CB
-#define WOLFSSL_VERIFY_CB_ALL_CERTS
-#define WOLFSSL_TRUST_PEER_CERT
-#define WOLFSSL_LEANPSK
-#define WOLFSSL_NO_TLS12
-#define NO_OLD_TLS
-#define NO_TLS
-#define NO_DSA
-#define NO_DH
-#define NO_RC4
-#define NO_PSK
-#define NO_ANON
-#define NO_MD4
-#define NO_RABBIT
-#define NO_HC128
-#define NO_OLD_TLS
-#define NO_DSA
-#define NO_DH
-#define NO_RC4
-#define NO_PSK
-#define NO_ANON
+#define MD4_DIGEST_SIZE 16
+
+typedef struct wc_Md4 {
+    unsigned int digest[MD4_DIGEST_SIZE / sizeof(unsigned int)];
+} wc_Md4;
+
+int wc_InitMd4(wc_Md4* md4);
+int wc_Md4Update(wc_Md4* md4, const unsigned char* data, size_t len);
+int wc_Md4Final(wc_Md4* md4, unsigned char* hash);
 
 #ifdef __cplusplus
 }
@@ -5773,7 +5654,28 @@ extern "C" {
 
 #endif
 EOF
-                log "    ✅ 创建 $inc_dir/wolfssl/options.h"
+                
+                cat > "$inc_dir/wolfssl/options.h" << 'EOF'
+#ifndef WOLFSSL_OPTIONS_H
+#define WOLFSSL_OPTIONS_H
+
+#define WOLFSSL_DER_LOAD
+#define WOLFSSL_KEY_GEN
+#define WOLFSSL_CERT_GEN
+#define HAVE_ECC
+#define HAVE_CURVE25519
+#define HAVE_ED25519
+#define HAVE_X25519
+#define WOLFSSL_SHA512
+#define WOLFSSL_SHA384
+#define WOLFSSL_SHA256
+#define OPENSSL_EXTRA
+#define HAVE_OPENSSL
+#define WOLFSSL_MD4
+
+#endif
+EOF
+                log "    ✅ 创建 $inc_dir/wolfssl/wolfcrypt/md4.h 和 options.h"
             fi
         done
         
@@ -6002,12 +5904,30 @@ EOF
             # ============================================
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
                 # 检测 wolfssl 头文件缺失
-                if grep -q "wolfssl/options.h" "$log_file" || grep -q "crypto_wolfssl" "$log_file"; then
+                if grep -q "wolfssl" "$log_file" || grep -q "crypto_wolfssl" "$log_file" || grep -q "md4.h" "$log_file"; then
                     log "  ⚠️ [LEDE] 检测到 wolfssl 头文件缺失，正在修复..."
                     
                     for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
                         if [ -d "$inc_dir" ]; then
-                            mkdir -p "$inc_dir/wolfssl"
+                            mkdir -p "$inc_dir/wolfssl/wolfcrypt"
+                            cat > "$inc_dir/wolfssl/wolfcrypt/md4.h" << 'EOF'
+#ifndef WOLFCRYPT_MD4_H
+#define WOLFCRYPT_MD4_H
+
+#include <stddef.h>
+
+#define MD4_DIGEST_SIZE 16
+
+typedef struct wc_Md4 {
+    unsigned int digest[MD4_DIGEST_SIZE / sizeof(unsigned int)];
+} wc_Md4;
+
+int wc_InitMd4(wc_Md4* md4);
+int wc_Md4Update(wc_Md4* md4, const unsigned char* data, size_t len);
+int wc_Md4Final(wc_Md4* md4, unsigned char* hash);
+
+#endif
+EOF
                             cat > "$inc_dir/wolfssl/options.h" << 'EOF'
 #ifndef WOLFSSL_OPTIONS_H
 #define WOLFSSL_OPTIONS_H
@@ -6017,13 +5937,10 @@ EOF
 #define WOLFSSL_CERT_GEN
 #define HAVE_ECC
 #define HAVE_CURVE25519
-#define HAVE_ED25519
-#define HAVE_X25519
-#define WOLFSSL_SHA512
-#define WOLFSSL_SHA384
 #define WOLFSSL_SHA256
 #define OPENSSL_EXTRA
 #define HAVE_OPENSSL
+#define WOLFSSL_MD4
 
 #endif
 EOF
@@ -6038,11 +5955,8 @@ EOF
                 if grep -q "hostapd" "$log_file" && grep -q "Error" "$log_file"; then
                     log "  ⚠️ [LEDE] 检测到 hostapd 编译错误，正在修复..."
                     
-                    # 清理并重新编译 wolfssl
                     rm -rf build_dir/target-*/wolfssl* 2>/dev/null || true
                     make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_clean.log 2>&1 || true
-                    
-                    # 清理 hostapd
                     rm -rf build_dir/target-*/hostapd* 2>/dev/null || true
                     
                     log "  ✅ [LEDE] hostapd 修复完成"
