@@ -5058,7 +5058,7 @@ echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
 while true; do
     TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
     for tmp_dir in $TMP_DIRS; do
-        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.itb" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
                 backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
@@ -5140,9 +5140,13 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
+    # ============================================
+    # 针对 immortalwrt-mt798x 源码的预处理
+    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        log "🔧 [MT798x] 预删除已知有问题的补丁..."
+        log "🔧 [MT798x] 执行源码特殊预处理..."
         
+        # 预删除已知有问题的补丁
         local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
         if [ -d "$problem_patches_dir" ]; then
             local problem_patches=(
@@ -5156,6 +5160,23 @@ EOF
                 fi
             done
         fi
+        
+        # 修复 package/install 依赖顺序问题（不删除包）
+        log "  🔧 修复 package/install 依赖顺序..."
+        
+        # 创建临时目录用于存放安装脚本修复
+        mkdir -p package/feeds/luci/luci-app-wechatpush 2>/dev/null || true
+        
+        # 修复可能存在的循环依赖
+        if [ -f "tmp/info/.packageinfo-*" ]; then
+            rm -f tmp/info/.packageinfo-* 2>/dev/null || true
+        fi
+        
+        # 确保 feeds 正确安装
+        ./scripts/feeds update -a > /tmp/build-logs/feeds_update_mt798x.log 2>&1 || true
+        ./scripts/feeds install -a > /tmp/build-logs/feeds_install_mt798x.log 2>&1 || true
+        
+        log "  ✅ MT798x 预处理完成"
     fi
     
     local max_attempts=3
@@ -5189,6 +5210,7 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
+            # 修复 swconfig 编译错误
             if grep -q "swconfig" "$log_file" || grep -q "SWITCH_LINK_FLAG" "$log_file"; then
                 log "  ⚠️ 检测到 swconfig 编译错误，正在彻底禁用..."
                 
@@ -5202,21 +5224,52 @@ EOF
                 log "  ✅ swconfig 已彻底禁用"
             fi
             
+            # 修复 package/install 错误 (Error 255) - 不删除包，只清理状态
             if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
-                log "  ⚠️ 检测到 package/install 错误 (Error 255)，正在修复..."
+                log "  ⚠️ 检测到 package/install 错误 (Error 255)，正在清理安装状态..."
                 
-                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null
-                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null
-                rm -f tmp/info/.packageinfo-* 2>/dev/null
+                # 清理安装标记文件（不删除包本身）
+                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
+                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
+                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null || true
+                rm -f tmp/info/.packageinfo-* 2>/dev/null || true
                 
+                # 清理 ipkg 目录中的临时文件
                 find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
                 
-                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+                # 清理可能损坏的包构建目录
+                local failed_pkgs=$(grep -B 10 "Error 255" "$log_file" | grep -E "make\[.*\] .* package/" | sed -E 's/.*package\/([^/]*)\/.*/\1/' | sort -u)
+                for pkg in $failed_pkgs; do
+                    if [ -n "$pkg" ]; then
+                        log "    🔧 清理包构建目录: $pkg"
+                        rm -rf build_dir/target-*/${pkg}-* 2>/dev/null || true
+                    fi
+                done
+                
+                # 针对 immortalwrt-mt798x 源码的特殊修复
+                if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
+                    log "    🔧 [MT798x] 执行特殊修复..."
+                    
+                    # 修复 luci-app-wechatpush 可能的问题
+                    if [ -f "package/feeds/luci/luci-app-wechatpush/Makefile" ]; then
+                        # 确保依赖正确安装
+                        ./scripts/feeds install luci-app-wechatpush > /dev/null 2>&1 || true
+                    fi
+                    
+                    # 确保所有 feeds 包正确链接
+                    ./scripts/feeds install -a > /tmp/feeds_reinstall_mt798x.log 2>&1 || true
+                else
+                    # 非 MT798x 源码的通用修复
+                    ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+                fi
+                
+                # 重新运行 defconfig
+                make defconfig > /tmp/build-logs/defconfig_fix_install.log 2>&1 || true
                 
                 log "  ✅ package/install 错误修复完成"
             fi
             
+            # 修复补丁失败
             if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
                 log "  ⚠️ 检测到补丁失败，正在自动修复..."
                 
@@ -5256,6 +5309,7 @@ EOF
                 log "  ✅ 补丁修复完成，将重试编译"
             fi
             
+            # 修复 Broken pipe 错误
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
@@ -5311,7 +5365,7 @@ EOF
     if [ -d "$target_dir" ]; then
         while IFS= read -r file; do
             [ -n "$file" ] && firmware_files+=("$file")
-        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | grep -v "sha256sums")
+        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums")
         
         for file in "${firmware_files[@]}"; do
             local fname=$(basename "$file")
@@ -5319,7 +5373,7 @@ EOF
             local size_mb=$((size_bytes / 1024 / 1024))
             
             local is_flashable=0
-            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]] || [[ "$fname" == *".itb" && "$fname" != *"initramfs"* ]]; then
+            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
                 is_flashable=1
             fi
             
@@ -5337,9 +5391,6 @@ EOF
         done
     fi
     
-    # ============================================
-    # 针对 immortalwrt-mt798x 下 ac42u 额外验证
-    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
         log "🔍 [MT798x ac42u] 检查特定固件文件..."
         local special_firmware=""
