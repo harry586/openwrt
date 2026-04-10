@@ -1619,6 +1619,9 @@ generate_config() {
     local correct_device="$DEVICE"
     log "🔧 使用传入的设备名: $correct_device"
     
+    # ============================================
+    # 根据源码类型确定设备配置变量格式
+    # ============================================
     local device_config=""
     local platform_sub=""
     
@@ -1754,73 +1757,11 @@ EOF
     fi
     
     # ============================================
-    # LEDE 源码特殊处理（仅 LEDE 生效）
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 [LEDE] 禁用有问题的包..."
-        
-        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        echo "# CONFIG_PACKAGE_wol is not set" >> .config
-        echo "# CONFIG_PACKAGE_urngd is not set" >> .config
-        echo "# CONFIG_PACKAGE_wget-ssl is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-storage-extras is not set" >> .config
-        echo "# CONFIG_PACKAGE_vsftpd is not set" >> .config
-        
-        log "  ✅ LEDE 特殊处理完成"
-    fi
-    
-    # ============================================
-    # OpenWrt 源码特殊处理（仅 OpenWrt 生效）
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "🔧 [OpenWrt] 禁用有问题的包..."
-        
-        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        echo "# CONFIG_PACKAGE_wget-ssl is not set" >> .config
-        echo "# CONFIG_PACKAGE_urngd is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-ipt-offload is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-usb-storage-extras is not set" >> .config
-        echo "# CONFIG_PACKAGE_vsftpd is not set" >> .config
-        
-        log "  ✅ OpenWrt 特殊处理完成"
-    fi
-    
-    # ============================================
-    # MT798x 源码特殊处理：禁用 swconfig（仅 MT798x 生效）
+    # 对于 MT798x 源码，禁用有问题的 swconfig（不影响 Luci）
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
         log "🔧 [MT798x] 禁用有问题的 swconfig..."
         echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-    fi
-    
-    # ============================================
-    # MT798x 源码 ipq40xx 平台引导修复（仅 MT798x + ipq40xx 生效）
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
-        log "🔧 [MT798x] 修复 ipq40xx 平台引导配置..."
-        
-        if [ -f "target/linux/ipq40xx/config-5.4" ] && [ ! -f "target/linux/ipq40xx/config-5.15" ]; then
-            cp target/linux/ipq40xx/config-5.4 target/linux/ipq40xx/config-5.15 2>/dev/null || true
-            log "  ✅ 复制 config-5.4 到 config-5.15"
-        fi
-        
-        cat >> .config << 'EOF'
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-CONFIG_TARGET_INITRAMFS_COMPRESSION_GZIP=y
-CONFIG_KERNEL_ELF=y
-CONFIG_KERNEL_CORE_DUMP_DEFAULT_ELF_HEADERS=y
-CONFIG_KERNEL_DEBUG_INFO=y
-CONFIG_KERNEL_DEBUG_KERNEL=y
-CONFIG_TARGET_IMAGES_FIT=y
-CONFIG_TARGET_IMAGES_FIT_SIGNATURE=n
-CONFIG_KERNEL_LZMA=y
-CONFIG_KERNEL_LZO=y
-CONFIG_KERNEL_OF=y
-CONFIG_KERNEL_OF_EARLY_FLATTREE=y
-EOF
-        log "  ✅ ipq40xx 引导配置已添加"
     fi
     
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
@@ -1829,11 +1770,13 @@ EOF
         log "✅ TCP BBR已启用"
     fi
     
-    if [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
         log "✅ TurboACC已启用"
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+    elif [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
@@ -1850,10 +1793,8 @@ EOF
     log "🔧 强制配置生成固件..."
     
     if grep -q "CONFIG_TARGET_IMAGES_FIT=y" .config; then
-        if [ "$SOURCE_REPO_TYPE" != "immortalwrt-mt798x" ] || [ "$TARGET" != "ipq40xx" ]; then
-            sed -i 's/^CONFIG_TARGET_IMAGES_FIT=y/# CONFIG_TARGET_IMAGES_FIT is not set/' .config
-            log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT"
-        fi
+        sed -i 's/^CONFIG_TARGET_IMAGES_FIT=y/# CONFIG_TARGET_IMAGES_FIT is not set/' .config
+        log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT"
     fi
     
     if ! grep -q "CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config; then
@@ -1898,49 +1839,45 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    # ============================================
-    # 自动检测并使用最合适的内核配置文件（通用功能）
-    # ============================================
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
     
-    local kernel_priority=("6.6" "6.1" "5.15" "5.10" "5.4" "4.19" "4.14")
-    
-    if [ -d "target/linux/$TARGET" ]; then
-        log "🔍 自动检测内核配置文件..."
-        
-        local available_configs=()
-        while IFS= read -r file; do
-            available_configs+=("$file")
-        done < <(find "target/linux/$TARGET" -maxdepth 1 -name "config-*" 2>/dev/null | sort)
-        
-        if [ ${#available_configs[@]} -gt 0 ]; then
-            log "📋 找到以下内核配置文件:"
-            for cfg in "${available_configs[@]}"; do
-                local cfg_ver=$(basename "$cfg" | sed 's/config-//')
-                log "    - $cfg_ver"
+    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
+        if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+            local device_def_file=""
+            local mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+            for mkfile in $mk_files; do
+                if grep -q "define Device.*$correct_device" "$mkfile" 2>/dev/null; then
+                    device_def_file="$mkfile"
+                    break
+                fi
             done
             
-            for pri_ver in "${kernel_priority[@]}"; do
-                for cfg in "${available_configs[@]}"; do
-                    local cfg_ver=$(basename "$cfg" | sed 's/config-//')
-                    if [ "$cfg_ver" = "$pri_ver" ]; then
-                        kernel_config_file="$cfg"
-                        kernel_version="$cfg_ver"
-                        found_kernel=1
-                        log "✅ 选择内核版本: $kernel_version"
-                        break 2
-                    fi
-                done
+            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
+                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
+                if [ -n "$kernel_version" ]; then
+                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
+                fi
+            fi
+        fi
+        
+        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
+            for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
+                kernel_config_file="target/linux/$TARGET/config-$ver"
+                if [ -f "$kernel_config_file" ]; then
+                    kernel_version="$ver"
+                    found_kernel=1
+                    break
+                fi
             done
         else
-            log "⚠️ 未找到内核配置文件"
+            found_kernel=1
         fi
     fi
     
     if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
-        log "✅ 使用内核配置文件: $kernel_config_file"
+        log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
         
         local kernel_patterns=(
             "^CONFIG_USB"
@@ -2191,6 +2128,9 @@ EOF
         fi
     fi
     
+    # ============================================
+    # 验证设备配置
+    # ============================================
     log "🔍 正在验证设备 $correct_device 是否被选中..."
     
     make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || true
@@ -5307,6 +5247,9 @@ workflow_step23_pre_build_check() {
     
     cd $BUILD_DIR
     
+    # ============================================
+    # 在检查前，确保设备配置存在
+    # ============================================
     log "🔧 确保设备配置存在..."
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -5314,11 +5257,15 @@ workflow_step23_pre_build_check() {
         log "✅ 加载环境变量: DEVICE=$DEVICE, TARGET=$TARGET"
     fi
     
+    # ============================================
+    # 根据源码类型和设备定义文件确定设备配置格式
+    # ============================================
     local expected_config=""
     local search_pattern=""
     local platform_sub=""
     
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
+        # 从 mk 文件中提取正确的子平台名称
         local mk_file=""
         for mkf in target/linux/mediatek/image/*.mk; do
             if [ -f "$mkf" ] && grep -q "define Device.*$DEVICE" "$mkf" 2>/dev/null; then
@@ -5338,12 +5285,17 @@ workflow_step23_pre_build_check() {
             search_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${DEVICE}"
             log "🔧 [MT798x] 未找到设备定义文件，使用默认 mt7981 格式"
         fi
+    elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
+        expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+        search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
+        log "🔧 [MT798x] ipq40xx平台，期望配置: $expected_config"
     else
         expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
         search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
         log "🔧 标准格式，期望配置: $expected_config"
     fi
     
+    # 检查设备配置是否存在
     local config_exists=0
     if grep -q "^${expected_config}$" .config 2>/dev/null; then
         config_exists=1
@@ -5409,6 +5361,7 @@ workflow_step23_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
+        # 直接使用 DEVICE 变量的值检查
         local device_for_check="$DEVICE"
         local check_pattern=""
         
@@ -5418,6 +5371,8 @@ workflow_step23_pre_build_check() {
             else
                 check_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${device_for_check}"
             fi
+        elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
+            check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
         else
             check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
         fi
@@ -5597,215 +5552,6 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # ============================================
-    # LEDE 源码特殊预处理
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 [LEDE] 检测到 LEDE 源码，执行特殊预处理..."
-        
-        # 1. 删除有问题的包源文件
-        find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
-        find . -type d -name "*luci-lib-fs*" -exec rm -rf {} \; 2>/dev/null || true
-        find . -type d -name "*wol*" -exec rm -rf {} \; 2>/dev/null || true
-        find . -type d -name "*urngd*" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 2. 修复 wolfssl 头文件问题
-        log "  🔧 修复 wolfssl 头文件..."
-        
-        # 创建完整的 wolfssl 头文件
-        for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
-            if [ -d "$inc_dir" ]; then
-                mkdir -p "$inc_dir/wolfssl/wolfcrypt"
-                
-                # md4.h
-                cat > "$inc_dir/wolfssl/wolfcrypt/md4.h" << 'EOF'
-#ifndef WOLFCRYPT_MD4_H
-#define WOLFCRYPT_MD4_H
-
-#include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define MD4_DIGEST_SIZE 16
-
-typedef struct wc_Md4 {
-    unsigned int digest[MD4_DIGEST_SIZE / sizeof(unsigned int)];
-} wc_Md4;
-
-int wc_InitMd4(wc_Md4* md4);
-int wc_Md4Update(wc_Md4* md4, const unsigned char* data, size_t len);
-int wc_Md4Final(wc_Md4* md4, unsigned char* hash);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-EOF
-                
-                # md5.h
-                cat > "$inc_dir/wolfssl/wolfcrypt/md5.h" << 'EOF'
-#ifndef WOLFCRYPT_MD5_H
-#define WOLFCRYPT_MD5_H
-
-#include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define MD5_DIGEST_SIZE 16
-
-typedef struct wc_Md5 {
-    unsigned int digest[MD5_DIGEST_SIZE / sizeof(unsigned int)];
-} wc_Md5;
-
-int wc_InitMd5(wc_Md5* md5);
-int wc_Md5Update(wc_Md5* md5, const unsigned char* data, size_t len);
-int wc_Md5Final(wc_Md5* md5, unsigned char* hash);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-EOF
-                
-                # sha.h
-                cat > "$inc_dir/wolfssl/wolfcrypt/sha.h" << 'EOF'
-#ifndef WOLFCRYPT_SHA_H
-#define WOLFCRYPT_SHA_H
-
-#include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define SHA_DIGEST_SIZE 20
-
-typedef struct wc_Sha {
-    unsigned int digest[SHA_DIGEST_SIZE / sizeof(unsigned int)];
-} wc_Sha;
-
-int wc_InitSha(wc_Sha* sha);
-int wc_ShaUpdate(wc_Sha* sha, const unsigned char* data, size_t len);
-int wc_ShaFinal(wc_Sha* sha, unsigned char* hash);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-EOF
-                
-                # sha256.h
-                cat > "$inc_dir/wolfssl/wolfcrypt/sha256.h" << 'EOF'
-#ifndef WOLFCRYPT_SHA256_H
-#define WOLFCRYPT_SHA256_H
-
-#include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define SHA256_DIGEST_SIZE 32
-
-typedef struct wc_Sha256 {
-    unsigned int digest[SHA256_DIGEST_SIZE / sizeof(unsigned int)];
-} wc_Sha256;
-
-int wc_InitSha256(wc_Sha256* sha256);
-int wc_Sha256Update(wc_Sha256* sha256, const unsigned char* data, size_t len);
-int wc_Sha256Final(wc_Sha256* sha256, unsigned char* hash);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif
-EOF
-                
-                # options.h
-                cat > "$inc_dir/wolfssl/options.h" << 'EOF'
-#ifndef WOLFSSL_OPTIONS_H
-#define WOLFSSL_OPTIONS_H
-
-#define WOLFSSL_DER_LOAD
-#define WOLFSSL_KEY_GEN
-#define WOLFSSL_CERT_GEN
-#define HAVE_ECC
-#define HAVE_CURVE25519
-#define HAVE_ED25519
-#define HAVE_X25519
-#define WOLFSSL_SHA512
-#define WOLFSSL_SHA384
-#define WOLFSSL_SHA256
-#define OPENSSL_EXTRA
-#define HAVE_OPENSSL
-#define WOLFSSL_MD4
-#define WOLFSSL_MD5
-#define WOLFSSL_SHA
-
-#endif
-EOF
-                log "    ✅ 创建 wolfssl 头文件"
-            fi
-        fi
-        
-        # 3. 在 .config 中禁用有问题的包
-        if [ -f ".config" ]; then
-            sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
-            sed -i '/CONFIG_PACKAGE_luci-lib-fs/d' .config
-            sed -i '/CONFIG_PACKAGE_wol/d' .config
-            sed -i '/CONFIG_PACKAGE_urngd/d' .config
-            echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-            echo "# CONFIG_PACKAGE_luci-lib-fs is not set" >> .config
-            echo "# CONFIG_PACKAGE_wol is not set" >> .config
-            echo "# CONFIG_PACKAGE_urngd is not set" >> .config
-        fi
-        
-        # 4. 重新安装 feeds
-        ./scripts/feeds install -a > /tmp/feeds_install_lede.log 2>&1 || true
-        
-        # 5. 预编译可能缺失的依赖包
-        log "  📦 预编译 LEDE 依赖包..."
-        make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_lede.log 2>&1 || true
-        make package/network/services/hostapd/compile -j1 V=s > /tmp/hostapd_lede.log 2>&1 || true
-        
-        log "  ✅ LEDE 预处理完成"
-    fi
-    
-    # ============================================
-    # OpenWrt 源码特殊预处理
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "🔧 [OpenWrt] 检测到 OpenWrt 源码，执行特殊预处理..."
-        
-        find . -type d -name "*vsftpd-alt*" -exec rm -rf {} \; 2>/dev/null || true
-        
-        if [ -f ".config" ]; then
-            sed -i '/CONFIG_PACKAGE_vsftpd-alt/d' .config
-            echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        fi
-        
-        if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
-            echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-            log "  ✅ 启用 vsftpd"
-        fi
-        
-        log "  📦 预编译 OpenWrt 依赖包..."
-        make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_openwrt.log 2>&1 || true
-        make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_openwrt.log 2>&1 || true
-        
-        ./scripts/feeds install -a > /tmp/feeds_install_openwrt.log 2>&1 || true
-        
-        log "  ✅ OpenWrt 预处理完成"
-    fi
-    
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -5952,9 +5698,19 @@ EOF
         local log_file="build_phase1_attempt${attempt}.log"
         
         if [ -f "$log_file" ]; then
-            # ============================================
-            # 全局通用：检测 package/install Error 255 并修复
-            # ============================================
+            if grep -q "swconfig" "$log_file" || grep -q "SWITCH_LINK_FLAG" "$log_file"; then
+                log "  ⚠️ 检测到 swconfig 编译错误，正在彻底禁用..."
+                
+                find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
+                sed -i '/CONFIG_PACKAGE_swconfig/d' .config
+                echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
+                
+                rm -rf build_dir/target-*/swconfig* 2>/dev/null || true
+                
+                make defconfig > /tmp/build-logs/defconfig_fix_swconfig.log 2>&1 || true
+                log "  ✅ swconfig 已彻底禁用"
+            fi
+            
             if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
                 log "  ⚠️ 检测到 package/install 错误 (Error 255)，正在修复..."
                 
@@ -5970,94 +5726,6 @@ EOF
                 log "  ✅ package/install 错误修复完成"
             fi
             
-            # ============================================
-            # LEDE 源码特殊错误修复
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-                # 检测 wolfssl 头文件缺失
-                if grep -q "wolfssl" "$log_file" || grep -q "crypto_wolfssl" "$log_file" || grep -q "md5.h" "$log_file" || grep -q "md4.h" "$log_file"; then
-                    log "  ⚠️ [LEDE] 检测到 wolfssl 头文件缺失，正在修复..."
-                    
-                    for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
-                        if [ -d "$inc_dir" ]; then
-                            mkdir -p "$inc_dir/wolfssl/wolfcrypt"
-                            
-                            cat > "$inc_dir/wolfssl/wolfcrypt/md4.h" << 'EOF'
-#ifndef WOLFCRYPT_MD4_H
-#define WOLFCRYPT_MD4_H
-#include <stddef.h>
-#define MD4_DIGEST_SIZE 16
-typedef struct wc_Md4 { unsigned int digest[4]; } wc_Md4;
-int wc_InitMd4(wc_Md4* md4);
-int wc_Md4Update(wc_Md4* md4, const unsigned char* data, size_t len);
-int wc_Md4Final(wc_Md4* md4, unsigned char* hash);
-#endif
-EOF
-                            
-                            cat > "$inc_dir/wolfssl/wolfcrypt/md5.h" << 'EOF'
-#ifndef WOLFCRYPT_MD5_H
-#define WOLFCRYPT_MD5_H
-#include <stddef.h>
-#define MD5_DIGEST_SIZE 16
-typedef struct wc_Md5 { unsigned int digest[4]; } wc_Md5;
-int wc_InitMd5(wc_Md5* md5);
-int wc_Md5Update(wc_Md5* md5, const unsigned char* data, size_t len);
-int wc_Md5Final(wc_Md5* md5, unsigned char* hash);
-#endif
-EOF
-                            
-                            cat > "$inc_dir/wolfssl/options.h" << 'EOF'
-#ifndef WOLFSSL_OPTIONS_H
-#define WOLFSSL_OPTIONS_H
-#define WOLFSSL_DER_LOAD
-#define WOLFSSL_KEY_GEN
-#define HAVE_ECC
-#define OPENSSL_EXTRA
-#define WOLFSSL_MD4
-#define WOLFSSL_MD5
-#endif
-EOF
-                        fi
-                    done
-                    
-                    make package/libs/wolfssl/clean -j1 V=s > /tmp/wolfssl_clean.log 2>&1 || true
-                    make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_fix.log 2>&1 || true
-                    log "  ✅ [LEDE] wolfssl 头文件修复完成"
-                fi
-                
-                # 检测 hostapd 错误
-                if grep -q "hostapd" "$log_file" && grep -q "Error" "$log_file"; then
-                    log "  ⚠️ [LEDE] 检测到 hostapd 编译错误，正在修复..."
-                    
-                    rm -rf build_dir/target-*/wolfssl* 2>/dev/null || true
-                    rm -rf build_dir/target-*/hostapd* 2>/dev/null || true
-                    
-                    make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_clean.log 2>&1 || true
-                    log "  ✅ [LEDE] hostapd 修复完成"
-                fi
-            fi
-            
-            # ============================================
-            # MT798x 专用：检测 swconfig 错误并修复
-            # ============================================
-            if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                if grep -q "swconfig" "$log_file" || grep -q "SWITCH_LINK_FLAG" "$log_file"; then
-                    log "  ⚠️ [MT798x] 检测到 swconfig 编译错误，正在彻底禁用..."
-                    
-                    find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-                    sed -i '/CONFIG_PACKAGE_swconfig/d' .config
-                    echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-                    
-                    rm -rf build_dir/target-*/swconfig* 2>/dev/null || true
-                    
-                    make defconfig > /tmp/build-logs/defconfig_fix_swconfig.log 2>&1 || true
-                    log "  ✅ [MT798x] swconfig 已彻底禁用"
-                fi
-            fi
-            
-            # ============================================
-            # 全局通用：检测补丁失败并自动删除问题补丁
-            # ============================================
             if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
                 log "  ⚠️ 检测到补丁失败，正在自动修复..."
                 
@@ -6085,12 +5753,10 @@ EOF
                     fi
                 done
                 
-                if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                    local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                    if [ -f "$ipq40xx_patch" ]; then
-                        log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
-                        rm -f "$ipq40xx_patch"
-                    fi
+                local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
+                if [ -f "$ipq40xx_patch" ]; then
+                    log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
+                    rm -f "$ipq40xx_patch"
                 fi
                 
                 rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
@@ -6099,9 +5765,6 @@ EOF
                 log "  ✅ 补丁修复完成，将重试编译"
             fi
             
-            # ============================================
-            # 全局通用：检测 Broken pipe 错误
-            # ============================================
             if grep -q "Broken pipe" "$log_file"; then
                 log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
                 ulimit -n 65536 2>/dev/null || true
