@@ -1764,10 +1764,8 @@ EOF
         echo "# CONFIG_PACKAGE_wol is not set" >> .config
         echo "# CONFIG_PACKAGE_urngd is not set" >> .config
         echo "# CONFIG_PACKAGE_wget-ssl is not set" >> .config
-        
-        if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
-            echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        fi
+        echo "# CONFIG_PACKAGE_kmod-usb-storage-extras is not set" >> .config
+        echo "# CONFIG_PACKAGE_vsftpd is not set" >> .config
         
         log "  ✅ LEDE 特殊处理完成"
     fi
@@ -1778,25 +1776,12 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
         log "🔧 [OpenWrt] 禁用有问题的包..."
         
-        # 禁用 ppp-mod-pppoe
         echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        
-        # 禁用 vsftpd-alt
         echo "# CONFIG_PACKAGE_vsftpd-alt is not set" >> .config
-        
-        # 禁用 wget-ssl
         echo "# CONFIG_PACKAGE_wget-ssl is not set" >> .config
-        
-        # 禁用 urngd
         echo "# CONFIG_PACKAGE_urngd is not set" >> .config
-        
-        # 禁用 kmod-ipt-offload
         echo "# CONFIG_PACKAGE_kmod-ipt-offload is not set" >> .config
-        
-        # 禁用 kmod-usb-storage-extras
         echo "# CONFIG_PACKAGE_kmod-usb-storage-extras is not set" >> .config
-        
-        # 禁用 vsftpd（暂时禁用，避免 postinst 错误）
         echo "# CONFIG_PACKAGE_vsftpd is not set" >> .config
         
         log "  ✅ OpenWrt 特殊处理完成"
@@ -1913,6 +1898,9 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
+    # ============================================
+    # 自动检测并使用最合适的内核配置文件（通用功能）
+    # ============================================
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
@@ -5624,10 +5612,12 @@ workflow_step25_build_firmware() {
         # 2. 修复 wolfssl 头文件问题
         log "  🔧 修复 wolfssl 头文件..."
         
-        # 创建 wolfssl/wolfcrypt/md4.h 头文件
+        # 创建完整的 wolfssl 头文件
         for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
             if [ -d "$inc_dir" ]; then
                 mkdir -p "$inc_dir/wolfssl/wolfcrypt"
+                
+                # md4.h
                 cat > "$inc_dir/wolfssl/wolfcrypt/md4.h" << 'EOF'
 #ifndef WOLFCRYPT_MD4_H
 #define WOLFCRYPT_MD4_H
@@ -5655,6 +5645,91 @@ int wc_Md4Final(wc_Md4* md4, unsigned char* hash);
 #endif
 EOF
                 
+                # md5.h
+                cat > "$inc_dir/wolfssl/wolfcrypt/md5.h" << 'EOF'
+#ifndef WOLFCRYPT_MD5_H
+#define WOLFCRYPT_MD5_H
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define MD5_DIGEST_SIZE 16
+
+typedef struct wc_Md5 {
+    unsigned int digest[MD5_DIGEST_SIZE / sizeof(unsigned int)];
+} wc_Md5;
+
+int wc_InitMd5(wc_Md5* md5);
+int wc_Md5Update(wc_Md5* md5, const unsigned char* data, size_t len);
+int wc_Md5Final(wc_Md5* md5, unsigned char* hash);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+EOF
+                
+                # sha.h
+                cat > "$inc_dir/wolfssl/wolfcrypt/sha.h" << 'EOF'
+#ifndef WOLFCRYPT_SHA_H
+#define WOLFCRYPT_SHA_H
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define SHA_DIGEST_SIZE 20
+
+typedef struct wc_Sha {
+    unsigned int digest[SHA_DIGEST_SIZE / sizeof(unsigned int)];
+} wc_Sha;
+
+int wc_InitSha(wc_Sha* sha);
+int wc_ShaUpdate(wc_Sha* sha, const unsigned char* data, size_t len);
+int wc_ShaFinal(wc_Sha* sha, unsigned char* hash);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+EOF
+                
+                # sha256.h
+                cat > "$inc_dir/wolfssl/wolfcrypt/sha256.h" << 'EOF'
+#ifndef WOLFCRYPT_SHA256_H
+#define WOLFCRYPT_SHA256_H
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define SHA256_DIGEST_SIZE 32
+
+typedef struct wc_Sha256 {
+    unsigned int digest[SHA256_DIGEST_SIZE / sizeof(unsigned int)];
+} wc_Sha256;
+
+int wc_InitSha256(wc_Sha256* sha256);
+int wc_Sha256Update(wc_Sha256* sha256, const unsigned char* data, size_t len);
+int wc_Sha256Final(wc_Sha256* sha256, unsigned char* hash);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+EOF
+                
+                # options.h
                 cat > "$inc_dir/wolfssl/options.h" << 'EOF'
 #ifndef WOLFSSL_OPTIONS_H
 #define WOLFSSL_OPTIONS_H
@@ -5672,12 +5747,14 @@ EOF
 #define OPENSSL_EXTRA
 #define HAVE_OPENSSL
 #define WOLFSSL_MD4
+#define WOLFSSL_MD5
+#define WOLFSSL_SHA
 
 #endif
 EOF
-                log "    ✅ 创建 $inc_dir/wolfssl/wolfcrypt/md4.h 和 options.h"
+                log "    ✅ 创建 wolfssl 头文件"
             fi
-        done
+        fi
         
         # 3. 在 .config 中禁用有问题的包
         if [ -f ".config" ]; then
@@ -5691,19 +5768,13 @@ EOF
             echo "# CONFIG_PACKAGE_urngd is not set" >> .config
         fi
         
-        # 4. 确保 vsftpd 被启用
-        if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config; then
-            echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        fi
-        
-        # 5. 重新安装 feeds
+        # 4. 重新安装 feeds
         ./scripts/feeds install -a > /tmp/feeds_install_lede.log 2>&1 || true
         
-        # 6. 预编译可能缺失的依赖包
+        # 5. 预编译可能缺失的依赖包
         log "  📦 预编译 LEDE 依赖包..."
-        make package/feeds/packages/liblua/compile -j1 V=s > /tmp/liblua_lede.log 2>&1 || true
-        make package/system/rpcd/compile -j1 V=s > /tmp/rpcd_lede.log 2>&1 || true
         make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_lede.log 2>&1 || true
+        make package/network/services/hostapd/compile -j1 V=s > /tmp/hostapd_lede.log 2>&1 || true
         
         log "  ✅ LEDE 预处理完成"
     fi
@@ -5904,49 +5975,52 @@ EOF
             # ============================================
             if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
                 # 检测 wolfssl 头文件缺失
-                if grep -q "wolfssl" "$log_file" || grep -q "crypto_wolfssl" "$log_file" || grep -q "md4.h" "$log_file"; then
+                if grep -q "wolfssl" "$log_file" || grep -q "crypto_wolfssl" "$log_file" || grep -q "md5.h" "$log_file" || grep -q "md4.h" "$log_file"; then
                     log "  ⚠️ [LEDE] 检测到 wolfssl 头文件缺失，正在修复..."
                     
                     for inc_dir in $(find staging_dir -type d -name "include" 2>/dev/null); do
                         if [ -d "$inc_dir" ]; then
                             mkdir -p "$inc_dir/wolfssl/wolfcrypt"
+                            
                             cat > "$inc_dir/wolfssl/wolfcrypt/md4.h" << 'EOF'
 #ifndef WOLFCRYPT_MD4_H
 #define WOLFCRYPT_MD4_H
-
 #include <stddef.h>
-
 #define MD4_DIGEST_SIZE 16
-
-typedef struct wc_Md4 {
-    unsigned int digest[MD4_DIGEST_SIZE / sizeof(unsigned int)];
-} wc_Md4;
-
+typedef struct wc_Md4 { unsigned int digest[4]; } wc_Md4;
 int wc_InitMd4(wc_Md4* md4);
 int wc_Md4Update(wc_Md4* md4, const unsigned char* data, size_t len);
 int wc_Md4Final(wc_Md4* md4, unsigned char* hash);
-
 #endif
 EOF
+                            
+                            cat > "$inc_dir/wolfssl/wolfcrypt/md5.h" << 'EOF'
+#ifndef WOLFCRYPT_MD5_H
+#define WOLFCRYPT_MD5_H
+#include <stddef.h>
+#define MD5_DIGEST_SIZE 16
+typedef struct wc_Md5 { unsigned int digest[4]; } wc_Md5;
+int wc_InitMd5(wc_Md5* md5);
+int wc_Md5Update(wc_Md5* md5, const unsigned char* data, size_t len);
+int wc_Md5Final(wc_Md5* md5, unsigned char* hash);
+#endif
+EOF
+                            
                             cat > "$inc_dir/wolfssl/options.h" << 'EOF'
 #ifndef WOLFSSL_OPTIONS_H
 #define WOLFSSL_OPTIONS_H
-
 #define WOLFSSL_DER_LOAD
 #define WOLFSSL_KEY_GEN
-#define WOLFSSL_CERT_GEN
 #define HAVE_ECC
-#define HAVE_CURVE25519
-#define WOLFSSL_SHA256
 #define OPENSSL_EXTRA
-#define HAVE_OPENSSL
 #define WOLFSSL_MD4
-
+#define WOLFSSL_MD5
 #endif
 EOF
                         fi
                     done
                     
+                    make package/libs/wolfssl/clean -j1 V=s > /tmp/wolfssl_clean.log 2>&1 || true
                     make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_fix.log 2>&1 || true
                     log "  ✅ [LEDE] wolfssl 头文件修复完成"
                 fi
@@ -5956,9 +6030,9 @@ EOF
                     log "  ⚠️ [LEDE] 检测到 hostapd 编译错误，正在修复..."
                     
                     rm -rf build_dir/target-*/wolfssl* 2>/dev/null || true
-                    make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_clean.log 2>&1 || true
                     rm -rf build_dir/target-*/hostapd* 2>/dev/null || true
                     
+                    make package/libs/wolfssl/compile -j1 V=s > /tmp/wolfssl_clean.log 2>&1 || true
                     log "  ✅ [LEDE] hostapd 修复完成"
                 fi
             fi
