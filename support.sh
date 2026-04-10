@@ -28,10 +28,8 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic bcm47189"
 DEVICES["asus_rt-ac42u"]="ipq40xx generic bcm47189"
-DEVICES["cmcc_rax3000m"]="mediatek filogic mt7981"
-DEVICES["cmcc_rax3000m-nand"]="mediatek filogic mt7981"
-DEVICES["cmcc_rax3000m-nand-ubootmod"]="mediatek filogic mt7981"
-DEVICES["cmcc_rax3000m-emmc"]="mediatek filogic mt7981"
+DEVICES["cmcc_rax3000m"]="mediatek mt7981 mt7981"
+DEVICES["cmcc_rax3000m-nand"]="mediatek mt7981 mt7981"
 DEVICES["netgear_wndr3800"]="ath79 generic ar7161"
 #【support.sh-03-end】
 
@@ -185,10 +183,10 @@ get_device_platform() {
         return 0
     fi
     
-    # 设备名映射
+    # 设备名映射（仅针对 MT798x 相关设备）
     local mapped_name="$device_name"
     case "$device_name" in
-        cmcc_rax3000m-nand|cmcc_rax3000m-nand-ubootmod|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
+        cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
             mapped_name="cmcc_rax3000m"
             log "🔧 设备名映射: $device_name -> $mapped_name"
             ;;
@@ -676,11 +674,12 @@ full_config_process() {
     log "构建目录: $build_dir"
     log "额外包: $extra_packages"
     
+    # 设备名转换：将带后缀的设备名转换为基础设备名
     local converted_device="$device_name"
     case "$device_name" in
-        cmcc_rax3000m-nand|cmcc_rax3000m-nand-ubootmod|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
+        cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
             converted_device="cmcc_rax3000m"
-            log "🔧 设备名转换: $device_name -> $converted_device"
+            log "🔧 设备名转换: $device_name -> $converted_device (使用 DTS overlay)"
             ;;
         ac42u|rt-ac42u)
             converted_device="asus_rt-ac42u"
@@ -688,14 +687,18 @@ full_config_process() {
             ;;
     esac
     
+    # 验证设备
     validate_device "$converted_device" > /dev/null
     
+    # 检查构建目录
     if [ ! -d "$build_dir" ]; then
         error "构建目录不存在: $build_dir"
     fi
     
+    # 切换到构建目录
     cd "$build_dir" || error "无法进入构建目录: $build_dir"
     
+    # 生成基础配置（调用主脚本）
     log "生成基础配置..."
     "$BUILD_MAIN_SCRIPT" generate_config "$extra_packages" "$converted_device"
     
@@ -703,10 +706,19 @@ full_config_process() {
         error "生成基础配置失败"
     fi
     
+    # 应用USB通用配置
     apply_generic_config "usb-generic" "$build_dir"
+    
+    # 应用模式配置
     apply_generic_config "$config_mode" "$build_dir"
+    
+    # 应用设备专用配置
     apply_device_config "$converted_device" "$build_dir"
+    
+    # 应用配置（调用主脚本）
     apply_config
+    
+    # 显示配置信息
     show_config_info "$converted_device" "$config_mode" "$build_dir"
     
     success "完整配置流程完成"
