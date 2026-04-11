@@ -5141,6 +5141,101 @@ EOF
     fi
     
     # ============================================
+    # 全局动态目录创建函数
+    # ============================================
+    ensure_root_dirs() {
+        local target="$1"
+        local build_dir="$2"
+        
+        log "  🔧 检查并创建 root 目录..."
+        
+        # 查找所有可能的 target 构建目录
+        local target_dirs=$(find "$build_dir/build_dir" -maxdepth 1 -type d -name "target-*" 2>/dev/null)
+        
+        for tdir in $target_dirs; do
+            # 提取架构信息
+            local arch_name=$(basename "$tdir" | sed 's/^target-//')
+            
+            # 根据目标平台确定 root 目录名
+            local root_name=""
+            case "$target" in
+                ipq40xx|ipq806x|qcom)
+                    root_name="root-ipq40xx"
+                    ;;
+                mediatek|ramips)
+                    if [[ "$SUBTARGET" == "filogic" ]] || [[ "$SUBTARGET" == "mt7981" ]]; then
+                        root_name="root-mediatek"
+                    else
+                        root_name="root-ramips"
+                    fi
+                    ;;
+                ath79)
+                    root_name="root-ath79"
+                    ;;
+                bcm27xx|bcm53xx)
+                    root_name="root-bcm"
+                    ;;
+                x86|i386|x64)
+                    root_name="root-x86"
+                    ;;
+                *)
+                    root_name="root-${target}"
+                    ;;
+            esac
+            
+            local root_path="$tdir/$root_name"
+            
+            if [ ! -d "$root_path" ]; then
+                log "    📁 创建缺失目录: $root_path"
+                mkdir -p "$root_path"
+                mkdir -p "$root_path/etc"
+                mkdir -p "$root_path/lib"
+                mkdir -p "$root_path/usr"
+                mkdir -p "$root_path/tmp"
+                mkdir -p "$root_path/dev"
+                mkdir -p "$root_path/proc"
+                mkdir -p "$root_path/sys"
+            else
+                log "    ✅ $root_name 目录已存在"
+            fi
+        done
+        
+        # 如果没有找到任何 target 目录，尝试基于已知架构创建
+        if [ -z "$target_dirs" ]; then
+            log "    ⚠️ 未找到 target 构建目录，尝试基于架构预创建..."
+            
+            # 根据 CPU 架构推断可能的目录名
+            local arch_pattern=""
+            case "$(uname -m)" in
+                x86_64)
+                    arch_pattern="x86_64"
+                    ;;
+                aarch64)
+                    arch_pattern="aarch64"
+                    ;;
+                arm*)
+                    arch_pattern="arm_cortex-a7"
+                    ;;
+            esac
+            
+            if [ -n "$arch_pattern" ]; then
+                local possible_dir="$build_dir/build_dir/target-${arch_pattern}*"
+                for pdir in $possible_dir; do
+                    if [ -d "$pdir" ]; then
+                        local root_name="root-${target}"
+                        local root_path="$pdir/$root_name"
+                        log "    📁 创建目录: $root_path"
+                        mkdir -p "$root_path"
+                        mkdir -p "$root_path/etc" "$root_path/lib" "$root_path/usr" "$root_path/tmp"
+                    fi
+                done
+            fi
+        fi
+        
+        log "  ✅ root 目录检查完成"
+    }
+    
+    # ============================================
     # 源码特定预处理
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
@@ -5194,13 +5289,30 @@ EOF
     
     # 步骤2: 编译内核和模块
     log "  📦 步骤2: 编译内核和模块..."
+    
+    # 动态创建 root 目录
+    ensure_root_dirs "$TARGET" "$BUILD_DIR"
+    
     set +e
     make -j$MAKE_JOBS target/compile $make_args 2>&1 | tee build_step2.log
     STEP2_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
     if [ $STEP2_EXIT_CODE -ne 0 ]; then
-        log "  ⚠️ 内核编译有警告，继续..."
+        # 检查是否是目录不存在导致的错误
+        if grep -q "No such file or directory" build_step2.log 2>/dev/null; then
+            log "    🔧 检测到目录缺失，重新创建并重试..."
+            ensure_root_dirs "$TARGET" "$BUILD_DIR"
+            
+            set +e
+            make -j$MAKE_JOBS target/compile $make_args 2>&1 | tee -a build_step2.log
+            STEP2_EXIT_CODE=${PIPESTATUS[0]}
+            set -e
+        fi
+        
+        if [ $STEP2_EXIT_CODE -ne 0 ]; then
+            log "  ⚠️ 内核编译有警告，继续..."
+        fi
     else
         log "  ✅ 步骤2完成"
     fi
@@ -5292,13 +5404,30 @@ EOF
     
     # 步骤5: 生成固件
     log "  📦 步骤5: 生成固件..."
+    
+    # 再次确保 root 目录存在
+    ensure_root_dirs "$TARGET" "$BUILD_DIR"
+    
     set +e
     make -j1 target/install $make_args 2>&1 | tee build_step5.log
     STEP5_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
     if [ $STEP5_EXIT_CODE -ne 0 ]; then
-        log "  ⚠️ 固件生成有警告，继续..."
+        # 检查是否是目录不存在导致的错误
+        if grep -q "No such file or directory" build_step5.log 2>/dev/null; then
+            log "    🔧 检测到目录缺失，重新创建并重试..."
+            ensure_root_dirs "$TARGET" "$BUILD_DIR"
+            
+            set +e
+            make -j1 target/install $make_args 2>&1 | tee -a build_step5.log
+            STEP5_EXIT_CODE=${PIPESTATUS[0]}
+            set -e
+        fi
+        
+        if [ $STEP5_EXIT_CODE -ne 0 ]; then
+            log "  ⚠️ 固件生成有警告，继续..."
+        fi
     else
         log "  ✅ 步骤5完成"
     fi
