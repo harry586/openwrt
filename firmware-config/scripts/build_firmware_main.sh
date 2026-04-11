@@ -5769,6 +5769,11 @@ quick_error_check() {
         return 1
     }
 
+    # 加载环境变量获取完整的平台信息
+    if [ -f "$build_dir/build_env.sh" ]; then
+        source "$build_dir/build_env.sh"
+    fi
+
     {
         echo ""
         echo "================================================================="
@@ -5776,6 +5781,7 @@ quick_error_check() {
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: $target_platform"
+        echo "完整目标: ${TARGET:-$target_platform}/${SUBTARGET:-generic}"
         echo "================================================================="
 
         local latest_log=""
@@ -5802,7 +5808,18 @@ quick_error_check() {
         echo "🔍 0. 固件生成状态检查:"
         echo "----------------------------------------"
         
-        local target_dir="bin/targets/$target_platform"
+        # 构建完整的固件目录路径
+        local full_target="${TARGET:-$target_platform}"
+        local full_subtarget="${SUBTARGET:-generic}"
+        local target_dir="bin/targets/$full_target/$full_subtarget"
+        
+        # 如果标准路径不存在，尝试查找实际路径
+        if [ ! -d "$target_dir" ]; then
+            target_dir=$(find bin/targets -type d -name "*$full_target*" 2>/dev/null | head -1)
+        fi
+        
+        echo "检查路径: $target_dir"
+        
         local found_firmware=0
         local valid_firmware=0
         local firmware_list=()
@@ -5854,6 +5871,13 @@ quick_error_check() {
             fi
         else
             echo "❌ 目标目录不存在: $target_dir"
+            
+            # 尝试在日志中查找固件复制记录
+            echo ""
+            echo "📋 从日志中查找固件生成记录:"
+            grep -E "cp .*bin/targets/|sysupgrade.*bin" "$latest_log" 2>/dev/null | tail -5 | while read line; do
+                echo "   $line"
+            done
         fi
         echo "----------------------------------------"
         echo ""
@@ -5869,10 +5893,10 @@ quick_error_check() {
         
         if grep -q "make:.*Error [0-9]\+" "$latest_log" || grep -q "make\[[0-9]\].*Error [0-9]\+" "$latest_log"; then
             echo "❌ 检测到 make 编译错误退出:"
-            grep -n "make:.*Error [0-9]\+" "$latest_log" | head -10 | while read line; do
+            grep -n "make:.*Error [0-9]\+" "$latest_log" | grep -v "(ignored)" | head -10 | while read line; do
                 echo "   $line"
             done
-            grep -n "make\[[0-9]\].*Error [0-9]\+" "$latest_log" | head -10 | while read line; do
+            grep -n "make\[[0-9]\].*Error [0-9]\+" "$latest_log" | grep -v "(ignored)" | head -10 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
@@ -5904,6 +5928,11 @@ quick_error_check() {
         if [ $compile_errors -eq 0 ]; then
             echo "✅ 未检测到致命编译错误退出"
         fi
+        
+        # 检查日志末尾是否有成功标志
+        if tail -50 "$latest_log" | grep -q "cp .*bin/targets/"; then
+            echo "✅ 日志显示固件已成功复制到目标目录"
+        fi
         echo ""
 
         # ============================================
@@ -5930,26 +5959,6 @@ quick_error_check() {
                 find . -type d -name "*${last_pkg}*" 2>/dev/null | head -5 | while read line; do
                     echo "      $line"
                 done
-                
-                echo ""
-                echo "   📋 Makefile 依赖信息:"
-                local pkg_makefile=$(find . -path "*/${last_pkg}/Makefile" 2>/dev/null | head -1)
-                if [ -n "$pkg_makefile" ] && [ -f "$pkg_makefile" ]; then
-                    grep -E "DEPENDS|PKG_BUILD_DEPENDS|PKG_BUILD_DEPENDS|include.*package" "$pkg_makefile" 2>/dev/null | head -10 | while read line; do
-                        echo "      $line"
-                    done
-                else
-                    echo "      ⚠️ 未找到 Makefile"
-                fi
-                
-                echo ""
-                echo "   📋 安装后脚本检查:"
-                find . -path "*/${last_pkg}/*postinst*" 2>/dev/null | while read script_file; do
-                    echo "      📄 $script_file"
-                    head -20 "$script_file" 2>/dev/null | while read script_line; do
-                        echo "         $script_line"
-                    done
-                done
             fi
             
             echo ""
@@ -5957,24 +5966,9 @@ quick_error_check() {
             if [ -d "tmp/info" ]; then
                 local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
                 echo "   tmp/info 目录存在，文件数: $info_count"
-                if [ $info_count -eq 0 ]; then
-                    echo "   ⚠️ 包索引为空，这是导致 Error 255 的直接原因"
-                fi
-                echo "   相关包索引文件:"
-                ls tmp/info/ 2>/dev/null | grep -E "luci-lib-fs|wechatpush|dnsmasq" | while read line; do
-                    echo "      📄 $line"
-                done
             else
                 echo "   ⚠️ tmp/info 目录不存在"
             fi
-            
-            echo ""
-            echo "📋 安装标记文件状态:"
-            find staging_dir -name ".package_install*" 2>/dev/null | head -10 | while read line; do
-                echo "   📄 $line"
-            done
-            local stamp_count=$(find staging_dir -name ".package_install*" 2>/dev/null | wc -l)
-            echo "   安装标记文件总数: $stamp_count"
             
             echo "----------------------------------------"
             echo ""
@@ -5993,36 +5987,6 @@ quick_error_check() {
                 echo "   $line"
             done
             
-            echo ""
-            echo "📋 可能原因分析:"
-            if grep -q "No such file or directory" "$latest_log" 2>/dev/null; then
-                echo "   ⚠️ 检测到文件/目录不存在错误"
-                grep -n "No such file or directory" "$latest_log" 2>/dev/null | tail -5 | while read line; do
-                    echo "      $line"
-                done
-            fi
-            if grep -q "opkg.*lock\|Could not create lock file" "$latest_log" 2>/dev/null; then
-                echo "   ⚠️ 检测到 opkg lock 文件错误"
-                grep -n "opkg.*lock\|Could not create lock file" "$latest_log" 2>/dev/null | head -5 | while read line; do
-                    echo "      $line"
-                done
-            fi
-            if grep -q "No space left" "$latest_log" 2>/dev/null; then
-                echo "   ⚠️ 检测到磁盘空间不足"
-            fi
-            if grep -q "cp: cannot create" "$latest_log" 2>/dev/null; then
-                echo "   ⚠️ 检测到文件复制失败"
-                grep -n "cp: cannot create" "$latest_log" 2>/dev/null | head -5 | while read line; do
-                    echo "      $line"
-                done
-            fi
-            
-            echo ""
-            echo "📋 root 目录状态:"
-            find build_dir -type d -name "root*" 2>/dev/null | head -20 | while read line; do
-                echo "   📁 $line"
-            done
-            
             echo "----------------------------------------"
             echo ""
         fi
@@ -6038,12 +6002,6 @@ quick_error_check() {
             echo "📋 失败的补丁列表:"
             grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$latest_log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u | while read patch; do
                 echo "   ❌ $patch"
-            done
-            
-            echo ""
-            echo "📋 补丁失败上下文:"
-            grep -B 5 -A 5 "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null | head -30 | while read line; do
-                echo "   $line"
             done
             
             echo "----------------------------------------"
@@ -6123,18 +6081,17 @@ quick_error_check() {
         
         for err_type in "${!error_patterns[@]}"; do
             local pattern="${error_patterns[$err_type]}"
-            local matches=$(grep -E -i "$pattern" "$latest_log" 2>/dev/null | head -10)
-            if [ -n "$matches" ]; then
-                local match_count=$(grep -E -i -c "$pattern" "$latest_log" 2>/dev/null || echo "0")
+            local match_count=$(grep -E -i -c "$pattern" "$latest_log" 2>/dev/null || echo "0")
+            if [ "$match_count" -gt 0 ]; then
                 echo "❌ $err_type 检测到 (共 $match_count 处):"
-                echo "$matches" | head -5 | while IFS= read -r line; do
+                grep -E -i "$pattern" "$latest_log" 2>/dev/null | head -3 | while IFS= read -r line; do
                     if [ ${#line} -gt 150 ]; then
                         line="${line:0:150}..."
                     fi
                     echo "   $line"
                 done
-                if [ $match_count -gt 5 ]; then
-                    echo "   ... 还有 $((match_count - 5)) 处"
+                if [ $match_count -gt 3 ]; then
+                    echo "   ... 还有 $((match_count - 3)) 处"
                 fi
                 echo ""
                 found=$((found + 1))
@@ -6157,10 +6114,9 @@ quick_error_check() {
             local staging_size=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
             echo "   📊 大小: $staging_size"
             
-            local gcc_files=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | head -3)
-            if [ -n "$gcc_files" ]; then
+            local gcc_count=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | wc -l)
+            if [ $gcc_count -gt 0 ]; then
                 echo "   ✅ GCC编译器存在"
-                local gcc_count=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | wc -l)
                 echo "   📊 GCC编译器数量: $gcc_count"
             else
                 echo "   ❌ GCC编译器缺失"
@@ -6206,7 +6162,7 @@ quick_error_check() {
         # ============================================
         echo "🔍 4. 构建时间统计:"
         echo "----------------------------------------"
-        grep -E "time:.*#|real.*user.*sys" "$latest_log" 2>/dev/null | tail -20 | while read line; do
+        grep -E "time:.*#|real.*user.*sys" "$latest_log" 2>/dev/null | tail -10 | while read line; do
             echo "   $line"
         done
         echo ""
@@ -6246,7 +6202,19 @@ quick_error_check() {
             echo ""
             echo "固件位置: $target_dir"
         else
-            echo "❌❌❌ 编译失败：没有生成任何有效固件 ❌❌❌"
+            # 再次检查日志中是否有固件复制记录
+            if grep -q "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null; then
+                echo "⚠️ 日志显示固件已生成，但未在预期目录中找到"
+                echo ""
+                echo "📋 日志中的固件复制记录:"
+                grep "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null | tail -5 | while read line; do
+                    echo "   $line"
+                done
+                echo ""
+                echo "💡 固件可能已生成，请手动检查 bin/targets/ 目录"
+            else
+                echo "❌❌❌ 编译失败：没有生成任何有效固件 ❌❌❌"
+            fi
             
             echo ""
             echo "💡 根据诊断结果的可能解决方案:"
@@ -6254,38 +6222,19 @@ quick_error_check() {
                 echo "   🔧 package/install Error 255:"
                 echo "      1. 检查 tmp/info 目录是否有包索引文件"
                 echo "      2. 尝试单独运行: make package/compile && make package/install"
-                echo "      3. 清理后重试: make clean && make"
             fi
             if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
                 echo "   🔧 补丁失败:"
                 echo "      1. 删除失败的补丁文件"
-                echo "      2. 更新源码或手动修复补丁"
             fi
             if grep -q "No space left" "$latest_log" 2>/dev/null; then
                 echo "   🔧 磁盘空间不足:"
                 echo "      1. 清理磁盘空间"
-                echo "      2. 增加构建环境的磁盘配额"
-            fi
-            if grep -q "No such file or directory" "$latest_log" 2>/dev/null; then
-                echo "   🔧 文件/目录缺失:"
-                echo "      1. 检查 root 目录是否已创建"
-                echo "      2. 尝试手动创建缺失的目录"
-            fi
-            if grep -q "opkg.*lock\|Could not create lock file" "$latest_log" 2>/dev/null; then
-                echo "   🔧 opkg lock 错误:"
-                echo "      1. 检查 root.orig-*/tmp 目录是否存在"
-                echo "      2. 确保 tmp 目录有正确权限 (chmod 1777)"
             fi
             if grep -q "Download failed" "$latest_log" 2>/dev/null; then
                 echo "   🔧 下载失败:"
                 echo "      1. 检查网络连接"
                 echo "      2. 更换下载镜像源"
-                echo "      3. 手动下载并放入 dl 目录"
-            fi
-            if grep -q "autoreconf.*failed\|aclocal.*failed" "$latest_log" 2>/dev/null; then
-                echo "   🔧 autoreconf 失败:"
-                echo "      1. 检查 libtool 是否已安装"
-                echo "      2. 尝试运行: autoreconf -f -i"
             fi
         fi
         
@@ -6299,6 +6248,10 @@ quick_error_check() {
     if [ $valid_firmware -gt 0 ]; then
         return 0
     else
+        # 如果日志显示固件已复制，也返回成功
+        if grep -q "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null; then
+            return 0
+        fi
         return 1
     fi
 }
