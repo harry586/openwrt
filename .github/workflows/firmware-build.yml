@@ -519,9 +519,6 @@ jobs:
           path: |
             /mnt/openwrt-build/bin/targets/**/*.bin
             /mnt/openwrt-build/bin/targets/**/*.img
-            !/mnt/openwrt-build/bin/targets/**/*.itb
-            !/mnt/openwrt-build/bin/targets/**/*.manifest
-            !/mnt/openwrt-build/bin/targets/**/packages/**
           retention-days: 7
           if-no-files-found: warn
 #【firmware-build.yml-27-end】
