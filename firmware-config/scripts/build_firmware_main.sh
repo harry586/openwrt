@@ -5161,21 +5161,6 @@ EOF
             done
         fi
         
-        # 修复 package/install 依赖顺序问题（不删除包）
-        log "  🔧 修复 package/install 依赖顺序..."
-        
-        # 创建临时目录用于存放安装脚本修复
-        mkdir -p package/feeds/luci/luci-app-wechatpush 2>/dev/null || true
-        
-        # 修复可能存在的循环依赖
-        if [ -f "tmp/info/.packageinfo-*" ]; then
-            rm -f tmp/info/.packageinfo-* 2>/dev/null || true
-        fi
-        
-        # 确保 feeds 正确安装
-        ./scripts/feeds update -a > /tmp/build-logs/feeds_update_mt798x.log 2>&1 || true
-        ./scripts/feeds install -a > /tmp/build-logs/feeds_install_mt798x.log 2>&1 || true
-        
         log "  ✅ MT798x 预处理完成"
     fi
     
@@ -5224,44 +5209,78 @@ EOF
                 log "  ✅ swconfig 已彻底禁用"
             fi
             
-            # 修复 package/install 错误 (Error 255) - 不删除包，只清理状态
+            # 修复 package/install 错误 (Error 255)
             if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
-                log "  ⚠️ 检测到 package/install 错误 (Error 255)，正在清理安装状态..."
+                log "  ⚠️ 检测到 package/install 错误 (Error 255)"
                 
-                # 清理安装标记文件（不删除包本身）
+                # ============================================
+                # 收集诊断信息
+                # ============================================
+                log "  🔍 ===== 开始收集诊断信息 ====="
+                
+                local diag_dir="/tmp/build-logs/diagnosis"
+                mkdir -p "$diag_dir"
+                
+                # 1. 提取错误发生前最后配置的包
+                log "  📋 1. 错误发生前最后配置的包:"
+                grep -B 30 "package/install.*Error 255\|package/install\] Error" "$log_file" | grep -E "Configuring |Packaging " | tail -10 | tee "$diag_dir/last_packages.txt"
+                
+                # 2. 查找 luci-lib-fs 相关信息
+                log "  📋 2. luci-lib-fs 相关信息:"
+                echo "=== luci-lib-fs 源码位置 ===" >> "$diag_dir/luci-lib-fs.txt"
+                find . -type d -name "*luci-lib-fs*" 2>/dev/null >> "$diag_dir/luci-lib-fs.txt" || echo "  未找到目录" >> "$diag_dir/luci-lib-fs.txt"
+                
+                echo "" >> "$diag_dir/luci-lib-fs.txt"
+                echo "=== luci-lib-fs Makefile ===" >> "$diag_dir/luci-lib-fs.txt"
+                find . -path "*/luci-lib-fs/Makefile" 2>/dev/null | head -1 | xargs cat 2>/dev/null >> "$diag_dir/luci-lib-fs.txt" || echo "  未找到 Makefile" >> "$diag_dir/luci-lib-fs.txt"
+                
+                echo "" >> "$diag_dir/luci-lib-fs.txt"
+                echo "=== luci-lib-fs postinst 脚本 ===" >> "$diag_dir/luci-lib-fs.txt"
+                find . -path "*/luci-lib-fs/*postinst*" 2>/dev/null >> "$diag_dir/luci-lib-fs.txt" || echo "  未找到 postinst 脚本" >> "$diag_dir/luci-lib-fs.txt"
+                
+                cat "$diag_dir/luci-lib-fs.txt" | while read line; do
+                    log "    $line"
+                done
+                
+                # 3. 查找 wechatpush 相关信息
+                log "  📋 3. luci-app-wechatpush 相关信息:"
+                echo "=== wechatpush 源码位置 ===" >> "$diag_dir/wechatpush.txt"
+                find . -type d -name "*wechatpush*" 2>/dev/null >> "$diag_dir/wechatpush.txt" || echo "  未找到目录" >> "$diag_dir/wechatpush.txt"
+                
+                echo "" >> "$diag_dir/wechatpush.txt"
+                echo "=== wechatpush Makefile ===" >> "$diag_dir/wechatpush.txt"
+                find . -path "*/luci-app-wechatpush/Makefile" 2>/dev/null | head -1 | xargs cat 2>/dev/null >> "$diag_dir/wechatpush.txt" || echo "  未找到 Makefile" >> "$diag_dir/wechatpush.txt"
+                
+                cat "$diag_dir/wechatpush.txt" | while read line; do
+                    log "    $line"
+                done
+                
+                # 4. 检查包索引文件
+                log "  📋 4. 包索引状态:"
+                if [ -d "tmp/info" ]; then
+                    ls -la tmp/info/ | head -20 | tee "$diag_dir/package_info.txt"
+                else
+                    echo "  tmp/info 目录不存在" | tee "$diag_dir/package_info.txt"
+                fi
+                
+                # 5. 检查 staging_dir 中的安装标记
+                log "  📋 5. 安装标记文件:"
+                find staging_dir -name ".package_install*" 2>/dev/null | head -10 | tee "$diag_dir/stamp_files.txt"
+                
+                log "  🔍 ===== 诊断信息收集完成 ====="
+                
+                # 清理安装标记文件
+                log "  🔧 清理安装状态..."
                 rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
                 rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
                 rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null || true
                 rm -f tmp/info/.packageinfo-* 2>/dev/null || true
                 
-                # 清理 ipkg 目录中的临时文件
+                # 清理 ipkg 目录
                 find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
                 
-                # 清理可能损坏的包构建目录
-                local failed_pkgs=$(grep -B 10 "Error 255" "$log_file" | grep -E "make\[.*\] .* package/" | sed -E 's/.*package\/([^/]*)\/.*/\1/' | sort -u)
-                for pkg in $failed_pkgs; do
-                    if [ -n "$pkg" ]; then
-                        log "    🔧 清理包构建目录: $pkg"
-                        rm -rf build_dir/target-*/${pkg}-* 2>/dev/null || true
-                    fi
-                done
-                
-                # 针对 immortalwrt-mt798x 源码的特殊修复
-                if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                    log "    🔧 [MT798x] 执行特殊修复..."
-                    
-                    # 修复 luci-app-wechatpush 可能的问题
-                    if [ -f "package/feeds/luci/luci-app-wechatpush/Makefile" ]; then
-                        # 确保依赖正确安装
-                        ./scripts/feeds install luci-app-wechatpush > /dev/null 2>&1 || true
-                    fi
-                    
-                    # 确保所有 feeds 包正确链接
-                    ./scripts/feeds install -a > /tmp/feeds_reinstall_mt798x.log 2>&1 || true
-                else
-                    # 非 MT798x 源码的通用修复
-                    ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
-                fi
+                # 重新安装 feeds
+                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
                 
                 # 重新运行 defconfig
                 make defconfig > /tmp/build-logs/defconfig_fix_install.log 2>&1 || true
