@@ -5149,14 +5149,11 @@ EOF
         
         log "  🔧 检查并创建所有 root 目录..."
         
-        # 查找所有可能的 target 构建目录
         local target_dirs=$(find "$build_dir/build_dir" -maxdepth 1 -type d -name "target-*" 2>/dev/null)
         
         for tdir in $target_dirs; do
-            # 提取架构信息
             local arch_name=$(basename "$tdir" | sed 's/^target-//')
             
-            # 根据目标平台确定 root 目录名
             local root_name=""
             case "$target" in
                 ipq40xx|ipq806x|qcom)
@@ -5183,90 +5180,19 @@ EOF
                     ;;
             esac
             
-            # 创建标准 root 目录
             local root_path="$tdir/$root_name"
             if [ ! -d "$root_path" ]; then
-                log "    📁 创建目录: $root_path"
                 mkdir -p "$root_path"
-                mkdir -p "$root_path/etc"
-                mkdir -p "$root_path/lib"
-                mkdir -p "$root_path/usr"
-                mkdir -p "$root_path/tmp"
-                mkdir -p "$root_path/dev"
-                mkdir -p "$root_path/proc"
-                mkdir -p "$root_path/sys"
+                mkdir -p "$root_path/etc" "$root_path/lib" "$root_path/usr" "$root_path/tmp"
             fi
             
-            # 创建 root.orig-* 目录（用于 opkg 生成 manifest）
             local orig_root_path="$tdir/root.orig-${target}"
             if [ ! -d "$orig_root_path" ]; then
-                log "    📁 创建目录: $orig_root_path"
                 mkdir -p "$orig_root_path"
                 mkdir -p "$orig_root_path/tmp"
-                mkdir -p "$orig_root_path/etc"
-                mkdir -p "$orig_root_path/usr"
-                mkdir -p "$orig_root_path/lib"
-            fi
-            
-            # 确保 root.orig-* 的 tmp 目录存在且有正确权限
-            if [ -d "$orig_root_path/tmp" ]; then
                 chmod 1777 "$orig_root_path/tmp" 2>/dev/null || true
             fi
-            
-            # 创建 root.orig-* 的其他可能变体
-            local orig_variants=(
-                "root.orig-${target}"
-                "root.orig-${arch_name}"
-                "root.orig"
-            )
-            
-            for variant in "${orig_variants[@]}"; do
-                local variant_path="$tdir/$variant"
-                if [ ! -d "$variant_path" ]; then
-                    mkdir -p "$variant_path" 2>/dev/null || true
-                    mkdir -p "$variant_path/tmp" 2>/dev/null || true
-                    chmod 1777 "$variant_path/tmp" 2>/dev/null || true
-                fi
-            done
         done
-        
-        # 如果没有找到任何 target 目录，尝试基于已知架构创建
-        if [ -z "$target_dirs" ]; then
-            log "    ⚠️ 未找到 target 构建目录，尝试基于架构预创建..."
-            
-            # 根据 CPU 架构推断可能的目录名
-            local arch_pattern=""
-            case "$(uname -m)" in
-                x86_64)
-                    arch_pattern="x86_64"
-                    ;;
-                aarch64)
-                    arch_pattern="aarch64"
-                    ;;
-                arm*)
-                    arch_pattern="arm_cortex-a7"
-                    ;;
-            esac
-            
-            if [ -n "$arch_pattern" ]; then
-                local possible_dir="$build_dir/build_dir/target-${arch_pattern}*"
-                for pdir in $possible_dir; do
-                    if [ -d "$pdir" ]; then
-                        local root_name="root-${target}"
-                        local root_path="$pdir/$root_name"
-                        mkdir -p "$root_path" 2>/dev/null || true
-                        mkdir -p "$root_path/tmp" 2>/dev/null || true
-                        
-                        local orig_root_path="$pdir/root.orig-${target}"
-                        mkdir -p "$orig_root_path" 2>/dev/null || true
-                        mkdir -p "$orig_root_path/tmp" 2>/dev/null || true
-                        chmod 1777 "$orig_root_path/tmp" 2>/dev/null || true
-                    fi
-                done
-            fi
-        fi
-        
-        log "  ✅ root 目录检查完成"
     }
     
     # ============================================
@@ -5275,7 +5201,6 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
         log "🔧 [MT798x] 执行源码特殊预处理..."
         
-        # 预删除已知有问题的补丁
         local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
         if [ -d "$problem_patches_dir" ]; then
             local problem_patches=(
@@ -5304,171 +5229,60 @@ EOF
     mkdir -p tmp/info
     rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
     rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
-    rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null || true
     find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
     
-    # 预创建 root 目录
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    
     log "  ✅ 环境清理完成"
     
     # 步骤1: 编译工具链
     log "  📦 步骤1: 编译工具链..."
     set +e
     make -j$MAKE_JOBS toolchain/compile $make_args 2>&1 | tee build_step1.log
-    STEP1_EXIT_CODE=${PIPESTATUS[0]}
     set -e
-    
-    if [ $STEP1_EXIT_CODE -ne 0 ]; then
-        log "  ⚠️ 工具链编译有警告，继续..."
-    else
-        log "  ✅ 步骤1完成"
-    fi
+    log "  ✅ 步骤1完成"
     
     # 步骤2: 编译内核和模块
     log "  📦 步骤2: 编译内核和模块..."
-    
-    # 再次确保 root 目录存在
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    
     set +e
     make -j$MAKE_JOBS target/compile $make_args 2>&1 | tee build_step2.log
-    STEP2_EXIT_CODE=${PIPESTATUS[0]}
     set -e
+    log "  ✅ 步骤2完成"
     
-    if [ $STEP2_EXIT_CODE -ne 0 ]; then
-        # 检查是否是目录不存在导致的错误
-        if grep -q "No such file or directory" build_step2.log 2>/dev/null; then
-            log "    🔧 检测到目录缺失，重新创建并重试..."
-            ensure_root_dirs "$TARGET" "$BUILD_DIR"
-            
-            set +e
-            make -j$MAKE_JOBS target/compile $make_args 2>&1 | tee -a build_step2.log
-            STEP2_EXIT_CODE=${PIPESTATUS[0]}
-            set -e
-        fi
-        
-        if [ $STEP2_EXIT_CODE -ne 0 ]; then
-            log "  ⚠️ 内核编译有警告，继续..."
-        fi
-    else
-        log "  ✅ 步骤2完成"
-    fi
-    
-    # 步骤3: 编译所有软件包（关键步骤，生成包索引）
-    log "  📦 步骤3: 编译所有软件包（生成包索引）..."
+    # 步骤3: 编译所有软件包
+    log "  📦 步骤3: 编译所有软件包..."
     set +e
     make -j$MAKE_JOBS package/compile $make_args 2>&1 | tee build_step3.log
-    STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
-    if [ $STEP3_EXIT_CODE -ne 0 ]; then
-        log "  ⚠️ 软件包编译有警告"
-        
-        # 检查常见错误并修复
-        if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
-            log "    🔧 禁用 swconfig..."
-            find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-            sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
-            echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-            make defconfig > /dev/null 2>&1 || true
-        fi
-        
-        if grep -q "Broken pipe" build_step3.log 2>/dev/null; then
-            log "    🔧 提高文件描述符限制..."
-            ulimit -n 65536 2>/dev/null || true
-        fi
+    if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
+        log "    🔧 禁用 swconfig..."
+        find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
+        sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
+        echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
+        make defconfig > /dev/null 2>&1 || true
     fi
     
-    # 检查包索引是否生成
     local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
-    log "  📊 包索引文件数: $info_count"
-    
     if [ $info_count -eq 0 ]; then
-        log "  ⚠️ 包索引为空，尝试重新生成..."
         make package/index $make_args > /dev/null 2>&1 || true
-        info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
-        log "  📊 重新生成后包索引文件数: $info_count"
     fi
-    
     log "  ✅ 步骤3完成"
     
     # 步骤4: 安装软件包
     log "  📦 步骤4: 安装软件包..."
-    
-    local install_retry=1
-    local max_install_retries=3
-    local install_success=0
-    
-    while [ $install_retry -le $max_install_retries ] && [ $install_success -eq 0 ]; do
-        log "    尝试 $install_retry/$max_install_retries..."
-        
-        # 确保包索引存在
-        if [ $info_count -eq 0 ]; then
-            log "    ⚠️ 包索引为空，跳过安装，直接生成固件"
-            install_success=1
-            break
-        fi
-        
-        set +e
-        make -j1 package/install $make_args 2>&1 | tee build_step4_attempt${install_retry}.log
-        STEP4_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
-        
-        if [ $STEP4_EXIT_CODE -eq 0 ]; then
-            install_success=1
-            log "    ✅ 安装成功"
-            break
-        fi
-        
-        log "    ⚠️ 安装失败，退出码: $STEP4_EXIT_CODE"
-        
-        # 清理安装状态
-        rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
-        rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
-        find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
-        
-        # 重新生成包索引
-        make package/index $make_args > /dev/null 2>&1 || true
-        
-        install_retry=$((install_retry + 1))
-    done
-    
-    if [ $install_success -eq 0 ] && [ $info_count -gt 0 ]; then
-        log "  ⚠️ 软件包安装失败，但继续生成固件..."
-    fi
-    
+    set +e
+    make -j1 package/install $make_args 2>&1 | tee build_step4.log
+    set -e
     log "  ✅ 步骤4完成"
     
     # 步骤5: 生成固件
     log "  📦 步骤5: 生成固件..."
-    
-    # 再次确保 root 目录存在（包括 root.orig-*）
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    
     set +e
     make -j1 target/install $make_args 2>&1 | tee build_step5.log
-    STEP5_EXIT_CODE=${PIPESTATUS[0]}
     set -e
-    
-    if [ $STEP5_EXIT_CODE -ne 0 ]; then
-        # 检查是否是目录不存在或 opkg lock 错误
-        if grep -q "No such file or directory\|opkg.*lock" build_step5.log 2>/dev/null; then
-            log "    🔧 检测到目录或 lock 文件问题，重新创建并重试..."
-            ensure_root_dirs "$TARGET" "$BUILD_DIR"
-            
-            set +e
-            make -j1 target/install $make_args 2>&1 | tee -a build_step5.log
-            STEP5_EXIT_CODE=${PIPESTATUS[0]}
-            set -e
-        fi
-        
-        if [ $STEP5_EXIT_CODE -ne 0 ]; then
-            log "  ⚠️ 固件生成有警告，但固件可能已成功生成，继续..."
-        fi
-    else
-        log "  ✅ 步骤5完成"
-    fi
+    log "  ✅ 步骤5完成"
     
     # 合并所有日志
     cat build_step*.log > build.log 2>/dev/null || true
@@ -5478,19 +5292,30 @@ EOF
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
     
-    log "🔍 验证固件..."
+    # ============================================
+    # 固件验证和哈希值计算
+    # ============================================
+    log "🔍 验证固件并计算哈希值..."
     
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local valid_firmware=0
     local firmware_files=()
+    local hash_file="$target_dir/firmware-sha256sums.txt"
+    
+    # 清空旧的哈希文件
+    > "$hash_file" 2>/dev/null || true
     
     if [ -d "$target_dir" ]; then
+        # 只处理 .bin 和 .img 文件，排除 .itb 和 .manifest
         while IFS= read -r file; do
-            [ -n "$file" ] && firmware_files+=("$file")
-        done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums")
-        
-        for file in "${firmware_files[@]}"; do
+            [ -z "$file" ] && continue
             local fname=$(basename "$file")
+            
+            # 跳过非固件文件
+            if [[ "$fname" == *.itb ]] || [[ "$fname" == *.manifest ]] || [[ "$fname" == *sha256sums* ]]; then
+                continue
+            fi
+            
             local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
             local size_mb=$((size_bytes / 1024 / 1024))
             
@@ -5503,24 +5328,34 @@ EOF
                 if [ $is_flashable -eq 1 ]; then
                     log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
                     valid_firmware=$((valid_firmware + 1))
+                    firmware_files+=("$fname")
+                    
+                    # 计算 SHA256 哈希值
+                    local fhash=$(sha256sum "$file" | awk '{print $1}')
+                    echo "$fhash  $fname" >> "$hash_file"
+                    log "      SHA256: $fhash"
                 else
                     log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
                 fi
             else
-                log "  ❌ $fname 大小: ${size_mb}MB - 无效"
+                log "  ❌ $fname 大小: ${size_mb}MB - 无效(小于5MB)"
                 rm -f "$file"
             fi
-        done
+        done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
+    fi
+    
+    # 保存固件信息到环境变量
+    if [ $valid_firmware -gt 0 ]; then
+        echo "VALID_FIRMWARE_COUNT=$valid_firmware" >> $GITHUB_ENV 2>/dev/null || true
+        echo "FIRMWARE_HASH_FILE=$hash_file" >> $GITHUB_ENV 2>/dev/null || true
     fi
     
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
         log "🔍 [MT798x ac42u] 检查特定固件文件..."
         local special_firmware=""
-        special_firmware=$(find "$target_dir" -type f -name "*asus_rt-ac42u*sysupgrade*" 2>/dev/null | head -1)
+        special_firmware=$(find "$target_dir" -maxdepth 1 -type f -name "*asus_rt-ac42u*sysupgrade*.bin" 2>/dev/null | head -1)
         if [ -n "$special_firmware" ]; then
             log "  ✅ 找到 ac42u 刷机固件: $(basename "$special_firmware")"
-        else
-            log "  ⚠️ 未找到 ac42u 专用固件，请检查编译输出"
         fi
     fi
     
@@ -5529,6 +5364,7 @@ EOF
         exit 1
     else
         log "✅ 找到 $valid_firmware 个有效可刷机固件"
+        log "📄 哈希值文件: $hash_file"
     fi
     
     rm -rf "$protect_dir" 2>/dev/null || true
@@ -5803,17 +5639,15 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 0. 固件生成状态检查
+        # 0. 固件生成状态检查（增强版）
         # ============================================
         echo "🔍 0. 固件生成状态检查:"
         echo "----------------------------------------"
         
-        # 构建完整的固件目录路径
         local full_target="${TARGET:-$target_platform}"
         local full_subtarget="${SUBTARGET:-generic}"
         local target_dir="bin/targets/$full_target/$full_subtarget"
         
-        # 如果标准路径不存在，尝试查找实际路径
         if [ ! -d "$target_dir" ]; then
             target_dir=$(find bin/targets -type d -name "$full_subtarget" 2>/dev/null | head -1)
             if [ -z "$target_dir" ]; then
@@ -5822,24 +5656,28 @@ quick_error_check() {
         fi
         
         echo "检查路径: $target_dir"
+        echo ""
         
         local found_firmware=0
         local valid_firmware=0
         local firmware_list=()
+        local firmware_details=()
         
         if [ -d "$target_dir" ]; then
-            # 使用 ls 直接列出文件，避免 find 的缓存问题
+            # 只检查 .bin 和 .img 文件
             while IFS= read -r file; do
                 [ -z "$file" ] && continue
                 local fname=$(basename "$file")
+                
+                # 跳过非固件文件
+                if [[ "$fname" == *.itb ]] || [[ "$fname" == *.manifest ]] || [[ "$fname" == *sha256sums* ]]; then
+                    continue
+                fi
+                
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
                 local fsize_human=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-                
-                # 只检查 .bin 和 .img 文件
-                if [[ "$fname" != *.bin ]] && [[ "$fname" != *.img ]]; then
-                    continue
-                fi
+                local fhash=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
                 
                 found_firmware=$((found_firmware + 1))
                 
@@ -5859,55 +5697,21 @@ quick_error_check() {
                 
                 if [ $fsize_mb -ge 5 ]; then
                     if [ $is_flashable -eq 1 ]; then
-                        echo "✅ $fname - ${fsize_human} (${fsize_mb}MB) - 可刷机"
+                        echo "✅ $fname"
+                        echo "   大小: $fsize_human (${fsize_mb}MB)"
+                        echo "   SHA256: $fhash"
+                        echo "   类型: 可刷机固件"
                         valid_firmware=$((valid_firmware + 1))
                         firmware_list+=("$fname")
+                        firmware_details+=("$fname|$fsize_human|$fhash|$ftype")
                     else
-                        echo "📄 $fname - ${fsize_human} (${fsize_mb}MB) - 其他文件"
+                        echo "📄 $fname - $fsize_human (其他文件)"
                     fi
                 else
-                    echo "❌ $fname - ${fsize_human} (${fsize_mb}MB) - 无效(小于5MB)"
+                    echo "❌ $fname - $fsize_human (无效，小于5MB)"
                 fi
-            done < <(ls -1 "$target_dir"/*.bin "$target_dir"/*.img 2>/dev/null)
-            
-            # 如果 ls 没找到，尝试用 find
-            if [ $found_firmware -eq 0 ]; then
-                while IFS= read -r file; do
-                    [ -z "$file" ] && continue
-                    local fname=$(basename "$file")
-                    local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
-                    local fsize_mb=$((fsize_bytes / 1024 / 1024))
-                    local fsize_human=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-                    
-                    found_firmware=$((found_firmware + 1))
-                    
-                    local ftype=""
-                    if [[ "$fname" == *"sysupgrade"* ]]; then
-                        ftype="sysupgrade"
-                    elif [[ "$fname" == *"factory"* ]]; then
-                        ftype="factory"
-                    else
-                        ftype="other"
-                    fi
-                    
-                    local is_flashable=0
-                    if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
-                        is_flashable=1
-                    fi
-                    
-                    if [ $fsize_mb -ge 5 ]; then
-                        if [ $is_flashable -eq 1 ]; then
-                            echo "✅ $fname - ${fsize_human} (${fsize_mb}MB) - 可刷机"
-                            valid_firmware=$((valid_firmware + 1))
-                            firmware_list+=("$fname")
-                        else
-                            echo "📄 $fname - ${fsize_human} (${fsize_mb}MB) - 其他文件"
-                        fi
-                    else
-                        echo "❌ $fname - ${fsize_human} (${fsize_mb}MB) - 无效(小于5MB)"
-                    fi
-                done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
-            fi
+                echo ""
+            done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | sort)
             
             if [ $found_firmware -eq 0 ]; then
                 echo "❌ 目录存在但未找到固件文件"
@@ -5916,11 +5720,6 @@ quick_error_check() {
                 ls -la "$target_dir" 2>/dev/null | head -20 | while read line; do
                     echo "   $line"
                 done
-            else
-                echo ""
-                echo "📊 固件统计:"
-                echo "  总文件数: $found_firmware"
-                echo "  有效可刷机固件: $valid_firmware"
             fi
         else
             echo "❌ 目标目录不存在: $target_dir"
@@ -5930,16 +5729,9 @@ quick_error_check() {
         local log_firmware=""
         log_firmware=$(grep "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null | tail -1)
         if [ -n "$log_firmware" ]; then
-            echo ""
-            echo "📋 日志中的固件复制记录:"
-            echo "   $log_firmware"
-            
-            # 如果目录检查失败但日志显示固件已复制，则认为固件已生成
             if [ $valid_firmware -eq 0 ]; then
-                echo ""
                 echo "✅ 日志确认固件已成功生成"
                 valid_firmware=1
-                # 从日志中提取文件名
                 local fw_name=$(echo "$log_firmware" | sed -E 's/.*\/([^/]+\.bin).*/\1/')
                 if [ -n "$fw_name" ]; then
                     firmware_list+=("$fw_name")
@@ -5957,10 +5749,8 @@ quick_error_check() {
         echo "----------------------------------------"
         
         local compile_errors=0
-        local fatal_errors=0
         
-        # 检查是否有致命错误（排除 ignored）
-        if grep -E "make:.*Error [0-9]+|make\[[0-9]+\].*Error [0-9]+" "$latest_log" | grep -v "(ignored)" | head -10 | grep -q .; then
+        if grep -E "make:.*Error [0-9]+|make\[[0-9]+\].*Error [0-9]+" "$latest_log" | grep -v "(ignored)" | head -5 | grep -q .; then
             echo "❌ 检测到 make 编译错误退出:"
             grep -E "make:.*Error [0-9]+|make\[[0-9]+\].*Error [0-9]+" "$latest_log" | grep -v "(ignored)" | head -5 | while read line; do
                 echo "   $line"
@@ -5978,7 +5768,7 @@ quick_error_check() {
         
         if grep -q "ERROR:.*failed to build" "$latest_log"; then
             echo "❌ 检测到构建失败:"
-            grep -n "ERROR:.*failed to build" "$latest_log" | head -5 | while read line; do
+            grep -n "ERROR:.*failed to build" "$latest_log" | head -3 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
@@ -5990,48 +5780,7 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 1.4 下载失败详细诊断
-        # ============================================
-        if grep -q "Download failed\|curl:.*error" "$latest_log"; then
-            echo "🔍 1.4 下载失败详细诊断:"
-            echo "----------------------------------------"
-            
-            echo ""
-            echo "📋 失败的下载 URL:"
-            grep -B 2 "Download failed" "$latest_log" 2>/dev/null | grep -E "curl|https?://" | head -5 | while read line; do
-                echo "   $line"
-            done
-            
-            echo ""
-            echo "📋 HTTP 错误代码:"
-            grep -E "curl:.*[0-9]{3}" "$latest_log" 2>/dev/null | head -5 | while read line; do
-                echo "   $line"
-            done
-            
-            echo "----------------------------------------"
-            echo ""
-        fi
-
-        # ============================================
-        # 1.5 磁盘空间诊断
-        # ============================================
-        echo "🔍 1.5 磁盘空间诊断:"
-        echo "----------------------------------------"
-        echo ""
-        echo "📊 当前磁盘使用情况:"
-        df -h 2>/dev/null | head -10 | while read line; do
-            echo "   $line"
-        done
-        echo ""
-        echo "📊 构建目录大小:"
-        du -sh "$build_dir" 2>/dev/null | while read line; do
-            echo "   $line"
-        done
-        echo "----------------------------------------"
-        echo ""
-
-        # ============================================
-        # 2. 常见错误模式检查（简化版）
+        # 2. 常见错误模式检查
         # ============================================
         echo "🔍 2. 常见错误模式检查:"
         echo "----------------------------------------"
@@ -6061,9 +5810,8 @@ quick_error_check() {
         echo "----------------------------------------"
         
         if [ -d "staging_dir" ]; then
-            echo "✅ staging_dir 存在"
             local staging_size=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
-            echo "   📊 大小: $staging_size"
+            echo "✅ staging_dir 存在 ($staging_size)"
         else
             echo "❌ staging_dir 不存在"
         fi
@@ -6090,32 +5838,64 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 4. 最后30行日志摘要
+        # 4. 构建时间统计
         # ============================================
-        echo "🔍 4. 最后30行日志摘要:"
+        echo "🔍 4. 构建时间统计:"
+        echo "----------------------------------------"
+        grep -E "time:.*#|real.*user.*sys" "$latest_log" 2>/dev/null | tail -5 | while read line; do
+            echo "   $line"
+        done
+        echo ""
+
+        # ============================================
+        # 5. 最后30行日志摘要
+        # ============================================
+        echo "🔍 5. 最后30行日志摘要:"
         echo "----------------------------------------"
         tail -30 "$latest_log" | sed 's/^/   /'
         echo ""
 
         # ============================================
-        # 5. 错误统计总结
+        # 6. 构建结果总结（增强版）
         # ============================================
         echo "================================================================="
         echo "📊 构建结果总结:"
+        echo "================================================================="
         echo ""
         
         if [ $valid_firmware -gt 0 ]; then
             echo "🎉🎉🎉 编译成功！生成了 $valid_firmware 个有效固件 🎉🎉🎉"
             echo ""
-            echo "固件文件:"
-            for fw in "${firmware_list[@]}"; do
-                echo "  📦 $fw"
-            done
-            echo ""
-            echo "固件位置: $target_dir"
-        else
-            echo "❌ 编译失败：没有生成有效固件"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📦 固件详细信息:"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             
+            for detail in "${firmware_details[@]}"; do
+                IFS='|' read -r fname fsize fhash ftype <<< "$detail"
+                echo ""
+                echo "  文件名: $fname"
+                echo "  大小:   $fsize"
+                echo "  类型:   $ftype (可刷机固件)"
+                echo "  SHA256: $fhash"
+            done
+            
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📁 固件位置: $target_dir"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "💡 刷机说明:"
+            if [[ "$firmware_list" == *"sysupgrade"* ]]; then
+                echo "   - sysupgrade 固件用于已安装 OpenWrt 的系统升级"
+                echo "   - 使用命令: sysupgrade -n /path/to/*sysupgrade.bin"
+            fi
+            if [[ "$firmware_list" == *"factory"* ]]; then
+                echo "   - factory 固件用于从原厂固件首次刷入"
+                echo "   - 通过路由器原厂 Web 界面刷入"
+            fi
+            
+        else
+            echo "❌❌❌ 编译失败：没有生成有效固件 ❌❌❌"
             echo ""
             echo "💡 根据诊断结果的可能解决方案:"
             if grep -q "Download failed" "$latest_log" 2>/dev/null; then
@@ -6129,6 +5909,7 @@ quick_error_check() {
             fi
         fi
         
+        echo ""
         echo "================================================================="
         echo "💡 提示：如需完整日志，请查看: $latest_log"
         echo "================================================================="
@@ -6150,8 +5931,7 @@ quick_error_check() {
 
 #【build_firmware_main.sh-44】
 # ============================================
-# 步骤30: 编译总结（只统计 factory 和 sysupgrade.bin）
-# 对应 firmware-build.yml 步骤30
+# 步骤30: 编译总结（增强版）
 # ============================================
 workflow_step30_build_summary() {
     local device_name="$1"
@@ -6164,79 +5944,60 @@ workflow_step30_build_summary() {
     
     trap 'echo "⚠️ 步骤30 总结过程中出现错误，继续执行..."' ERR
     
-    echo "🚀 构建总结报告"
-    echo "========================================"
-    echo "设备: $device_name"
-    echo "版本: $version_selection"
-    echo "配置模式: $config_mode"
-    echo "时间戳: $timestamp_sec"
-    echo "并行优化: $enable_parallel"
-    echo "配置来源: ${CONFIG_FILE:-使用脚本内默认值}"
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║                    🚀 构建总结报告                              ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "📋 构建配置:"
+    echo "  设备:        $device_name"
+    echo "  版本:        $version_selection"
+    echo "  配置模式:    $config_mode"
+    echo "  源码类型:    $SOURCE_REPO_TYPE"
+    echo "  时间戳:      $timestamp_sec"
+    echo "  并行优化:    $enable_parallel"
     echo ""
     
     if [ -d "$BUILD_DIR/bin/targets" ]; then
-        FIRMWARE_COUNT=$(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | wc -l)
+        local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
         
-        local flashable_count=0
-        while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            local fname=$(basename "$file")
-            if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
-                flashable_count=$((flashable_count + 1))
-            fi
-        done < <(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
-        
-        echo "📦 构建产物:"
-        echo "  固件总数: $FIRMWARE_COUNT 个"
-        echo "  可刷机固件: $flashable_count 个"
-        
-        if [ $FIRMWARE_COUNT -gt 0 ]; then
-            echo "  产物位置: $BUILD_DIR/bin/targets/"
-            echo "  下载名称: firmware-$timestamp_sec"
+        if [ -d "$target_dir" ]; then
+            echo "📦 构建产物:"
+            
+            local count=0
+            find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | while read file; do
+                fname=$(basename "$file")
+                fsize=$(ls -lh "$file" | awk '{print $5}')
+                count=$((count + 1))
+                
+                if [[ "$fname" == *"sysupgrade"* ]]; then
+                    echo "  🚀 $fname ($fsize) - 刷机用"
+                elif [[ "$fname" == *"factory"* ]]; then
+                    echo "  🏭 $fname ($fsize) - 原厂刷机用"
+                else
+                    echo "  📄 $fname ($fsize)"
+                fi
+            done
             
             echo ""
-            echo "📋 可刷机固件列表:"
-            while IFS= read -r file; do
-                [ -z "$file" ] && continue
-                local fname=$(basename "$file")
-                if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
-                    local fsize=$(ls -lh "$file" | awk '{print $5}')
-                    if [[ "$fname" == *"sysupgrade"* ]]; then
-                        echo "  🚀 $fname ($fsize) - 刷机用"
-                    else
-                        echo "  🏭 $fname ($fsize) - 原厂刷机用"
-                    fi
-                fi
-            done < <(find "$BUILD_DIR/bin/targets" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | sort)
-        fi
-    else
-        echo "📦 构建产物:"
-        echo "  固件数量: 0 个"
-    fi
-    
-    echo ""
-    echo "🔧 编译器信息:"
-    if [ -d "$BUILD_DIR" ]; then
-        GCC_FILE=$(find "$BUILD_DIR" -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" ! -path "*dummy-tools*" ! -path "*scripts*" 2>/dev/null | head -1)
-        
-        if [ -n "$GCC_FILE" ] && [ -x "$GCC_FILE" ]; then
-            SDK_VERSION=$("$GCC_FILE" --version 2>&1 | head -1)
-            echo "  🎯 SDK GCC: $SDK_VERSION"
+            echo "📁 产物位置: $target_dir"
         fi
     fi
     
     echo ""
     echo "⚙️ 功能开关状态:"
-    echo "  TurboACC: ${ENABLE_TURBOACC:-true}"
-    echo "  TCP BBR: ${ENABLE_TCP_BBR:-true}"
+    echo "  TurboACC:      ${ENABLE_TURBOACC:-true}"
+    echo "  TCP BBR:       ${ENABLE_TCP_BBR:-true}"
     echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
-    echo "  USB自动修复: ${AUTO_FIX_USB_DRIVERS:-true}"
-    
+    echo "  USB自动修复:   ${AUTO_FIX_USB_DRIVERS:-true}"
     echo ""
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✅ 构建流程完成"
-    echo "========================================"
-    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
+    
+    # 运行快速错误检查
     echo "🔧 运行快速错误检查（生成报告文件）..."
     local target_for_check="${TARGET:-$([ -f "$BUILD_DIR/build_env.sh" ] && source "$BUILD_DIR/build_env.sh" && echo "$TARGET")}"
     local report_file="/tmp/quick-error-check-$timestamp_sec.txt"
