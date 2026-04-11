@@ -5031,7 +5031,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（自动修复补丁问题） ==="
+    log "=== 步骤25: 编译固件（分步编译流程） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -5141,7 +5141,7 @@ EOF
     fi
     
     # ============================================
-    # 针对 immortalwrt-mt798x 源码的预处理
+    # 源码特定预处理
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
         log "🔧 [MT798x] 执行源码特殊预处理..."
@@ -5164,156 +5164,191 @@ EOF
         log "  ✅ MT798x 预处理完成"
     fi
     
-    local max_attempts=3
-    local attempt=1
-    local compile_success=0
+    # ============================================
+    # 全局分步编译流程（解决 package/install Error 255）
+    # ============================================
+    log "🔧 使用分步编译流程（修复包元数据问题）..."
     
-    while [ $attempt -le $max_attempts ] && [ $compile_success -eq 0 ]; do
-        echo ""
-        echo "🚀 编译尝试 $attempt/$max_attempts (make -j$MAKE_JOBS)"
-        echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-        echo ""
-        
-        START_TIME=$(date +%s)
+    local step_failed=0
+    local max_retries=3
+    local retry=1
+    
+    # 步骤1: 编译工具链和目标
+    while [ $retry -le $max_retries ]; do
+        log "  📦 步骤1: 编译工具链和内核 (尝试 $retry/$max_retries)..."
         
         set +e
-        make -j$MAKE_JOBS $make_args 2>&1 | tee build_phase1_attempt${attempt}.log
-        PHASE1_EXIT_CODE=${PIPESTATUS[0]}
+        make -j$MAKE_JOBS toolchain/compile target/compile $make_args 2>&1 | tee build_step1_attempt${retry}.log
+        STEP1_EXIT_CODE=${PIPESTATUS[0]}
         set -e
         
-        PHASE1_END=$(date +%s)
-        PHASE1_DURATION=$((PHASE1_END - START_TIME))
-        
-        echo ""
-        echo "✅ 尝试 $attempt 完成，耗时: $((PHASE1_DURATION / 60))分$((PHASE1_DURATION % 60))秒"
-        
-        if [ $PHASE1_EXIT_CODE -eq 0 ]; then
-            compile_success=1
+        if [ $STEP1_EXIT_CODE -eq 0 ]; then
+            log "  ✅ 步骤1完成"
             break
         fi
         
-        local log_file="build_phase1_attempt${attempt}.log"
+        log "  ⚠️ 步骤1失败，退出码: $STEP1_EXIT_CODE"
         
-        if [ -f "$log_file" ]; then
-            # 修复 swconfig 编译错误
-            if grep -q "swconfig" "$log_file" || grep -q "SWITCH_LINK_FLAG" "$log_file"; then
-                log "  ⚠️ 检测到 swconfig 编译错误，正在彻底禁用..."
-                
-                find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-                sed -i '/CONFIG_PACKAGE_swconfig/d' .config
-                echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-                
-                rm -rf build_dir/target-*/swconfig* 2>/dev/null || true
-                
-                make defconfig > /tmp/build-logs/defconfig_fix_swconfig.log 2>&1 || true
-                log "  ✅ swconfig 已彻底禁用"
-            fi
-            
-            # 修复 package/install 错误 (Error 255)
-            if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
-                log "  ⚠️ 检测到 package/install 错误 (Error 255)，正在清理安装状态..."
-                
-                # 清理安装标记文件
-                rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
-                rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
-                rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null || true
-                rm -f tmp/info/.packageinfo-* 2>/dev/null || true
-                
-                # 清理 ipkg 目录
-                find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
-                
-                # 重新安装 feeds
-                ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
-                
-                # 重新运行 defconfig
-                make defconfig > /tmp/build-logs/defconfig_fix_install.log 2>&1 || true
-                
-                log "  ✅ package/install 错误修复完成"
-            fi
-            
-            # 修复补丁失败
-            if grep -q "Patch failed" "$log_file" || grep -q "Hunk FAILED" "$log_file"; then
-                log "  ⚠️ 检测到补丁失败，正在自动修复..."
-                
-                local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$log_file" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-                
-                if [ -z "$failed_patches" ]; then
-                    failed_patches=$(grep -E "Applying.*\.patch" "$log_file" | grep -A1 "FAILED" | grep "Applying" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-                fi
-                
-                for patch_name in $failed_patches; do
-                    local found=0
-                    for patch_dir in target/linux/*/patches-*; do
-                        if [ -f "$patch_dir/$patch_name" ]; then
-                            log "    🗑️ 删除失败补丁: $patch_dir/$patch_name"
-                            rm -f "$patch_dir/$patch_name"
-                            found=1
-                        fi
-                    done
-                    
-                    if [ $found -eq 0 ]; then
-                        find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
-                            log "    🗑️ 删除失败补丁: $patch_file"
-                            rm -f "$patch_file"
-                        done
-                    fi
+        # 修复常见错误
+        if grep -q "Patch failed\|Hunk FAILED" "build_step1_attempt${retry}.log" 2>/dev/null; then
+            log "    🔧 修复补丁失败..."
+            local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step1_attempt${retry}.log" | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+            for patch_name in $failed_patches; do
+                find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
+                    log "      🗑️ 删除失败补丁: $patch_file"
+                    rm -f "$patch_file"
                 done
-                
-                local ipq40xx_patch="target/linux/ipq40xx/patches-5.15/401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-                if [ -f "$ipq40xx_patch" ]; then
-                    log "    🗑️ 删除已知问题补丁: $ipq40xx_patch"
-                    rm -f "$ipq40xx_patch"
-                fi
-                
-                rm -rf build_dir/target-*/linux-ipq40xx* 2>/dev/null || true
-                rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-                
-                log "  ✅ 补丁修复完成，将重试编译"
-            fi
-            
-            # 修复 Broken pipe 错误
-            if grep -q "Broken pipe" "$log_file"; then
-                log "  ⚠️ 检测到 Broken pipe 错误，提高文件描述符限制..."
-                ulimit -n 65536 2>/dev/null || true
-            fi
+            done
+            rm -rf build_dir/target-*/linux-* 2>/dev/null || true
         fi
         
-        attempt=$((attempt + 1))
+        if grep -q "Broken pipe" "build_step1_attempt${retry}.log" 2>/dev/null; then
+            log "    🔧 提高文件描述符限制..."
+            ulimit -n 65536 2>/dev/null || true
+        fi
+        
+        retry=$((retry + 1))
     done
     
-    if [ $compile_success -eq 0 ]; then
+    if [ $STEP1_EXIT_CODE -ne 0 ]; then
+        log "  ❌ 步骤1失败，已重试 $max_retries 次"
+        step_failed=1
+    fi
+    
+    # 步骤2: 单独编译所有包
+    if [ $step_failed -eq 0 ]; then
+        retry=1
+        while [ $retry -le $max_retries ]; do
+            log "  📦 步骤2: 编译所有软件包 (尝试 $retry/$max_retries)..."
+            
+            set +e
+            make -j$MAKE_JOBS package/compile $make_args 2>&1 | tee build_step2_attempt${retry}.log
+            STEP2_EXIT_CODE=${PIPESTATUS[0]}
+            set -e
+            
+            if [ $STEP2_EXIT_CODE -eq 0 ]; then
+                log "  ✅ 步骤2完成"
+                break
+            fi
+            
+            log "  ⚠️ 步骤2失败，退出码: $STEP2_EXIT_CODE"
+            
+            # 修复常见错误
+            if grep -q "swconfig\|SWITCH_LINK_FLAG" "build_step2_attempt${retry}.log" 2>/dev/null; then
+                log "    🔧 禁用 swconfig..."
+                find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
+                sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
+                echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
+                make defconfig > /dev/null 2>&1 || true
+            fi
+            
+            if grep -q "Broken pipe" "build_step2_attempt${retry}.log" 2>/dev/null; then
+                log "    🔧 提高文件描述符限制..."
+                ulimit -n 65536 2>/dev/null || true
+            fi
+            
+            # 清理失败的包构建目录
+            local failed_pkgs=$(grep -E "make\[.*\].*Error" "build_step2_attempt${retry}.log" 2>/dev/null | grep -oE "package/[^/]+" | sed 's|package/||' | sort -u)
+            for pkg in $failed_pkgs; do
+                log "    🔧 清理包构建目录: $pkg"
+                rm -rf "build_dir/target-*/${pkg}-"* 2>/dev/null || true
+            done
+            
+            retry=$((retry + 1))
+        done
+        
+        if [ $STEP2_EXIT_CODE -ne 0 ]; then
+            log "  ⚠️ 步骤2有警告，但继续执行..."
+        fi
+    fi
+    
+    # 步骤3: 单独执行 package/install
+    if [ $step_failed -eq 0 ]; then
+        retry=1
+        while [ $retry -le $max_retries ]; do
+            log "  📦 步骤3: 安装软件包 (尝试 $retry/$max_retries)..."
+            
+            # 确保包索引正确生成
+            make package/index $make_args > /dev/null 2>&1 || true
+            
+            set +e
+            make -j1 package/install $make_args 2>&1 | tee build_step3_attempt${retry}.log
+            STEP3_EXIT_CODE=${PIPESTATUS[0]}
+            set -e
+            
+            if [ $STEP3_EXIT_CODE -eq 0 ]; then
+                log "  ✅ 步骤3完成"
+                break
+            fi
+            
+            log "  ⚠️ 步骤3失败，退出码: $STEP3_EXIT_CODE"
+            
+            # 清理安装状态
+            rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
+            rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
+            rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null || true
+            rm -f tmp/info/.packageinfo-* 2>/dev/null || true
+            find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
+            
+            # 重新安装 feeds
+            ./scripts/feeds install -a > /tmp/feeds_reinstall.log 2>&1 || true
+            make defconfig > /tmp/defconfig_step3.log 2>&1 || true
+            
+            retry=$((retry + 1))
+        done
+        
+        if [ $STEP3_EXIT_CODE -ne 0 ]; then
+            log "  ❌ 步骤3失败，已重试 $max_retries 次"
+            step_failed=1
+        fi
+    fi
+    
+    # 步骤4: 生成固件
+    if [ $step_failed -eq 0 ]; then
+        retry=1
+        while [ $retry -le $max_retries ]; do
+            log "  📦 步骤4: 生成固件 (尝试 $retry/$max_retries)..."
+            
+            set +e
+            make -j1 target/install $make_args 2>&1 | tee build_step4_attempt${retry}.log
+            STEP4_EXIT_CODE=${PIPESTATUS[0]}
+            set -e
+            
+            if [ $STEP4_EXIT_CODE -eq 0 ]; then
+                log "  ✅ 步骤4完成"
+                break
+            fi
+            
+            log "  ⚠️ 步骤4失败，退出码: $STEP4_EXIT_CODE"
+            
+            # 清理目标安装状态
+            rm -f staging_dir/target-*/.stamp_target_install 2>/dev/null || true
+            
+            retry=$((retry + 1))
+        done
+        
+        if [ $STEP4_EXIT_CODE -ne 0 ]; then
+            log "  ❌ 步骤4失败，已重试 $max_retries 次"
+            step_failed=1
+        fi
+    fi
+    
+    # 合并所有日志
+    cat build_step*.log > build.log 2>/dev/null || true
+    
+    if [ $step_failed -ne 0 ]; then
         echo ""
-        echo "❌❌❌ 编译失败，已尝试 $max_attempts 次 ❌❌❌"
+        echo "❌❌❌ 编译失败 ❌❌❌"
         
         bash "$protect_dir/recover.sh" "$protect_dir" "$BUILD_DIR"
         
         kill $protect_pid 2>/dev/null || true
         rm -rf "$protect_dir" 2>/dev/null || true
         
-        exit $PHASE1_EXIT_CODE
+        exit 1
     fi
     
-    echo ""
-    echo "🚀 第二阶段：单线程生成最终固件"
-    echo "   开始时间: $(date +'%Y-%m-%d %H:%M:%S')"
-    echo ""
-    
-    PHASE2_START=$(date +%s)
-    
-    set +e
-    make -j1 $make_args 2>&1 | tee -a build_phase2.log
-    BUILD_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
-    
-    PHASE2_END=$(date +%s)
-    PHASE2_DURATION=$((PHASE2_END - PHASE2_START))
-    TOTAL_DURATION=$((PHASE2_END - START_TIME))
-    
-    echo ""
-    echo "✅ 第二阶段完成，耗时: $((PHASE2_DURATION / 60))分$((PHASE2_DURATION % 60))秒"
-    echo "📊 总编译时间: $((TOTAL_DURATION / 60))分$((TOTAL_DURATION % 60))秒"
-    
-    cat build_phase1_attempt*.log build_phase2.log > build.log 2>/dev/null || true
+    log "  ✅ 分步编译完成"
     
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
@@ -5622,7 +5657,10 @@ quick_error_check() {
         if [ -f "$log_file" ]; then
             latest_log="$log_file"
         else
-            latest_log=$(ls -t build_phase*.log 2>/dev/null | head -1)
+            latest_log=$(ls -t build_step*.log 2>/dev/null | head -1)
+            if [ -z "$latest_log" ]; then
+                latest_log=$(ls -t build_phase*.log 2>/dev/null | head -1)
+            fi
         fi
 
         if [ -z "$latest_log" ] || [ ! -f "$latest_log" ]; then
@@ -5659,7 +5697,7 @@ quick_error_check() {
         fi
         
         if grep -q "undefined reference to" "$latest_log"; then
-            echo "❌ 検测到未定义引用错误:"
+            echo "❌ 检测到未定义引用错误:"
             grep -n "undefined reference to" "$latest_log" | head -5 | while read line; do
                 echo "   $line"
             done
@@ -5671,7 +5709,7 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 新增：package/install Error 255 详细诊断
+        # 全局 package/install Error 255 详细诊断
         # ============================================
         if grep -q "package/install.*Error 255" "$latest_log" || grep -q "package/install\] Error" "$latest_log"; then
             echo "🔍 1.1 package/install Error 255 详细诊断:"
@@ -5684,71 +5722,54 @@ quick_error_check() {
                 echo "   $line"
             done
             
-            # 查找 luci-lib-fs 源码位置
+            # 查找有问题的包
             echo ""
-            echo "📋 luci-lib-fs 源码位置:"
-            find . -type d -name "*luci-lib-fs*" 2>/dev/null | head -5 | while read line; do
-                echo "   $line"
-            done
-            if [ -z "$(find . -type d -name "*luci-lib-fs*" 2>/dev/null | head -1)" ]; then
-                echo "   ⚠️ 未找到 luci-lib-fs 目录"
-            fi
-            
-            # 查看 luci-lib-fs Makefile 关键内容
-            echo ""
-            echo "📋 luci-lib-fs Makefile 依赖信息:"
-            local luci_lib_fs_makefile=$(find . -path "*/luci-lib-fs/Makefile" 2>/dev/null | head -1)
-            if [ -n "$luci_lib_fs_makefile" ] && [ -f "$luci_lib_fs_makefile" ]; then
-                grep -E "DEPENDS|PKG_BUILD_DEPENDS|include.*package" "$luci_lib_fs_makefile" 2>/dev/null | head -10 | while read line; do
-                    echo "   $line"
+            echo "📋 可能有问题的包信息:"
+            local last_pkg=$(grep -B 30 "package/install.*Error 255\|package/install\] Error" "$latest_log" 2>/dev/null | grep -E "Configuring |Packaging " | tail -1 | sed -E 's/.*(Configuring |Packaging )//' | awk '{print $1}')
+            if [ -n "$last_pkg" ]; then
+                echo "   最后配置的包: $last_pkg"
+                
+                echo ""
+                echo "   📁 源码位置:"
+                find . -type d -name "*${last_pkg}*" 2>/dev/null | head -5 | while read line; do
+                    echo "      $line"
                 done
-            else
-                echo "   ⚠️ 未找到 luci-lib-fs Makefile"
+                
+                echo ""
+                echo "   📋 Makefile 依赖信息:"
+                local pkg_makefile=$(find . -path "*/${last_pkg}/Makefile" 2>/dev/null | head -1)
+                if [ -n "$pkg_makefile" ] && [ -f "$pkg_makefile" ]; then
+                    grep -E "DEPENDS|PKG_BUILD_DEPENDS|include.*package" "$pkg_makefile" 2>/dev/null | head -10 | while read line; do
+                        echo "      $line"
+                    done
+                else
+                    echo "      ⚠️ 未找到 Makefile"
+                fi
             fi
-            
-            # 查找 wechatpush 源码位置
-            echo ""
-            echo "📋 luci-app-wechatpush 源码位置:"
-            find . -type d -name "*wechatpush*" 2>/dev/null | head -5 | while read line; do
-                echo "   $line"
-            done
-            if [ -z "$(find . -type d -name "*wechatpush*" 2>/dev/null | head -1)" ]; then
-                echo "   ⚠️ 未找到 wechatpush 目录"
-            fi
-            
-            # 查看 wechatpush Makefile 关键内容
-            echo ""
-            echo "📋 luci-app-wechatpush Makefile 依赖信息:"
-            local wechatpush_makefile=$(find . -path "*/luci-app-wechatpush/Makefile" 2>/dev/null | head -1)
-            if [ -n "$wechatpush_makefile" ] && [ -f "$wechatpush_makefile" ]; then
-                grep -E "DEPENDS|PKG_BUILD_DEPENDS|include.*package" "$wechatpush_makefile" 2>/dev/null | head -10 | while read line; do
-                    echo "   $line"
-                done
-            else
-                echo "   ⚠️ 未找到 luci-app-wechatpush Makefile"
-            fi
-            
-            # 检查是否有 postinst 脚本问题
-            echo ""
-            echo "📋 安装后脚本检查:"
-            find . -path "*/luci-lib-fs/*postinst*" 2>/dev/null | while read line; do
-                echo "   📄 $line"
-                echo "   --- 内容预览 ---"
-                head -20 "$line" 2>/dev/null | while read script_line; do
-                    echo "   $script_line"
-                done
-            done
             
             # 检查包索引状态
             echo ""
             echo "📋 包索引状态:"
             if [ -d "tmp/info" ]; then
-                echo "   tmp/info 目录存在，文件数: $(ls tmp/info/ 2>/dev/null | wc -l)"
-                ls tmp/info/ 2>/dev/null | grep -E "luci-lib-fs|wechatpush|dnsmasq" | while read line; do
-                    echo "   📄 $line"
-                done
+                local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
+                echo "   tmp/info 目录存在，文件数: $info_count"
+                if [ $info_count -eq 0 ]; then
+                    echo "   ⚠️ 包索引为空，这是导致 Error 255 的直接原因"
+                    echo "   💡 解决方案: 使用分步编译 (make package/compile 后再 make package/install)"
+                fi
             else
                 echo "   ⚠️ tmp/info 目录不存在"
+                echo "   💡 解决方案: 确保 package/compile 步骤正确执行"
+            fi
+            
+            # 检查安装标记文件
+            echo ""
+            echo "📋 安装标记文件状态:"
+            local stamp_files=$(find staging_dir -name ".package_install*" 2>/dev/null | wc -l)
+            echo "   安装标记文件数: $stamp_files"
+            if [ $stamp_files -gt 0 ]; then
+                echo "   ⚠️ 存在残留的安装标记，可能导致跳过某些包的安装"
+                echo "   💡 解决方案: 清理 staging_dir/target-*/stamp/.package_install*"
             fi
             
             echo "----------------------------------------"
@@ -5907,6 +5928,23 @@ quick_error_check() {
         else
             echo ""
             echo "❌❌❌ 编译失败：没有生成任何有效固件 ❌❌❌"
+            
+            # 提供针对性建议
+            echo ""
+            echo "💡 根据诊断结果的可能解决方案:"
+            if grep -q "package/install.*Error 255" "$latest_log" 2>/dev/null; then
+                echo "   1. 检查 tmp/info 目录是否有包索引文件"
+                echo "   2. 尝试单独运行: make package/compile && make package/install"
+                echo "   3. 清理后重试: make clean && make"
+            fi
+            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
+                echo "   1. 删除失败的补丁文件"
+                echo "   2. 更新源码或手动修复补丁"
+            fi
+            if grep -q "No space left" "$latest_log" 2>/dev/null; then
+                echo "   1. 清理磁盘空间"
+                echo "   2. 增加构建环境的磁盘配额"
+            fi
         fi
         
         echo "================================================================="
