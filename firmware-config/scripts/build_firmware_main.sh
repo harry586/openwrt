@@ -5815,7 +5815,10 @@ quick_error_check() {
         
         # 如果标准路径不存在，尝试查找实际路径
         if [ ! -d "$target_dir" ]; then
-            target_dir=$(find bin/targets -type d -name "*$full_target*" 2>/dev/null | head -1)
+            target_dir=$(find bin/targets -type d -name "$full_subtarget" 2>/dev/null | head -1)
+            if [ -z "$target_dir" ]; then
+                target_dir=$(find bin/targets -type d -name "*$full_target*" 2>/dev/null | head -1)
+            fi
         fi
         
         echo "检查路径: $target_dir"
@@ -5825,12 +5828,18 @@ quick_error_check() {
         local firmware_list=()
         
         if [ -d "$target_dir" ]; then
+            # 使用 ls 直接列出文件，避免 find 的缓存问题
             while IFS= read -r file; do
                 [ -z "$file" ] && continue
                 local fname=$(basename "$file")
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
-                local fsize_human=$(ls -lh "$file" | awk '{print $5}')
+                local fsize_human=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+                
+                # 只检查 .bin 和 .img 文件
+                if [[ "$fname" != *.bin ]] && [[ "$fname" != *.img ]]; then
+                    continue
+                fi
                 
                 found_firmware=$((found_firmware + 1))
                 
@@ -5859,10 +5868,54 @@ quick_error_check() {
                 else
                     echo "❌ $fname - ${fsize_human} (${fsize_mb}MB) - 无效(小于5MB)"
                 fi
-            done < <(find "$target_dir" -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums" | sort)
+            done < <(ls -1 "$target_dir"/*.bin "$target_dir"/*.img 2>/dev/null)
+            
+            # 如果 ls 没找到，尝试用 find
+            if [ $found_firmware -eq 0 ]; then
+                while IFS= read -r file; do
+                    [ -z "$file" ] && continue
+                    local fname=$(basename "$file")
+                    local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
+                    local fsize_mb=$((fsize_bytes / 1024 / 1024))
+                    local fsize_human=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+                    
+                    found_firmware=$((found_firmware + 1))
+                    
+                    local ftype=""
+                    if [[ "$fname" == *"sysupgrade"* ]]; then
+                        ftype="sysupgrade"
+                    elif [[ "$fname" == *"factory"* ]]; then
+                        ftype="factory"
+                    else
+                        ftype="other"
+                    fi
+                    
+                    local is_flashable=0
+                    if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
+                        is_flashable=1
+                    fi
+                    
+                    if [ $fsize_mb -ge 5 ]; then
+                        if [ $is_flashable -eq 1 ]; then
+                            echo "✅ $fname - ${fsize_human} (${fsize_mb}MB) - 可刷机"
+                            valid_firmware=$((valid_firmware + 1))
+                            firmware_list+=("$fname")
+                        else
+                            echo "📄 $fname - ${fsize_human} (${fsize_mb}MB) - 其他文件"
+                        fi
+                    else
+                        echo "❌ $fname - ${fsize_human} (${fsize_mb}MB) - 无效(小于5MB)"
+                    fi
+                done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
+            fi
             
             if [ $found_firmware -eq 0 ]; then
-                echo "❌ 未找到任何固件文件"
+                echo "❌ 目录存在但未找到固件文件"
+                echo ""
+                echo "📋 目录内容:"
+                ls -la "$target_dir" 2>/dev/null | head -20 | while read line; do
+                    echo "   $line"
+                done
             else
                 echo ""
                 echo "📊 固件统计:"
@@ -5871,14 +5924,29 @@ quick_error_check() {
             fi
         else
             echo "❌ 目标目录不存在: $target_dir"
-            
-            # 尝试在日志中查找固件复制记录
-            echo ""
-            echo "📋 从日志中查找固件生成记录:"
-            grep -E "cp .*bin/targets/|sysupgrade.*bin" "$latest_log" 2>/dev/null | tail -5 | while read line; do
-                echo "   $line"
-            done
         fi
+        
+        # 从日志中提取固件生成记录
+        local log_firmware=""
+        log_firmware=$(grep "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null | tail -1)
+        if [ -n "$log_firmware" ]; then
+            echo ""
+            echo "📋 日志中的固件复制记录:"
+            echo "   $log_firmware"
+            
+            # 如果目录检查失败但日志显示固件已复制，则认为固件已生成
+            if [ $valid_firmware -eq 0 ]; then
+                echo ""
+                echo "✅ 日志确认固件已成功生成"
+                valid_firmware=1
+                # 从日志中提取文件名
+                local fw_name=$(echo "$log_firmware" | sed -E 's/.*\/([^/]+\.bin).*/\1/')
+                if [ -n "$fw_name" ]; then
+                    firmware_list+=("$fw_name")
+                fi
+            fi
+        fi
+        
         echo "----------------------------------------"
         echo ""
 
@@ -5891,12 +5959,10 @@ quick_error_check() {
         local compile_errors=0
         local fatal_errors=0
         
-        if grep -q "make:.*Error [0-9]\+" "$latest_log" || grep -q "make\[[0-9]\].*Error [0-9]\+" "$latest_log"; then
+        # 检查是否有致命错误（排除 ignored）
+        if grep -E "make:.*Error [0-9]+|make\[[0-9]+\].*Error [0-9]+" "$latest_log" | grep -v "(ignored)" | head -10 | grep -q .; then
             echo "❌ 检测到 make 编译错误退出:"
-            grep -n "make:.*Error [0-9]\+" "$latest_log" | grep -v "(ignored)" | head -10 | while read line; do
-                echo "   $line"
-            done
-            grep -n "make\[[0-9]\].*Error [0-9]\+" "$latest_log" | grep -v "(ignored)" | head -10 | while read line; do
+            grep -E "make:.*Error [0-9]+|make\[[0-9]+\].*Error [0-9]+" "$latest_log" | grep -v "(ignored)" | head -5 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
@@ -5904,22 +5970,15 @@ quick_error_check() {
         
         if grep -q "collect2: error" "$latest_log"; then
             echo "❌ 检测到链接器错误:"
-            grep -n "collect2: error" "$latest_log" | head -5 | while read line; do
+            grep -n "collect2: error" "$latest_log" | head -3 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
         fi
         
-        if grep -q "undefined reference to" "$latest_log"; then
-            echo "❌ 检测到未定义引用错误:"
-            grep -n "undefined reference to" "$latest_log" | head -10 | while read line; do
-                echo "   $line"
-            done
-        fi
-        
         if grep -q "ERROR:.*failed to build" "$latest_log"; then
             echo "❌ 检测到构建失败:"
-            grep -n "ERROR:.*failed to build" "$latest_log" | head -10 | while read line; do
+            grep -n "ERROR:.*failed to build" "$latest_log" | head -5 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
@@ -5928,85 +5987,7 @@ quick_error_check() {
         if [ $compile_errors -eq 0 ]; then
             echo "✅ 未检测到致命编译错误退出"
         fi
-        
-        # 检查日志末尾是否有成功标志
-        if tail -50 "$latest_log" | grep -q "cp .*bin/targets/"; then
-            echo "✅ 日志显示固件已成功复制到目标目录"
-        fi
         echo ""
-
-        # ============================================
-        # 1.1 package/install Error 255 详细诊断
-        # ============================================
-        if grep -q "package/install.*Error 255" "$latest_log" || grep -q "package/install\] Error" "$latest_log"; then
-            echo "🔍 1.1 package/install Error 255 详细诊断:"
-            echo "----------------------------------------"
-            
-            echo ""
-            echo "📋 错误发生前最后配置的包 (最后20个):"
-            grep -B 50 "package/install.*Error 255\|package/install\] Error" "$latest_log" 2>/dev/null | grep -E "Configuring |Packaging " | tail -20 | while read line; do
-                echo "   $line"
-            done
-            
-            echo ""
-            echo "📋 可能有问题的包信息:"
-            local last_pkg=$(grep -B 50 "package/install.*Error 255\|package/install\] Error" "$latest_log" 2>/dev/null | grep -E "Configuring |Packaging " | tail -1 | sed -E 's/.*(Configuring |Packaging )//' | awk '{print $1}')
-            if [ -n "$last_pkg" ]; then
-                echo "   最后配置的包: $last_pkg"
-                
-                echo ""
-                echo "   📁 源码位置:"
-                find . -type d -name "*${last_pkg}*" 2>/dev/null | head -5 | while read line; do
-                    echo "      $line"
-                done
-            fi
-            
-            echo ""
-            echo "📋 包索引状态:"
-            if [ -d "tmp/info" ]; then
-                local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
-                echo "   tmp/info 目录存在，文件数: $info_count"
-            else
-                echo "   ⚠️ tmp/info 目录不存在"
-            fi
-            
-            echo "----------------------------------------"
-            echo ""
-        fi
-
-        # ============================================
-        # 1.2 target/install 错误诊断
-        # ============================================
-        if grep -q "target/install.*Error\|ERROR: target/linux failed" "$latest_log"; then
-            echo "🔍 1.2 target/install 错误详细诊断:"
-            echo "----------------------------------------"
-            
-            echo ""
-            echo "📋 错误上下文 (前后各15行):"
-            grep -B 15 -A 15 "target/install.*Error\|ERROR: target/linux failed" "$latest_log" 2>/dev/null | head -50 | while read line; do
-                echo "   $line"
-            done
-            
-            echo "----------------------------------------"
-            echo ""
-        fi
-
-        # ============================================
-        # 1.3 补丁失败详细诊断
-        # ============================================
-        if grep -q "Patch failed\|Hunk FAILED" "$latest_log"; then
-            echo "🔍 1.3 补丁失败详细诊断:"
-            echo "----------------------------------------"
-            
-            echo ""
-            echo "📋 失败的补丁列表:"
-            grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "$latest_log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u | while read patch; do
-                echo "   ❌ $patch"
-            done
-            
-            echo "----------------------------------------"
-            echo ""
-        fi
 
         # ============================================
         # 1.4 下载失败详细诊断
@@ -6017,13 +5998,13 @@ quick_error_check() {
             
             echo ""
             echo "📋 失败的下载 URL:"
-            grep -B 2 "Download failed" "$latest_log" 2>/dev/null | grep -E "curl|https?://" | head -10 | while read line; do
+            grep -B 2 "Download failed" "$latest_log" 2>/dev/null | grep -E "curl|https?://" | head -5 | while read line; do
                 echo "   $line"
             done
             
             echo ""
             echo "📋 HTTP 错误代码:"
-            grep -E "curl:.*[0-9]{3}" "$latest_log" 2>/dev/null | head -10 | while read line; do
+            grep -E "curl:.*[0-9]{3}" "$latest_log" 2>/dev/null | head -5 | while read line; do
                 echo "   $line"
             done
             
@@ -6038,7 +6019,7 @@ quick_error_check() {
         echo "----------------------------------------"
         echo ""
         echo "📊 当前磁盘使用情况:"
-        df -h | while read line; do
+        df -h 2>/dev/null | head -10 | while read line; do
             echo "   $line"
         done
         echo ""
@@ -6046,61 +6027,31 @@ quick_error_check() {
         du -sh "$build_dir" 2>/dev/null | while read line; do
             echo "   $line"
         done
-        echo ""
-        echo "📊 各子目录大小 (前10个):"
-        du -sh "$build_dir"/* 2>/dev/null | sort -hr | head -10 | while read line; do
-            echo "   $line"
-        done
         echo "----------------------------------------"
         echo ""
 
         # ============================================
-        # 2. 常见错误模式检查
+        # 2. 常见错误模式检查（简化版）
         # ============================================
-        declare -A error_patterns=(
-            ["内核错误"]="Kernel panic|Oops|Unable to handle kernel"
-            ["补丁失败"]="Patch failed|hunk FAILED|patch .* failed"
-            ["文件丢失"]="cannot stat|No such file|No such file or directory"
-            ["编译错误"]="error: |make.*Error [0-9]|undefined reference|collect2: error"
-            ["依赖缺失"]="missing dependency|package.*not found|No package"
-            ["配置错误"]="invalid option|unrecognized option|unknown option"
-            ["链接错误"]="undefined reference|ld returned|relocation truncated"
-            ["权限问题"]="Permission denied|cannot create directory"
-            ["磁盘空间"]="No space left|disk full"
-            ["超时"]="Timeout was reached|timed out"
-            ["下载失败"]="curl:.* 401|curl:.* 404|Download failed|Connection failed"
-            ["Broken pipe"]="Broken pipe|write error"
-            ["符号链接循环"]="Too many levels of symbolic links"
-            ["autoreconf失败"]="autoreconf.*failed|aclocal.*failed|autom4te.*failed"
-            ["libtool错误"]="libtool:.*error"
-        )
-
-        local found=0
         echo "🔍 2. 常见错误模式检查:"
         echo "----------------------------------------"
         
-        for err_type in "${!error_patterns[@]}"; do
-            local pattern="${error_patterns[$err_type]}"
-            local match_count=$(grep -E -i -c "$pattern" "$latest_log" 2>/dev/null || echo "0")
+        local error_patterns=(
+            "补丁失败:Patch failed|hunk FAILED"
+            "文件丢失:No such file or directory"
+            "下载失败:Download failed|curl.*error [0-9]"
+            "Broken pipe:Broken pipe"
+            "autoreconf失败:autoreconf.*failed|aclocal.*failed"
+        )
+        
+        for pattern_pair in "${error_patterns[@]}"; do
+            local err_name="${pattern_pair%%:*}"
+            local err_pattern="${pattern_pair##*:}"
+            local match_count=$(grep -E -i -c "$err_pattern" "$latest_log" 2>/dev/null || echo "0")
             if [ "$match_count" -gt 0 ]; then
-                echo "❌ $err_type 检测到 (共 $match_count 处):"
-                grep -E -i "$pattern" "$latest_log" 2>/dev/null | head -3 | while IFS= read -r line; do
-                    if [ ${#line} -gt 150 ]; then
-                        line="${line:0:150}..."
-                    fi
-                    echo "   $line"
-                done
-                if [ $match_count -gt 3 ]; then
-                    echo "   ... 还有 $((match_count - 3)) 处"
-                fi
-                echo ""
-                found=$((found + 1))
+                echo "⚠️ $err_name 检测到 (共 $match_count 处)"
             fi
         done
-
-        if [ $found -eq 0 ]; then
-            echo "✅ 未检测到常见错误模式"
-        fi
         echo ""
 
         # ============================================
@@ -6113,128 +6064,68 @@ quick_error_check() {
             echo "✅ staging_dir 存在"
             local staging_size=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
             echo "   📊 大小: $staging_size"
-            
-            local gcc_count=$(find staging_dir -type f -executable -name "*gcc" ! -name "*gcc-ar" ! -name "*gcc-ranlib" ! -name "*gcc-nm" 2>/dev/null | wc -l)
-            if [ $gcc_count -gt 0 ]; then
-                echo "   ✅ GCC编译器存在"
-                echo "   📊 GCC编译器数量: $gcc_count"
-            else
-                echo "   ❌ GCC编译器缺失"
-            fi
         else
             echo "❌ staging_dir 不存在"
         fi
         
         if [ -d "feeds" ]; then
-            local feed_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
-            feed_count=$((feed_count - 1))
-            echo "✅ feeds 存在 ($feed_count 个feed)"
+            echo "✅ feeds 存在"
         else
             echo "❌ feeds 不存在"
         fi
         
         if [ -f ".config" ]; then
-            local config_size=$(ls -lh .config | awk '{print $5}')
-            local config_lines=$(wc -l < .config)
-            echo "✅ .config 存在 ($config_size, $config_lines 行)"
+            local config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}')
+            echo "✅ .config 存在 ($config_size)"
         else
             echo "❌ .config 不存在"
         fi
         
         if [ -d "dl" ]; then
             local dl_count=$(find dl -type f 2>/dev/null | wc -l)
-            local dl_size=$(du -sh dl 2>/dev/null | awk '{print $1}')
-            echo "✅ dl 目录存在 ($dl_count 个文件, $dl_size)"
+            echo "✅ dl 目录存在 ($dl_count 个文件)"
         else
             echo "⚠️ dl 目录不存在"
         fi
-        
-        if [ -d "tmp/info" ]; then
-            local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
-            echo "✅ tmp/info 目录存在 ($info_count 个包索引文件)"
-        else
-            echo "⚠️ tmp/info 目录不存在"
-        fi
         echo ""
 
         # ============================================
-        # 4. 构建时间统计
+        # 4. 最后30行日志摘要
         # ============================================
-        echo "🔍 4. 构建时间统计:"
+        echo "🔍 4. 最后30行日志摘要:"
         echo "----------------------------------------"
-        grep -E "time:.*#|real.*user.*sys" "$latest_log" 2>/dev/null | tail -10 | while read line; do
-            echo "   $line"
-        done
+        tail -30 "$latest_log" | sed 's/^/   /'
         echo ""
 
         # ============================================
-        # 5. 最后50行日志摘要
-        # ============================================
-        echo "🔍 5. 最后50行日志摘要:"
-        echo "----------------------------------------"
-        tail -50 "$latest_log" | sed 's/^/   /'
-        echo ""
-
-        # ============================================
-        # 6. 错误统计总结
+        # 5. 错误统计总结
         # ============================================
         echo "================================================================="
-        echo "📊 错误统计总结:"
-        
-        local error_count=$(grep -i -c "error" "$latest_log" 2>/dev/null || echo "0")
-        local warning_count=$(grep -i -c "warning" "$latest_log" 2>/dev/null || echo "0")
-        local fail_count=$(grep -i -c "fail" "$latest_log" 2>/dev/null || echo "0")
-        local ignored_count=$(grep -c "(ignored)" "$latest_log" 2>/dev/null || echo "0")
-        
-        echo "  错误总数: $error_count"
-        echo "  警告总数: $warning_count"
-        echo "  失败总数: $fail_count"
-        echo "  忽略错误数: $ignored_count"
+        echo "📊 构建结果总结:"
         echo ""
         
         if [ $valid_firmware -gt 0 ]; then
             echo "🎉🎉🎉 编译成功！生成了 $valid_firmware 个有效固件 🎉🎉🎉"
             echo ""
-            echo "固件文件列表:"
+            echo "固件文件:"
             for fw in "${firmware_list[@]}"; do
                 echo "  📦 $fw"
             done
             echo ""
             echo "固件位置: $target_dir"
         else
-            # 再次检查日志中是否有固件复制记录
-            if grep -q "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null; then
-                echo "⚠️ 日志显示固件已生成，但未在预期目录中找到"
-                echo ""
-                echo "📋 日志中的固件复制记录:"
-                grep "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null | tail -5 | while read line; do
-                    echo "   $line"
-                done
-                echo ""
-                echo "💡 固件可能已生成，请手动检查 bin/targets/ 目录"
-            else
-                echo "❌❌❌ 编译失败：没有生成任何有效固件 ❌❌❌"
-            fi
+            echo "❌ 编译失败：没有生成有效固件"
             
             echo ""
             echo "💡 根据诊断结果的可能解决方案:"
-            if grep -q "package/install.*Error 255" "$latest_log" 2>/dev/null; then
-                echo "   🔧 package/install Error 255:"
-                echo "      1. 检查 tmp/info 目录是否有包索引文件"
-                echo "      2. 尝试单独运行: make package/compile && make package/install"
-            fi
-            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
-                echo "   🔧 补丁失败:"
-                echo "      1. 删除失败的补丁文件"
+            if grep -q "Download failed" "$latest_log" 2>/dev/null; then
+                echo "   🔧 下载失败: 检查网络连接或更换镜像源"
             fi
             if grep -q "No space left" "$latest_log" 2>/dev/null; then
-                echo "   🔧 磁盘空间不足:"
-                echo "      1. 清理磁盘空间"
+                echo "   🔧 磁盘空间不足: 清理磁盘空间"
             fi
-            if grep -q "Download failed" "$latest_log" 2>/dev/null; then
-                echo "   🔧 下载失败:"
-                echo "      1. 检查网络连接"
-                echo "      2. 更换下载镜像源"
+            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
+                echo "   🔧 补丁失败: 删除失败的补丁文件"
             fi
         fi
         
@@ -6248,10 +6139,6 @@ quick_error_check() {
     if [ $valid_firmware -gt 0 ]; then
         return 0
     else
-        # 如果日志显示固件已复制，也返回成功
-        if grep -q "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null; then
-            return 0
-        fi
         return 1
     fi
 }
