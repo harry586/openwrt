@@ -5147,7 +5147,7 @@ EOF
         local target="$1"
         local build_dir="$2"
         
-        log "  🔧 检查并创建 root 目录..."
+        log "  🔧 检查并创建所有 root 目录..."
         
         # 查找所有可能的 target 构建目录
         local target_dirs=$(find "$build_dir/build_dir" -maxdepth 1 -type d -name "target-*" 2>/dev/null)
@@ -5183,10 +5183,10 @@ EOF
                     ;;
             esac
             
+            # 创建标准 root 目录
             local root_path="$tdir/$root_name"
-            
             if [ ! -d "$root_path" ]; then
-                log "    📁 创建缺失目录: $root_path"
+                log "    📁 创建目录: $root_path"
                 mkdir -p "$root_path"
                 mkdir -p "$root_path/etc"
                 mkdir -p "$root_path/lib"
@@ -5195,9 +5195,39 @@ EOF
                 mkdir -p "$root_path/dev"
                 mkdir -p "$root_path/proc"
                 mkdir -p "$root_path/sys"
-            else
-                log "    ✅ $root_name 目录已存在"
             fi
+            
+            # 创建 root.orig-* 目录（用于 opkg 生成 manifest）
+            local orig_root_path="$tdir/root.orig-${target}"
+            if [ ! -d "$orig_root_path" ]; then
+                log "    📁 创建目录: $orig_root_path"
+                mkdir -p "$orig_root_path"
+                mkdir -p "$orig_root_path/tmp"
+                mkdir -p "$orig_root_path/etc"
+                mkdir -p "$orig_root_path/usr"
+                mkdir -p "$orig_root_path/lib"
+            fi
+            
+            # 确保 root.orig-* 的 tmp 目录存在且有正确权限
+            if [ -d "$orig_root_path/tmp" ]; then
+                chmod 1777 "$orig_root_path/tmp" 2>/dev/null || true
+            fi
+            
+            # 创建 root.orig-* 的其他可能变体
+            local orig_variants=(
+                "root.orig-${target}"
+                "root.orig-${arch_name}"
+                "root.orig"
+            )
+            
+            for variant in "${orig_variants[@]}"; do
+                local variant_path="$tdir/$variant"
+                if [ ! -d "$variant_path" ]; then
+                    mkdir -p "$variant_path" 2>/dev/null || true
+                    mkdir -p "$variant_path/tmp" 2>/dev/null || true
+                    chmod 1777 "$variant_path/tmp" 2>/dev/null || true
+                fi
+            done
         done
         
         # 如果没有找到任何 target 目录，尝试基于已知架构创建
@@ -5224,9 +5254,13 @@ EOF
                     if [ -d "$pdir" ]; then
                         local root_name="root-${target}"
                         local root_path="$pdir/$root_name"
-                        log "    📁 创建目录: $root_path"
-                        mkdir -p "$root_path"
-                        mkdir -p "$root_path/etc" "$root_path/lib" "$root_path/usr" "$root_path/tmp"
+                        mkdir -p "$root_path" 2>/dev/null || true
+                        mkdir -p "$root_path/tmp" 2>/dev/null || true
+                        
+                        local orig_root_path="$pdir/root.orig-${target}"
+                        mkdir -p "$orig_root_path" 2>/dev/null || true
+                        mkdir -p "$orig_root_path/tmp" 2>/dev/null || true
+                        chmod 1777 "$orig_root_path/tmp" 2>/dev/null || true
                     fi
                 done
             fi
@@ -5272,6 +5306,10 @@ EOF
     rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
     rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null || true
     find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
+    
+    # 预创建 root 目录
+    ensure_root_dirs "$TARGET" "$BUILD_DIR"
+    
     log "  ✅ 环境清理完成"
     
     # 步骤1: 编译工具链
@@ -5290,7 +5328,7 @@ EOF
     # 步骤2: 编译内核和模块
     log "  📦 步骤2: 编译内核和模块..."
     
-    # 动态创建 root 目录
+    # 再次确保 root 目录存在
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     
     set +e
@@ -5405,7 +5443,7 @@ EOF
     # 步骤5: 生成固件
     log "  📦 步骤5: 生成固件..."
     
-    # 再次确保 root 目录存在
+    # 再次确保 root 目录存在（包括 root.orig-*）
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     
     set +e
@@ -5414,9 +5452,9 @@ EOF
     set -e
     
     if [ $STEP5_EXIT_CODE -ne 0 ]; then
-        # 检查是否是目录不存在导致的错误
-        if grep -q "No such file or directory" build_step5.log 2>/dev/null; then
-            log "    🔧 检测到目录缺失，重新创建并重试..."
+        # 检查是否是目录不存在或 opkg lock 错误
+        if grep -q "No such file or directory\|opkg.*lock" build_step5.log 2>/dev/null; then
+            log "    🔧 检测到目录或 lock 文件问题，重新创建并重试..."
             ensure_root_dirs "$TARGET" "$BUILD_DIR"
             
             set +e
@@ -5426,7 +5464,7 @@ EOF
         fi
         
         if [ $STEP5_EXIT_CODE -ne 0 ]; then
-            log "  ⚠️ 固件生成有警告，继续..."
+            log "  ⚠️ 固件生成有警告，但固件可能已成功生成，继续..."
         fi
     else
         log "  ✅ 步骤5完成"
