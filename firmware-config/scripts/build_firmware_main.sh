@@ -5211,66 +5211,9 @@ EOF
             
             # 修复 package/install 错误 (Error 255)
             if grep -q "package/install.*Error 255" "$log_file" || grep -q "package/install\] Error" "$log_file"; then
-                log "  ⚠️ 检测到 package/install 错误 (Error 255)"
-                
-                # ============================================
-                # 收集诊断信息
-                # ============================================
-                log "  🔍 ===== 开始收集诊断信息 ====="
-                
-                local diag_dir="/tmp/build-logs/diagnosis"
-                mkdir -p "$diag_dir"
-                
-                # 1. 提取错误发生前最后配置的包
-                log "  📋 1. 错误发生前最后配置的包:"
-                grep -B 30 "package/install.*Error 255\|package/install\] Error" "$log_file" | grep -E "Configuring |Packaging " | tail -10 | tee "$diag_dir/last_packages.txt"
-                
-                # 2. 查找 luci-lib-fs 相关信息
-                log "  📋 2. luci-lib-fs 相关信息:"
-                echo "=== luci-lib-fs 源码位置 ===" >> "$diag_dir/luci-lib-fs.txt"
-                find . -type d -name "*luci-lib-fs*" 2>/dev/null >> "$diag_dir/luci-lib-fs.txt" || echo "  未找到目录" >> "$diag_dir/luci-lib-fs.txt"
-                
-                echo "" >> "$diag_dir/luci-lib-fs.txt"
-                echo "=== luci-lib-fs Makefile ===" >> "$diag_dir/luci-lib-fs.txt"
-                find . -path "*/luci-lib-fs/Makefile" 2>/dev/null | head -1 | xargs cat 2>/dev/null >> "$diag_dir/luci-lib-fs.txt" || echo "  未找到 Makefile" >> "$diag_dir/luci-lib-fs.txt"
-                
-                echo "" >> "$diag_dir/luci-lib-fs.txt"
-                echo "=== luci-lib-fs postinst 脚本 ===" >> "$diag_dir/luci-lib-fs.txt"
-                find . -path "*/luci-lib-fs/*postinst*" 2>/dev/null >> "$diag_dir/luci-lib-fs.txt" || echo "  未找到 postinst 脚本" >> "$diag_dir/luci-lib-fs.txt"
-                
-                cat "$diag_dir/luci-lib-fs.txt" | while read line; do
-                    log "    $line"
-                done
-                
-                # 3. 查找 wechatpush 相关信息
-                log "  📋 3. luci-app-wechatpush 相关信息:"
-                echo "=== wechatpush 源码位置 ===" >> "$diag_dir/wechatpush.txt"
-                find . -type d -name "*wechatpush*" 2>/dev/null >> "$diag_dir/wechatpush.txt" || echo "  未找到目录" >> "$diag_dir/wechatpush.txt"
-                
-                echo "" >> "$diag_dir/wechatpush.txt"
-                echo "=== wechatpush Makefile ===" >> "$diag_dir/wechatpush.txt"
-                find . -path "*/luci-app-wechatpush/Makefile" 2>/dev/null | head -1 | xargs cat 2>/dev/null >> "$diag_dir/wechatpush.txt" || echo "  未找到 Makefile" >> "$diag_dir/wechatpush.txt"
-                
-                cat "$diag_dir/wechatpush.txt" | while read line; do
-                    log "    $line"
-                done
-                
-                # 4. 检查包索引文件
-                log "  📋 4. 包索引状态:"
-                if [ -d "tmp/info" ]; then
-                    ls -la tmp/info/ | head -20 | tee "$diag_dir/package_info.txt"
-                else
-                    echo "  tmp/info 目录不存在" | tee "$diag_dir/package_info.txt"
-                fi
-                
-                # 5. 检查 staging_dir 中的安装标记
-                log "  📋 5. 安装标记文件:"
-                find staging_dir -name ".package_install*" 2>/dev/null | head -10 | tee "$diag_dir/stamp_files.txt"
-                
-                log "  🔍 ===== 诊断信息收集完成 ====="
+                log "  ⚠️ 检测到 package/install 错误 (Error 255)，正在清理安装状态..."
                 
                 # 清理安装标记文件
-                log "  🔧 清理安装状态..."
                 rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
                 rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
                 rm -f staging_dir/target-*/stamp/.package_install_* 2>/dev/null || true
@@ -5716,7 +5659,7 @@ quick_error_check() {
         fi
         
         if grep -q "undefined reference to" "$latest_log"; then
-            echo "❌ 检测到未定义引用错误:"
+            echo "❌ 検测到未定义引用错误:"
             grep -n "undefined reference to" "$latest_log" | head -5 | while read line; do
                 echo "   $line"
             done
@@ -5726,6 +5669,91 @@ quick_error_check() {
             echo "✅ 未检测到编译错误退出"
         fi
         echo ""
+
+        # ============================================
+        # 新增：package/install Error 255 详细诊断
+        # ============================================
+        if grep -q "package/install.*Error 255" "$latest_log" || grep -q "package/install\] Error" "$latest_log"; then
+            echo "🔍 1.1 package/install Error 255 详细诊断:"
+            echo "----------------------------------------"
+            
+            # 提取错误发生前最后配置的包
+            echo ""
+            echo "📋 错误发生前最后配置的包:"
+            grep -B 30 "package/install.*Error 255\|package/install\] Error" "$latest_log" 2>/dev/null | grep -E "Configuring |Packaging " | tail -10 | while read line; do
+                echo "   $line"
+            done
+            
+            # 查找 luci-lib-fs 源码位置
+            echo ""
+            echo "📋 luci-lib-fs 源码位置:"
+            find . -type d -name "*luci-lib-fs*" 2>/dev/null | head -5 | while read line; do
+                echo "   $line"
+            done
+            if [ -z "$(find . -type d -name "*luci-lib-fs*" 2>/dev/null | head -1)" ]; then
+                echo "   ⚠️ 未找到 luci-lib-fs 目录"
+            fi
+            
+            # 查看 luci-lib-fs Makefile 关键内容
+            echo ""
+            echo "📋 luci-lib-fs Makefile 依赖信息:"
+            local luci_lib_fs_makefile=$(find . -path "*/luci-lib-fs/Makefile" 2>/dev/null | head -1)
+            if [ -n "$luci_lib_fs_makefile" ] && [ -f "$luci_lib_fs_makefile" ]; then
+                grep -E "DEPENDS|PKG_BUILD_DEPENDS|include.*package" "$luci_lib_fs_makefile" 2>/dev/null | head -10 | while read line; do
+                    echo "   $line"
+                done
+            else
+                echo "   ⚠️ 未找到 luci-lib-fs Makefile"
+            fi
+            
+            # 查找 wechatpush 源码位置
+            echo ""
+            echo "📋 luci-app-wechatpush 源码位置:"
+            find . -type d -name "*wechatpush*" 2>/dev/null | head -5 | while read line; do
+                echo "   $line"
+            done
+            if [ -z "$(find . -type d -name "*wechatpush*" 2>/dev/null | head -1)" ]; then
+                echo "   ⚠️ 未找到 wechatpush 目录"
+            fi
+            
+            # 查看 wechatpush Makefile 关键内容
+            echo ""
+            echo "📋 luci-app-wechatpush Makefile 依赖信息:"
+            local wechatpush_makefile=$(find . -path "*/luci-app-wechatpush/Makefile" 2>/dev/null | head -1)
+            if [ -n "$wechatpush_makefile" ] && [ -f "$wechatpush_makefile" ]; then
+                grep -E "DEPENDS|PKG_BUILD_DEPENDS|include.*package" "$wechatpush_makefile" 2>/dev/null | head -10 | while read line; do
+                    echo "   $line"
+                done
+            else
+                echo "   ⚠️ 未找到 luci-app-wechatpush Makefile"
+            fi
+            
+            # 检查是否有 postinst 脚本问题
+            echo ""
+            echo "📋 安装后脚本检查:"
+            find . -path "*/luci-lib-fs/*postinst*" 2>/dev/null | while read line; do
+                echo "   📄 $line"
+                echo "   --- 内容预览 ---"
+                head -20 "$line" 2>/dev/null | while read script_line; do
+                    echo "   $script_line"
+                done
+            done
+            
+            # 检查包索引状态
+            echo ""
+            echo "📋 包索引状态:"
+            if [ -d "tmp/info" ]; then
+                echo "   tmp/info 目录存在，文件数: $(ls tmp/info/ 2>/dev/null | wc -l)"
+                ls tmp/info/ 2>/dev/null | grep -E "luci-lib-fs|wechatpush|dnsmasq" | while read line; do
+                    echo "   📄 $line"
+                done
+            else
+                echo "   ⚠️ tmp/info 目录不存在"
+            fi
+            
+            echo "----------------------------------------"
+            echo ""
+        fi
 
         declare -A error_patterns=(
             ["内核错误"]="Kernel panic|Oops|Unable to handle kernel"
@@ -5871,6 +5899,7 @@ quick_error_check() {
         echo "  错误总数: $error_count"
         echo "  警告总数: $warning_count"
         echo "  失败总数: $fail_count"
+        echo "$valid_firmware"
         
         if [ $valid_firmware -gt 0 ]; then
             echo ""
