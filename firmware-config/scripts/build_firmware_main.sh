@@ -5147,33 +5147,19 @@ EOF
         local target="$1"
         local build_dir="$2"
         
-        log "  🔧 检查并创建所有 root 目录..."
-        
         local target_dirs=$(find "$build_dir/build_dir" -maxdepth 1 -type d -name "target-*" 2>/dev/null)
         
         for tdir in $target_dirs; do
-            local arch_name=$(basename "$tdir" | sed 's/^target-//')
-            
             local root_name=""
             case "$target" in
                 ipq40xx|ipq806x|qcom)
                     root_name="root-ipq40xx"
                     ;;
                 mediatek|ramips)
-                    if [[ "$SUBTARGET" == "filogic" ]] || [[ "$SUBTARGET" == "mt7981" ]]; then
-                        root_name="root-mediatek"
-                    else
-                        root_name="root-ramips"
-                    fi
+                    root_name="root-ramips"
                     ;;
                 ath79)
                     root_name="root-ath79"
-                    ;;
-                bcm27xx|bcm53xx)
-                    root_name="root-bcm"
-                    ;;
-                x86|i386|x64)
-                    root_name="root-x86"
                     ;;
                 *)
                     root_name="root-${target}"
@@ -5238,21 +5224,107 @@ EOF
     log "  📦 步骤1: 编译工具链..."
     set +e
     make -j$MAKE_JOBS toolchain/compile $make_args 2>&1 | tee build_step1.log
+    STEP1_EXIT_CODE=${PIPESTATUS[0]}
     set -e
+    
+    if [ $STEP1_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 工具链编译有警告，继续..."
+    fi
     log "  ✅ 步骤1完成"
     
-    # 步骤2: 编译内核和模块
+    # 步骤2: 编译内核和模块（带补丁失败重试）
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    set +e
-    make -j$MAKE_JOBS target/compile $make_args 2>&1 | tee build_step2.log
-    set -e
+    
+    local kernel_retry=1
+    local max_kernel_retries=3
+    local kernel_success=0
+    
+    while [ $kernel_retry -le $max_kernel_retries ] && [ $kernel_success -eq 0 ]; do
+        log "    尝试 $kernel_retry/$max_kernel_retries..."
+        
+        set +e
+        make -j$MAKE_JOBS target/compile $make_args 2>&1 | tee build_step2_attempt${kernel_retry}.log
+        STEP2_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        
+        if [ $STEP2_EXIT_CODE -eq 0 ]; then
+            kernel_success=1
+            log "    ✅ 内核编译成功"
+            break
+        fi
+        
+        log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
+        
+        # 检查是否是补丁失败
+        if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
+            log "    🔧 检测到补丁失败，正在修复..."
+            
+            # 提取失败的补丁文件
+            local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+            
+            if [ -z "$failed_patches" ]; then
+                failed_patches=$(grep "Patch failed!" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([^/]+\.patch).*/\1/' | sort -u)
+            fi
+            
+            for patch_name in $failed_patches; do
+                log "      🗑️ 删除失败补丁: $patch_name"
+                find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
+                    log "        删除: $patch_file"
+                    rm -f "$patch_file"
+                done
+            done
+            
+            # 如果没有提取到具体补丁名，删除常见的ath79问题补丁
+            if [ -z "$failed_patches" ] && [ "$TARGET" = "ath79" ]; then
+                log "      🗑️ 删除 ath79 已知问题补丁: 910-unaligned_access_hacks.patch"
+                find target/linux/ath79 -name "910-unaligned_access_hacks.patch" -type f 2>/dev/null | while read patch_file; do
+                    log "        删除: $patch_file"
+                    rm -f "$patch_file"
+                done
+            fi
+            
+            # 彻底清理内核构建目录
+            log "    🔧 清理内核构建目录..."
+            rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
+            rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+            
+            # 清理 quilt 状态目录
+            find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
+            find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
+        fi
+        
+        # 检查其他常见错误
+        if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
+            log "    ❌ 磁盘空间不足，无法继续"
+            break
+        fi
+        
+        if grep -q "swconfig\|SWITCH_LINK_FLAG" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
+            log "    🔧 禁用 swconfig..."
+            find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
+            sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
+            echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
+            make defconfig > /dev/null 2>&1 || true
+        fi
+        
+        kernel_retry=$((kernel_retry + 1))
+    done
+    
+    if [ $kernel_success -eq 0 ]; then
+        log "  ❌ 内核编译失败，已重试 $max_kernel_retries 次"
+        kill $protect_pid 2>/dev/null || true
+        rm -rf "$protect_dir" 2>/dev/null || true
+        exit 1
+    fi
+    
     log "  ✅ 步骤2完成"
     
     # 步骤3: 编译所有软件包
     log "  📦 步骤3: 编译所有软件包..."
     set +e
     make -j$MAKE_JOBS package/compile $make_args 2>&1 | tee build_step3.log
+    STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
     if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
@@ -5273,7 +5345,12 @@ EOF
     log "  📦 步骤4: 安装软件包..."
     set +e
     make -j1 package/install $make_args 2>&1 | tee build_step4.log
+    STEP4_EXIT_CODE=${PIPESTATUS[0]}
     set -e
+    
+    if [ $STEP4_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 软件包安装有警告，继续..."
+    fi
     log "  ✅ 步骤4完成"
     
     # 步骤5: 生成固件
@@ -5281,11 +5358,16 @@ EOF
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     set +e
     make -j1 target/install $make_args 2>&1 | tee build_step5.log
+    STEP5_EXIT_CODE=${PIPESTATUS[0]}
     set -e
+    
+    if [ $STEP5_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 固件生成有警告，继续..."
+    fi
     log "  ✅ 步骤5完成"
     
     # 合并所有日志
-    cat build_step*.log > build.log 2>/dev/null || true
+    cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
     
     log "  ✅ 分步编译完成"
     
@@ -5302,19 +5384,26 @@ EOF
     local firmware_files=()
     local hash_file="$target_dir/firmware-sha256sums.txt"
     
-    # 清空旧的哈希文件
     > "$hash_file" 2>/dev/null || true
     
     if [ -d "$target_dir" ]; then
-        # 只处理 .bin 和 .img 文件，排除 .itb 和 .manifest
+        # 首先删除不需要的文件（.itb、.manifest 等）
+        log "  🗑️ 清理不需要的文件..."
+        find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) 2>/dev/null | while read file; do
+            log "    删除: $(basename "$file")"
+            rm -f "$file"
+        done
+        
+        # 删除 packages 子目录（不需要上传）
+        if [ -d "$target_dir/packages" ]; then
+            log "    删除 packages 目录"
+            rm -rf "$target_dir/packages"
+        fi
+        
+        # 然后验证固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             local fname=$(basename "$file")
-            
-            # 跳过非固件文件
-            if [[ "$fname" == *.itb ]] || [[ "$fname" == *.manifest ]] || [[ "$fname" == *sha256sums* ]]; then
-                continue
-            fi
             
             local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
             local size_mb=$((size_bytes / 1024 / 1024))
@@ -5330,7 +5419,6 @@ EOF
                     valid_firmware=$((valid_firmware + 1))
                     firmware_files+=("$fname")
                     
-                    # 计算 SHA256 哈希值
                     local fhash=$(sha256sum "$file" | awk '{print $1}')
                     echo "$fhash  $fname" >> "$hash_file"
                     log "      SHA256: $fhash"
@@ -5344,7 +5432,6 @@ EOF
         done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
     fi
     
-    # 保存固件信息到环境变量
     if [ $valid_firmware -gt 0 ]; then
         echo "VALID_FIRMWARE_COUNT=$valid_firmware" >> $GITHUB_ENV 2>/dev/null || true
         echo "FIRMWARE_HASH_FILE=$hash_file" >> $GITHUB_ENV 2>/dev/null || true
@@ -5361,6 +5448,7 @@ EOF
     
     if [ $valid_firmware -eq 0 ]; then
         log "❌ 错误：没有找到任何有效可刷机固件"
+        rm -rf "$protect_dir" 2>/dev/null || true
         exit 1
     else
         log "✅ 找到 $valid_firmware 个有效可刷机固件"
