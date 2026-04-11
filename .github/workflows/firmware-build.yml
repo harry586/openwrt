@@ -512,13 +512,18 @@ jobs:
 
 #【firmware-build.yml-27】
       - name: "27. 上传固件"
-        if: always()  # 改为 always()，无论成功失败都尝试上传
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ env.TIMESTAMP_SEC }}
-          path: /mnt/openwrt-build/bin/targets/
+          path: |
+            /mnt/openwrt-build/bin/targets/**/*.bin
+            /mnt/openwrt-build/bin/targets/**/*.img
+            !/mnt/openwrt-build/bin/targets/**/*.itb
+            !/mnt/openwrt-build/bin/targets/**/*.manifest
+            !/mnt/openwrt-build/bin/targets/**/packages/**
           retention-days: 7
-          if-no-files-found: warn  # 改为 warn，避免因无文件而失败
+          if-no-files-found: warn
 #【firmware-build.yml-27-end】
 
 #【firmware-build.yml-28】
