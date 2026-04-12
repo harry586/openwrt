@@ -956,7 +956,80 @@ install_turboacc_packages() {
 #【build_firmware_main.sh-11-end】
 
 #【build_firmware_main.sh-12】
-#空
+# 生成完整的禁用插件列表
+generate_forbidden_packages_list() {
+    local base_forbidden="$1"
+    local full_list=()
+    
+    IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
+    for pkg in "${BASE_PKGS[@]}"; do
+        [ -z "$pkg" ] && continue
+        full_list+=("$pkg")
+        full_list+=("luci-app-${pkg}")
+        full_list+=("luci-i18n-${pkg}-zh-cn")
+        full_list+=("${pkg}-scripts")
+        
+        case "$pkg" in
+            "ssr-plus")
+                full_list+=("shadowsocksr-libev")
+                full_list+=("shadowsocksr-libev-ssr-local")
+                full_list+=("shadowsocksr-libev-ssr-redir")
+                full_list+=("shadowsocksr-libev-ssr-tunnel")
+                ;;
+            "passwall")
+                full_list+=("shadowsocks-libev-ss-local")
+                full_list+=("shadowsocks-libev-ss-redir")
+                full_list+=("shadowsocks-libev-ss-tunnel")
+                full_list+=("trojan")
+                full_list+=("trojan-plus")
+                full_list+=("xray-core")
+                full_list+=("v2ray-core")
+                full_list+=("v2ray-plugin")
+                full_list+=("simple-obfs")
+                ;;
+            "vssr")
+                full_list+=("shadowsocksr-libev")
+                full_list+=("v2ray-core")
+                full_list+=("v2ray-plugin")
+                ;;
+            "ddns")
+                full_list+=("ddns-scripts")
+                full_list+=("ddns-scripts_aliyun")
+                full_list+=("ddns-scripts_dnspod")
+                full_list+=("ddns-go")
+                ;;
+            "qbittorrent")
+                full_list+=("qbittorrent-nox")
+                full_list+=("libtorrent-rasterbar")
+                ;;
+            "rclone")
+                full_list+=("rclone-ng")
+                full_list+=("rclone-webui-react")
+                ;;
+            "filetransfer")
+                full_list+=("vsftpd-alt")
+                ;;
+            "nlbwmon")
+                full_list+=("luci-app-nlbwmon")
+                full_list+=("luci-i18n-nlbwmon-zh-cn")
+                ;;
+            "wol")
+                full_list+=("luci-app-wol")
+                full_list+=("luci-i18n-wol-zh-cn")
+                ;;
+            "accesscontrol")
+                full_list+=("luci-app-accesscontrol")
+                full_list+=("luci-i18n-accesscontrol-zh-cn")
+                ;;
+            "autoreboot")
+                full_list+=("luci-app-autoreboot")
+                full_list+=("luci-i18n-autoreboot-zh-cn")
+                ;;
+        esac
+    done
+    
+    printf '%s\n' "${full_list[@]}" | sort -u
+}
 #【build_firmware_main.sh-12-end】
 
 #【build_firmware_main.sh-13】
@@ -997,9 +1070,24 @@ generate_config() {
     # 根据源码类型确定设备配置变量格式
     # ============================================
     local device_config=""
+    local actual_subtarget="$SUBTARGET"
     
-    device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
+    # 修正 mediatek 平台的子目标名称
+    if [ "$TARGET" = "mediatek" ]; then
+        # 检查实际存在的子目标
+        if [ -d "target/linux/mediatek/filogic" ]; then
+            actual_subtarget="filogic"
+        elif [ -d "target/linux/mediatek/mt7622" ]; then
+            actual_subtarget="mt7622"
+        fi
+        log "🔧 mediatek平台，子目标修正: $SUBTARGET -> $actual_subtarget"
+    fi
+    
+    device_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}=y"
     log "🔧 标准设备配置格式: $device_config"
+    
+    # 更新 SUBTARGET 变量
+    SUBTARGET="$actual_subtarget"
     
     log "🔧 最终设备配置变量: $device_config"
     
@@ -1007,7 +1095,7 @@ generate_config() {
         log "🔧 LEDE源码特殊处理：先设置目标平台"
         cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${actual_subtarget}=y
 EOF
         log "🔄 运行 make defconfig 生成基础配置..."
         make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || {
@@ -1022,7 +1110,7 @@ EOF
     else
         cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
-CONFIG_TARGET_${TARGET}_${SUBTARGET}=y
+CONFIG_TARGET_${TARGET}_${actual_subtarget}=y
 ${device_config}
 EOF
     fi
@@ -1471,7 +1559,7 @@ EOF
     local found_config=""
     local search_pattern=""
     
-    search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}"
+    search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}"
     
     found_config=$(grep -E "^${search_pattern}=y" .config 2>/dev/null | head -1)
     
@@ -4101,7 +4189,7 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # 智能设备匹配函数
+    # 智能设备匹配函数 - 优先精确匹配，避免匹配到带后缀的变体
     find_best_matching_device() {
         local input_device="$1"
         local mk_file="$2"
@@ -4121,9 +4209,15 @@ workflow_step15_generate_config() {
             local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
             local lower_device=$(echo "$device" | tr '[:upper:]' '[:lower:]')
             
-            # 完全匹配：权重+100
+            # 完全匹配：权重最高 +100
             if [ "$lower_input" = "$lower_device" ]; then
                 weight=$((weight + 100))
+            fi
+            
+            # 输入等于设备名去掉后缀：权重+90（优先匹配基础设备名）
+            local device_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+            if [ "$lower_input" = "$device_no_suffix" ]; then
+                weight=$((weight + 90))
             fi
             
             # 输入包含设备名：权重+50
@@ -4137,14 +4231,16 @@ workflow_step15_generate_config() {
             fi
             
             # 去除后缀匹配
-            local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//')
-            local device_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//')
-            if [ "$input_no_suffix" = "$device_no_suffix" ]; then
+            local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+            local dev_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+            if [ "$input_no_suffix" = "$dev_no_suffix" ]; then
                 weight=$((weight + 35))
             fi
             
-            # 匹配rax3000m相关
-            if [[ "$lower_input" == *"rax3000m"* ]] && [[ "$lower_device" == *"rax3000m"* ]]; then
+            # 匹配rax3000m相关 - 优先匹配nand版本
+            if [[ "$lower_input" == *"rax3000m-nand"* ]] && [[ "$lower_device" == *"rax3000m-nand"* ]]; then
+                weight=$((weight + 80))
+            elif [[ "$lower_input" == *"rax3000m"* ]] && [[ "$lower_device" == *"rax3000m"* ]]; then
                 weight=$((weight + 30))
             fi
             
@@ -4154,6 +4250,11 @@ workflow_step15_generate_config() {
             fi
             if [[ "$lower_input" == *"emmc"* ]] && [[ "$lower_device" == *"emmc"* ]]; then
                 weight=$((weight + 20))
+            fi
+            
+            # 惩罚ubootmod变体（如果不匹配）
+            if [[ "$lower_device" == *"ubootmod"* ]] && [[ "$lower_input" != *"ubootmod"* ]]; then
+                weight=$((weight - 50))
             fi
             
             # 部分单词匹配
@@ -4184,7 +4285,7 @@ workflow_step15_generate_config() {
     
     # 遍历所有mk文件查找匹配
     for mkfile in "${mk_files[@]}"; do
-        # 先尝试精确匹配
+        # 先尝试精确匹配原始设备名
         if grep -q "define Device.*$DEVICE" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
             mk_device_name=$(grep -m1 "define Device.*$DEVICE" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
@@ -4265,9 +4366,9 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 使用搜索到的正确设备名
-    local correct_device="$mk_device_name"
-    log "🔧 使用搜索到的正确设备名: $correct_device (原输入: $DEVICE)"
+    # 使用原始设备名，不做转换
+    local correct_device="$DEVICE"
+    log "🔧 使用原始设备名: $correct_device"
     
     # 更新环境变量
     export DEVICE="$correct_device"
@@ -4555,13 +4656,26 @@ workflow_step23_pre_build_check() {
     fi
     
     # ============================================
+    # 修正 mediatek 平台的子目标
+    # ============================================
+    local actual_subtarget="$SUBTARGET"
+    if [ "$TARGET" = "mediatek" ]; then
+        if [ -d "target/linux/mediatek/filogic" ]; then
+            actual_subtarget="filogic"
+        elif [ -d "target/linux/mediatek/mt7622" ]; then
+            actual_subtarget="mt7622"
+        fi
+        log "🔧 mediatek平台，子目标修正: $SUBTARGET -> $actual_subtarget"
+    fi
+    
+    # ============================================
     # 根据源码类型确定设备配置格式
     # ============================================
     local expected_config=""
     local search_pattern=""
     
-    expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-    search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
+    expected_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${DEVICE}=y"
+    search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${DEVICE}"
     log "🔧 标准格式，期望配置: $expected_config"
     
     # 检查设备配置是否存在
@@ -4634,7 +4748,7 @@ workflow_step23_pre_build_check() {
         local device_for_check="$DEVICE"
         local check_pattern=""
         
-        check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
+        check_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${device_for_check}"
         
         if grep -q "^${check_pattern}=y" .config; then
             echo "   ✅ 设备配置正确: $(grep "^${check_pattern}=y" .config | head -1)"
