@@ -4189,7 +4189,7 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # 智能设备匹配函数 - 优先精确匹配，避免匹配到带后缀的变体
+    # 智能设备匹配函数
     find_best_matching_device() {
         local input_device="$1"
         local mk_file="$2"
@@ -4209,15 +4209,9 @@ workflow_step15_generate_config() {
             local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
             local lower_device=$(echo "$device" | tr '[:upper:]' '[:lower:]')
             
-            # 完全匹配：权重最高 +100
+            # 完全匹配：权重+100
             if [ "$lower_input" = "$lower_device" ]; then
                 weight=$((weight + 100))
-            fi
-            
-            # 输入等于设备名去掉后缀：权重+90（优先匹配基础设备名）
-            local device_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
-            if [ "$lower_input" = "$device_no_suffix" ]; then
-                weight=$((weight + 90))
             fi
             
             # 输入包含设备名：权重+50
@@ -4232,15 +4226,13 @@ workflow_step15_generate_config() {
             
             # 去除后缀匹配
             local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
-            local dev_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
-            if [ "$input_no_suffix" = "$dev_no_suffix" ]; then
+            local device_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+            if [ "$input_no_suffix" = "$device_no_suffix" ]; then
                 weight=$((weight + 35))
             fi
             
-            # 匹配rax3000m相关 - 优先匹配nand版本
-            if [[ "$lower_input" == *"rax3000m-nand"* ]] && [[ "$lower_device" == *"rax3000m-nand"* ]]; then
-                weight=$((weight + 80))
-            elif [[ "$lower_input" == *"rax3000m"* ]] && [[ "$lower_device" == *"rax3000m"* ]]; then
+            # 匹配rax3000m相关
+            if [[ "$lower_input" == *"rax3000m"* ]] && [[ "$lower_device" == *"rax3000m"* ]]; then
                 weight=$((weight + 30))
             fi
             
@@ -4250,11 +4242,6 @@ workflow_step15_generate_config() {
             fi
             if [[ "$lower_input" == *"emmc"* ]] && [[ "$lower_device" == *"emmc"* ]]; then
                 weight=$((weight + 20))
-            fi
-            
-            # 惩罚ubootmod变体（如果不匹配）
-            if [[ "$lower_device" == *"ubootmod"* ]] && [[ "$lower_input" != *"ubootmod"* ]]; then
-                weight=$((weight - 50))
             fi
             
             # 部分单词匹配
@@ -4285,7 +4272,7 @@ workflow_step15_generate_config() {
     
     # 遍历所有mk文件查找匹配
     for mkfile in "${mk_files[@]}"; do
-        # 先尝试精确匹配原始设备名
+        # 先尝试精确匹配
         if grep -q "define Device.*$DEVICE" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
             mk_device_name=$(grep -m1 "define Device.*$DEVICE" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
@@ -4366,9 +4353,9 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 使用原始设备名，不做转换
-    local correct_device="$DEVICE"
-    log "🔧 使用原始设备名: $correct_device"
+    # 使用搜索到的正确设备名（像旧版本一样）
+    local correct_device="$mk_device_name"
+    log "🔧 使用搜索到的正确设备名: $correct_device (原输入: $DEVICE)"
     
     # 更新环境变量
     export DEVICE="$correct_device"
