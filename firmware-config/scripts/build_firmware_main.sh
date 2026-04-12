@@ -1206,6 +1206,275 @@ EOF
     
     log "🔧 强制配置生成固件..."
     
+    # ============================================
+    # 针对 immortalwrt-mt798x 源码下 ac42u (ipq40xx) 设备的特殊配置
+    # 解决刷机后无法启动、直接进入 uboot 的问题
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
+        log "🔧 [MT798x ac42u] 应用 ipq40xx 平台完整启动配置..."
+        
+        # 禁用可能导致崩溃的功能
+        cat >> .config << 'EOF'
+# 禁用可能导致内核崩溃的功能
+# CONFIG_KALLSYMS is not set
+# CONFIG_DEBUG_KERNEL is not set
+# CONFIG_DEBUG_INFO is not set
+# CONFIG_SLUB_DEBUG is not set
+# CONFIG_KPROBES is not set
+# CONFIG_FTRACE is not set
+# CONFIG_STACKTRACE is not set
+# CONFIG_DEBUG_LL is not set
+# CONFIG_ARM_UNWIND is not set
+# CONFIG_DEBUG_USER is not set
+# CONFIG_DEBUG_LL_UART_NONE is not set
+# CONFIG_DEBUG_ICEDCC is not set
+# CONFIG_DEBUG_SEMIHOSTING is not set
+# CONFIG_DEBUG_LL_INCLUDE is not set
+EOF
+        
+        # 强制启用必需的内核配置
+        cat >> .config << 'EOF'
+# 内核启动必需配置
+CONFIG_CMDLINE="console=ttyMSM0,115200n8"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+CONFIG_USE_OF=y
+CONFIG_ARCH_QCOM=y
+CONFIG_ARCH_IPQ40XX=y
+CONFIG_ARM=y
+CONFIG_ARM_CPUIDLE=y
+CONFIG_ARM_ARCH_TIMER=y
+CONFIG_ARM_GIC=y
+
+# CPU 支持
+CONFIG_CPU_V7=y
+CONFIG_CPU_32v7=y
+CONFIG_CPU_ABRT_EV7=y
+CONFIG_CPU_PABRT_V7=y
+CONFIG_CPU_CACHE_V7=y
+CONFIG_CPU_CACHE_VIPT=y
+CONFIG_CPU_CP15=y
+CONFIG_CPU_CP15_MMU=y
+CONFIG_CPU_USE_DOMAINS=y
+CONFIG_CPU_V7M_NUM_IRQ=240
+
+# MTD 和文件系统支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPI_NOR=y
+CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y
+CONFIG_MTD_UBI=y
+CONFIG_MTD_UBI_BLOCK=y
+CONFIG_MTD_UBI_FASTMAP=y
+CONFIG_MTD_UBI_GLUEBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZLIB=y
+CONFIG_SQUASHFS_FILE_DIRECT=y
+CONFIG_SQUASHFS_DECOMP_SINGLE=y
+CONFIG_SQUASHFS_EMBEDDED=y
+CONFIG_SQUASHFS_FRAGMENT_CACHE_SIZE=3
+
+# 内存管理
+CONFIG_CMA=y
+CONFIG_DMA_CMA=y
+CONFIG_CMA_SIZE_MBYTES=16
+
+# 网络驱动
+CONFIG_NET=y
+CONFIG_NET_VENDOR_QUALCOMM=y
+CONFIG_QCA7000_SPI=y
+CONFIG_QCOM_EMAC=y
+
+# WiFi 驱动 - 使用 CT 版本
+CONFIG_ATH_COMMON=y
+CONFIG_ATH10K=y
+CONFIG_ATH10K_PCI=y
+CONFIG_ATH10K_DEBUG=y
+CONFIG_ATH10K_DEBUGFS=y
+
+# USB 支持
+CONFIG_USB=y
+CONFIG_USB_SUPPORT=y
+CONFIG_USB_COMMON=y
+CONFIG_USB_ARCH_HAS_HCD=y
+CONFIG_USB_DWC3=y
+CONFIG_USB_DWC3_QCOM=y
+CONFIG_USB_DWC3_OF_SIMPLE=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_XHCI_PLATFORM=y
+CONFIG_USB_STORAGE=y
+CONFIG_USB_UAS=y
+
+# GPIO 和 LED
+CONFIG_GPIOLIB=y
+CONFIG_GPIO_SYSFS=y
+CONFIG_LEDS_GPIO=y
+CONFIG_NEW_LEDS=y
+
+# 看门狗
+CONFIG_WATCHDOG=y
+CONFIG_QCOM_WDT=y
+
+# 硬件监控
+CONFIG_HWMON=y
+CONFIG_SENSORS_TMP103=y
+
+# 时钟
+CONFIG_COMMON_CLK=y
+CONFIG_COMMON_CLK_QCOM=y
+CONFIG_IPQ_GCC_4019=y
+
+# 复位控制器
+CONFIG_RESET_CONTROLLER=y
+
+# 固件加载
+CONFIG_FW_LOADER=y
+CONFIG_EXTRA_FIRMWARE=""
+EOF
+        
+        # 添加必要的软件包
+        cat >> .config << 'EOF'
+CONFIG_PACKAGE_kmod-ath10k-ct=y
+CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y
+CONFIG_PACKAGE_ath10k-firmware-qca9984=y
+CONFIG_PACKAGE_ath10k-firmware-qca9984-ct=y
+CONFIG_PACKAGE_kmod-usb-core=y
+CONFIG_PACKAGE_kmod-usb-common=y
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb3=y
+CONFIG_PACKAGE_kmod-usb-dwc3=y
+CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y
+CONFIG_PACKAGE_kmod-usb-xhci-hcd=y
+CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-usb-storage-uas=y
+CONFIG_PACKAGE_kmod-mtd-rw=y
+CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+CONFIG_PACKAGE_kmod-leds-gpio=y
+CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
+CONFIG_PACKAGE_kmod-hwmon-core=y
+CONFIG_PACKAGE_kmod-hwmon-tmp103=y
+CONFIG_PACKAGE_kmod-scsi-core=y
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_kmod-fs-ext4=y
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_kmod-nls-utf8=y
+EOF
+        
+        # 禁用可能导致冲突的 FIT 镜像格式
+        echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
+        
+        # 确保使用 squashfs 格式
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=32" >> .config
+        
+        log "  ✅ 已应用 ac42u (ipq40xx) 完整启动配置"
+    fi
+    
+    # ============================================
+    # 针对 immortalwrt-mt798x 源码下 cmcc_rax3000m (mediatek) 设备的特殊配置
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "cmcc_rax3000m" || "$DEVICE" == "cmcc_rax3000m-nand" ]]; then
+        log "🔧 [MT798x rax3000m] 应用 mediatek 平台完整启动配置..."
+        
+        # 禁用可能导致崩溃的功能
+        cat >> .config << 'EOF'
+# 禁用可能导致内核崩溃的功能
+# CONFIG_KALLSYMS is not set
+# CONFIG_DEBUG_KERNEL is not set
+# CONFIG_DEBUG_INFO is not set
+# CONFIG_SLUB_DEBUG is not set
+# CONFIG_KPROBES is not set
+# CONFIG_FTRACE is not set
+# CONFIG_STACKTRACE is not set
+EOF
+        
+        # 强制启用必需的内核配置
+        cat >> .config << 'EOF'
+# 内核启动必需配置
+CONFIG_CMDLINE="console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+CONFIG_USE_OF=y
+CONFIG_ARCH_MEDIATEK=y
+CONFIG_MACH_MT7981=y
+CONFIG_ARM64=y
+CONFIG_ARM64_VA_BITS=39
+CONFIG_ARM64_PAGE_SHIFT=12
+
+# MTD 和文件系统支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPI_NAND=y
+CONFIG_MTD_UBI=y
+CONFIG_MTD_UBI_BLOCK=y
+CONFIG_MTD_UBI_FASTMAP=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZLIB=y
+
+# 网络驱动
+CONFIG_NET_VENDOR_MEDIATEK=y
+CONFIG_NET_MEDIATEK_SOC=y
+
+# WiFi 驱动
+CONFIG_MT76=y
+CONFIG_MT7915E=y
+
+# USB 支持
+CONFIG_USB=y
+CONFIG_USB_SUPPORT=y
+CONFIG_USB_COMMON=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_XHCI_MTK=y
+CONFIG_USB_STORAGE=y
+
+# GPIO 和 LED
+CONFIG_GPIOLIB=y
+CONFIG_GPIO_SYSFS=y
+CONFIG_LEDS_GPIO=y
+
+# 看门狗
+CONFIG_WATCHDOG=y
+CONFIG_MTK_WDT=y
+
+# 时钟
+CONFIG_COMMON_CLK=y
+CONFIG_COMMON_CLK_MEDIATEK=y
+EOF
+        
+        # 添加必要的软件包
+        cat >> .config << 'EOF'
+CONFIG_PACKAGE_kmod-mt7915e=y
+CONFIG_PACKAGE_kmod-mt7981-firmware=y
+CONFIG_PACKAGE_kmod-usb-core=y
+CONFIG_PACKAGE_kmod-usb-common=y
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb3=y
+CONFIG_PACKAGE_kmod-usb-xhci-mtk=y
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-mtd-rw=y
+CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+CONFIG_PACKAGE_kmod-leds-gpio=y
+CONFIG_PACKAGE_kmod-scsi-core=y
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_kmod-fs-ext4=y
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_kmod-nls-utf8=y
+EOF
+        
+        # 禁用 FIT 镜像格式
+        echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
+        
+        # 确保使用 squashfs 格式
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=64" >> .config
+        
+        log "  ✅ 已应用 rax3000m (mediatek) 完整启动配置"
+    fi
+    
+    # 全局 FIT 镜像禁用（所有平台）
     if grep -q "CONFIG_TARGET_IMAGES_FIT=y" .config; then
         sed -i 's/^CONFIG_TARGET_IMAGES_FIT=y/# CONFIG_TARGET_IMAGES_FIT is not set/' .config
         log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT"
@@ -1248,139 +1517,6 @@ EOF
             log "  ✅ ATH79平台配置"
             ;;
     esac
-    
-    # ============================================
-    # 针对 immortalwrt-mt798x 源码下 ac42u (ipq40xx) 设备的特殊配置
-    # 解决刷机后无法启动的问题
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
-        log "🔧 [MT798x ac42u] 添加 ipq40xx 平台启动必需的内核配置..."
-        
-        cat >> .config << 'EOF'
-# 内核启动必需配置
-CONFIG_CMDLINE="console=ttyMSM0,115200n8"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-CONFIG_USE_OF=y
-CONFIG_ARCH_QCOM=y
-CONFIG_ARCH_IPQ40XX=y
-
-# MTD 和文件系统支持
-CONFIG_MTD=y
-CONFIG_MTD_SPI_NOR=y
-CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y
-CONFIG_MTD_UBI=y
-CONFIG_UBIFS_FS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-
-# 网络驱动
-CONFIG_NET_VENDOR_QUALCOMM=y
-CONFIG_QCA7000_SPI=y
-CONFIG_QCOM_EMAC=y
-
-# WiFi 驱动
-CONFIG_ATH10K=y
-CONFIG_ATH10K_PCI=y
-CONFIG_ATH10K_DEBUG=y
-
-# USB 支持
-CONFIG_USB=y
-CONFIG_USB_DWC3=y
-CONFIG_USB_DWC3_QCOM=y
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_PLATFORM=y
-
-# GPIO 和 LED
-CONFIG_GPIOLIB=y
-CONFIG_GPIO_SYSFS=y
-CONFIG_LEDS_GPIO=y
-CONFIG_NEW_LEDS=y
-
-# 看门狗
-CONFIG_WATCHDOG=y
-CONFIG_QCOM_WDT=y
-
-# 硬件监控
-CONFIG_HWMON=y
-CONFIG_SENSORS_TMP103=y
-EOF
-        
-        # 添加必要的软件包
-        cat >> .config << 'EOF'
-CONFIG_PACKAGE_kmod-ath10k-ct=y
-CONFIG_PACKAGE_ath10k-firmware-qca9984=y
-CONFIG_PACKAGE_ath10k-firmware-qca9984-ct=y
-CONFIG_PACKAGE_kmod-usb-dwc3=y
-CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y
-CONFIG_PACKAGE_kmod-usb-xhci-hcd=y
-CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y
-CONFIG_PACKAGE_kmod-mtd-rw=y
-CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
-CONFIG_PACKAGE_kmod-leds-gpio=y
-CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
-CONFIG_PACKAGE_kmod-hwmon-core=y
-CONFIG_PACKAGE_kmod-hwmon-tmp103=y
-EOF
-        
-        log "  ✅ 已添加 ac42u (ipq40xx) 启动必需配置项"
-    fi
-    
-    # ============================================
-    # 针对 immortalwrt-mt798x 源码下 cmcc_rax3000m (mediatek) 设备的特殊配置
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "cmcc_rax3000m" || "$DEVICE" == "cmcc_rax3000m-nand" ]]; then
-        log "🔧 [MT798x rax3000m] 添加 mediatek 平台启动必需的内核配置..."
-        
-        cat >> .config << 'EOF'
-# 内核启动必需配置
-CONFIG_CMDLINE="console=ttyS0,115200n8"
-CONFIG_USE_OF=y
-CONFIG_ARCH_MEDIATEK=y
-CONFIG_MACH_MT7981=y
-
-# MTD 和文件系统支持
-CONFIG_MTD=y
-CONFIG_MTD_SPI_NAND=y
-CONFIG_MTD_UBI=y
-CONFIG_UBIFS_FS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-
-# 网络驱动
-CONFIG_NET_VENDOR_MEDIATEK=y
-CONFIG_NET_MEDIATEK_SOC=y
-
-# WiFi 驱动
-CONFIG_MT76=y
-CONFIG_MT7915E=y
-
-# USB 支持
-CONFIG_USB=y
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_MTK=y
-
-# GPIO 和 LED
-CONFIG_GPIOLIB=y
-CONFIG_GPIO_SYSFS=y
-CONFIG_LEDS_GPIO=y
-
-# 看门狗
-CONFIG_WATCHDOG=y
-CONFIG_MTK_WDT=y
-EOF
-        
-        # 添加必要的软件包
-        cat >> .config << 'EOF'
-CONFIG_PACKAGE_kmod-mt7915e=y
-CONFIG_PACKAGE_kmod-mt7981-firmware=y
-CONFIG_PACKAGE_kmod-usb-xhci-mtk=y
-CONFIG_PACKAGE_kmod-mtd-rw=y
-CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
-CONFIG_PACKAGE_kmod-leds-gpio=y
-EOF
-        
-        log "  ✅ 已添加 rax3000m (mediatek) 启动必需配置项"
-    fi
     
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
