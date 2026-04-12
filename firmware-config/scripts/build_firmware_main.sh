@@ -334,11 +334,6 @@ initialize_build_env() {
             esac
             log "✅ ImmortalWrt源码选择: $SELECTED_BRANCH"
             ;;
-        "immortalwrt-mt798x")
-            SELECTED_REPO_URL="${IMMORTALWRT_MT798X_URL:-https://github.com/hanwckf/immortalwrt-mt798x.git}"
-            SELECTED_BRANCH="${BRANCH_MT798X:-openwrt-21.02}"
-            log "✅ ImmortalWrt MT798x源码选择: 固定使用 $SELECTED_BRANCH 分支 (hanwckf维护)"
-            ;;
         *)
             log "❌ 未知的源码仓库类型: $SOURCE_REPO_TYPE"
             exit 1
@@ -767,19 +762,7 @@ EOF
     if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         log "🔧 为正常模式添加 TurboACC 支持"
         
-        # immortalwrt-mt798x 仓库使用不同的 turboacc 源
-        if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-            if [ ! -f "feeds.conf.default" ]; then
-                touch feeds.conf.default
-            fi
-            
-            if ! grep -q "turboacc" feeds.conf.default; then
-                echo "src-git turboacc https://github.com/chenmozhijin/turboacc" >> feeds.conf.default
-                log "✅ TurboACC feed 添加完成 (immortalwrt-mt798x)"
-            else
-                log "ℹ️ TurboACC feed 已存在"
-            fi
-        elif [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
+        if [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
             if [ ! -f "feeds.conf.default" ]; then
                 touch feeds.conf.default
             fi
@@ -882,26 +865,6 @@ src-git routing https://github.com/openwrt/routing.git;$branch_suffix
 src-git telephony https://github.com/openwrt/telephony.git;$branch_suffix
 EOF
             ;;
-        "immortalwrt-mt798x")
-            log "🔧 ImmortalWrt MT798x源码模式: 使用旧版 feeds (兼容 21.02)"
-            if [ "$SELECTED_BRANCH" = "openwrt-21.02" ]; then
-                cat >> feeds.conf.default << 'EOF'
-src-git packages https://github.com/immortalwrt/packages.git;openwrt-21.02
-src-git luci https://github.com/immortalwrt/luci.git;openwrt-21.02
-src-git routing https://github.com/openwrt/routing.git;openwrt-21.02
-src-git telephony https://github.com/openwrt/telephony.git;openwrt-21.02
-EOF
-                log "  ✅ 使用 21.02 兼容的 feeds 源"
-            else
-                cat >> feeds.conf.default << 'EOF'
-src-git packages https://github.com/immortalwrt/packages.git;openwrt-23.05
-src-git luci https://github.com/immortalwrt/luci.git;openwrt-23.05
-src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
-src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
-EOF
-                log "  ✅ 使用 23.05 兼容的 feeds 源"
-            fi
-            ;;
         *)
             log "⚠️ 未知源码类型，使用通用feeds配置"
             cat >> feeds.conf.default << 'EOF'
@@ -913,7 +876,7 @@ EOF
             ;;
     esac
     
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "immortalwrt-mt798x" ]; then
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
         case "$SOURCE_REPO_TYPE" in
             "immortalwrt"|"lede")
                 echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
@@ -1034,33 +997,9 @@ generate_config() {
     # 根据源码类型确定设备配置变量格式
     # ============================================
     local device_config=""
-    local platform_sub=""
     
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
-        local mk_file=""
-        for mkf in target/linux/mediatek/image/*.mk; do
-            if [ -f "$mkf" ] && grep -q "define Device.*$correct_device" "$mkf" 2>/dev/null; then
-                mk_file="$mkf"
-                break
-            fi
-        done
-        
-        if [ -n "$mk_file" ]; then
-            platform_sub=$(basename "$mk_file" .mk)
-            device_config="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${correct_device}=y"
-            log "🔧 [MT798x] 从设备定义文件提取子平台: $platform_sub"
-            log "🔧 [MT798x] mediatek平台，使用设备配置格式: $device_config"
-        else
-            device_config="CONFIG_TARGET_mediatek_mt7981_DEVICE_${correct_device}=y"
-            log "🔧 [MT798x] 未找到设备定义文件，使用默认 mt7981 格式: $device_config"
-        fi
-    elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
-        device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
-        log "🔧 [MT798x] ipq40xx平台，使用标准格式: $device_config"
-    else
-        device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
-        log "🔧 标准设备配置格式: $device_config"
-    fi
+    device_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}=y"
+    log "🔧 标准设备配置格式: $device_config"
     
     log "🔧 最终设备配置变量: $device_config"
     
@@ -1140,20 +1079,8 @@ EOF
                 append_config "$usb_generic_file"
             fi
             
-            if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-                if [ -f "$CONFIG_DIR/mediatek.config" ] && [ "$TARGET" = "mediatek" ]; then
-                    append_config "$CONFIG_DIR/mediatek.config"
-                fi
-                if [ -f "$CONFIG_DIR/ipq40xx.config" ] && [ "$TARGET" = "ipq40xx" ]; then
-                    append_config "$CONFIG_DIR/ipq40xx.config"
-                fi
-                if [ -f "$CONFIG_DIR/openwrt-21.02.config" ]; then
-                    append_config "$CONFIG_DIR/openwrt-21.02.config"
-                fi
-            else
-                append_config "$CONFIG_DIR/$TARGET.config"
-                append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-            fi
+            append_config "$CONFIG_DIR/$TARGET.config"
+            append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
             
             append_config "$CONFIG_DIR/$CONFIG_NORMAL"
         fi
@@ -1168,14 +1095,6 @@ EOF
             [ -z "$pkg" ] && continue
             echo "CONFIG_PACKAGE_$pkg=y" >> .config
         done
-    fi
-    
-    # ============================================
-    # 对于 MT798x 源码，禁用有问题的 swconfig
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        log "🔧 [MT798x] 禁用有问题的 swconfig..."
-        echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
     fi
     
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
@@ -1206,275 +1125,6 @@ EOF
     
     log "🔧 强制配置生成固件..."
     
-    # ============================================
-    # 针对 immortalwrt-mt798x 源码下 ac42u (ipq40xx) 设备的特殊配置
-    # 解决刷机后无法启动、直接进入 uboot 的问题
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
-        log "🔧 [MT798x ac42u] 应用 ipq40xx 平台完整启动配置..."
-        
-        # 禁用可能导致崩溃的功能
-        cat >> .config << 'EOF'
-# 禁用可能导致内核崩溃的功能
-# CONFIG_KALLSYMS is not set
-# CONFIG_DEBUG_KERNEL is not set
-# CONFIG_DEBUG_INFO is not set
-# CONFIG_SLUB_DEBUG is not set
-# CONFIG_KPROBES is not set
-# CONFIG_FTRACE is not set
-# CONFIG_STACKTRACE is not set
-# CONFIG_DEBUG_LL is not set
-# CONFIG_ARM_UNWIND is not set
-# CONFIG_DEBUG_USER is not set
-# CONFIG_DEBUG_LL_UART_NONE is not set
-# CONFIG_DEBUG_ICEDCC is not set
-# CONFIG_DEBUG_SEMIHOSTING is not set
-# CONFIG_DEBUG_LL_INCLUDE is not set
-EOF
-        
-        # 强制启用必需的内核配置
-        cat >> .config << 'EOF'
-# 内核启动必需配置
-CONFIG_CMDLINE="console=ttyMSM0,115200n8"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-CONFIG_USE_OF=y
-CONFIG_ARCH_QCOM=y
-CONFIG_ARCH_IPQ40XX=y
-CONFIG_ARM=y
-CONFIG_ARM_CPUIDLE=y
-CONFIG_ARM_ARCH_TIMER=y
-CONFIG_ARM_GIC=y
-
-# CPU 支持
-CONFIG_CPU_V7=y
-CONFIG_CPU_32v7=y
-CONFIG_CPU_ABRT_EV7=y
-CONFIG_CPU_PABRT_V7=y
-CONFIG_CPU_CACHE_V7=y
-CONFIG_CPU_CACHE_VIPT=y
-CONFIG_CPU_CP15=y
-CONFIG_CPU_CP15_MMU=y
-CONFIG_CPU_USE_DOMAINS=y
-CONFIG_CPU_V7M_NUM_IRQ=240
-
-# MTD 和文件系统支持
-CONFIG_MTD=y
-CONFIG_MTD_BLOCK=y
-CONFIG_MTD_SPI_NOR=y
-CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y
-CONFIG_MTD_UBI=y
-CONFIG_MTD_UBI_BLOCK=y
-CONFIG_MTD_UBI_FASTMAP=y
-CONFIG_MTD_UBI_GLUEBI=y
-CONFIG_UBIFS_FS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-CONFIG_SQUASHFS_ZLIB=y
-CONFIG_SQUASHFS_FILE_DIRECT=y
-CONFIG_SQUASHFS_DECOMP_SINGLE=y
-CONFIG_SQUASHFS_EMBEDDED=y
-CONFIG_SQUASHFS_FRAGMENT_CACHE_SIZE=3
-
-# 内存管理
-CONFIG_CMA=y
-CONFIG_DMA_CMA=y
-CONFIG_CMA_SIZE_MBYTES=16
-
-# 网络驱动
-CONFIG_NET=y
-CONFIG_NET_VENDOR_QUALCOMM=y
-CONFIG_QCA7000_SPI=y
-CONFIG_QCOM_EMAC=y
-
-# WiFi 驱动 - 使用 CT 版本
-CONFIG_ATH_COMMON=y
-CONFIG_ATH10K=y
-CONFIG_ATH10K_PCI=y
-CONFIG_ATH10K_DEBUG=y
-CONFIG_ATH10K_DEBUGFS=y
-
-# USB 支持
-CONFIG_USB=y
-CONFIG_USB_SUPPORT=y
-CONFIG_USB_COMMON=y
-CONFIG_USB_ARCH_HAS_HCD=y
-CONFIG_USB_DWC3=y
-CONFIG_USB_DWC3_QCOM=y
-CONFIG_USB_DWC3_OF_SIMPLE=y
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_PLATFORM=y
-CONFIG_USB_STORAGE=y
-CONFIG_USB_UAS=y
-
-# GPIO 和 LED
-CONFIG_GPIOLIB=y
-CONFIG_GPIO_SYSFS=y
-CONFIG_LEDS_GPIO=y
-CONFIG_NEW_LEDS=y
-
-# 看门狗
-CONFIG_WATCHDOG=y
-CONFIG_QCOM_WDT=y
-
-# 硬件监控
-CONFIG_HWMON=y
-CONFIG_SENSORS_TMP103=y
-
-# 时钟
-CONFIG_COMMON_CLK=y
-CONFIG_COMMON_CLK_QCOM=y
-CONFIG_IPQ_GCC_4019=y
-
-# 复位控制器
-CONFIG_RESET_CONTROLLER=y
-
-# 固件加载
-CONFIG_FW_LOADER=y
-CONFIG_EXTRA_FIRMWARE=""
-EOF
-        
-        # 添加必要的软件包
-        cat >> .config << 'EOF'
-CONFIG_PACKAGE_kmod-ath10k-ct=y
-CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y
-CONFIG_PACKAGE_ath10k-firmware-qca9984=y
-CONFIG_PACKAGE_ath10k-firmware-qca9984-ct=y
-CONFIG_PACKAGE_kmod-usb-core=y
-CONFIG_PACKAGE_kmod-usb-common=y
-CONFIG_PACKAGE_kmod-usb2=y
-CONFIG_PACKAGE_kmod-usb3=y
-CONFIG_PACKAGE_kmod-usb-dwc3=y
-CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y
-CONFIG_PACKAGE_kmod-usb-xhci-hcd=y
-CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y
-CONFIG_PACKAGE_kmod-usb-storage=y
-CONFIG_PACKAGE_kmod-usb-storage-uas=y
-CONFIG_PACKAGE_kmod-mtd-rw=y
-CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
-CONFIG_PACKAGE_kmod-leds-gpio=y
-CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
-CONFIG_PACKAGE_kmod-hwmon-core=y
-CONFIG_PACKAGE_kmod-hwmon-tmp103=y
-CONFIG_PACKAGE_kmod-scsi-core=y
-CONFIG_PACKAGE_block-mount=y
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-nls-utf8=y
-EOF
-        
-        # 禁用可能导致冲突的 FIT 镜像格式
-        echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
-        
-        # 确保使用 squashfs 格式
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=32" >> .config
-        
-        log "  ✅ 已应用 ac42u (ipq40xx) 完整启动配置"
-    fi
-    
-    # ============================================
-    # 针对 immortalwrt-mt798x 源码下 cmcc_rax3000m (mediatek) 设备的特殊配置
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "cmcc_rax3000m" || "$DEVICE" == "cmcc_rax3000m-nand" ]]; then
-        log "🔧 [MT798x rax3000m] 应用 mediatek 平台完整启动配置..."
-        
-        # 禁用可能导致崩溃的功能
-        cat >> .config << 'EOF'
-# 禁用可能导致内核崩溃的功能
-# CONFIG_KALLSYMS is not set
-# CONFIG_DEBUG_KERNEL is not set
-# CONFIG_DEBUG_INFO is not set
-# CONFIG_SLUB_DEBUG is not set
-# CONFIG_KPROBES is not set
-# CONFIG_FTRACE is not set
-# CONFIG_STACKTRACE is not set
-EOF
-        
-        # 强制启用必需的内核配置
-        cat >> .config << 'EOF'
-# 内核启动必需配置
-CONFIG_CMDLINE="console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-CONFIG_USE_OF=y
-CONFIG_ARCH_MEDIATEK=y
-CONFIG_MACH_MT7981=y
-CONFIG_ARM64=y
-CONFIG_ARM64_VA_BITS=39
-CONFIG_ARM64_PAGE_SHIFT=12
-
-# MTD 和文件系统支持
-CONFIG_MTD=y
-CONFIG_MTD_BLOCK=y
-CONFIG_MTD_SPI_NAND=y
-CONFIG_MTD_UBI=y
-CONFIG_MTD_UBI_BLOCK=y
-CONFIG_MTD_UBI_FASTMAP=y
-CONFIG_UBIFS_FS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-CONFIG_SQUASHFS_ZLIB=y
-
-# 网络驱动
-CONFIG_NET_VENDOR_MEDIATEK=y
-CONFIG_NET_MEDIATEK_SOC=y
-
-# WiFi 驱动
-CONFIG_MT76=y
-CONFIG_MT7915E=y
-
-# USB 支持
-CONFIG_USB=y
-CONFIG_USB_SUPPORT=y
-CONFIG_USB_COMMON=y
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_MTK=y
-CONFIG_USB_STORAGE=y
-
-# GPIO 和 LED
-CONFIG_GPIOLIB=y
-CONFIG_GPIO_SYSFS=y
-CONFIG_LEDS_GPIO=y
-
-# 看门狗
-CONFIG_WATCHDOG=y
-CONFIG_MTK_WDT=y
-
-# 时钟
-CONFIG_COMMON_CLK=y
-CONFIG_COMMON_CLK_MEDIATEK=y
-EOF
-        
-        # 添加必要的软件包
-        cat >> .config << 'EOF'
-CONFIG_PACKAGE_kmod-mt7915e=y
-CONFIG_PACKAGE_kmod-mt7981-firmware=y
-CONFIG_PACKAGE_kmod-usb-core=y
-CONFIG_PACKAGE_kmod-usb-common=y
-CONFIG_PACKAGE_kmod-usb2=y
-CONFIG_PACKAGE_kmod-usb3=y
-CONFIG_PACKAGE_kmod-usb-xhci-mtk=y
-CONFIG_PACKAGE_kmod-usb-storage=y
-CONFIG_PACKAGE_kmod-mtd-rw=y
-CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
-CONFIG_PACKAGE_kmod-leds-gpio=y
-CONFIG_PACKAGE_kmod-scsi-core=y
-CONFIG_PACKAGE_block-mount=y
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-nls-utf8=y
-EOF
-        
-        # 禁用 FIT 镜像格式
-        echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
-        
-        # 确保使用 squashfs 格式
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=64" >> .config
-        
-        log "  ✅ 已应用 rax3000m (mediatek) 完整启动配置"
-    fi
-    
-    # 全局 FIT 镜像禁用（所有平台）
     if grep -q "CONFIG_TARGET_IMAGES_FIT=y" .config; then
         sed -i 's/^CONFIG_TARGET_IMAGES_FIT=y/# CONFIG_TARGET_IMAGES_FIT is not set/' .config
         log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT"
@@ -1821,15 +1471,7 @@ EOF
     local found_config=""
     local search_pattern=""
     
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
-        if [ -n "$platform_sub" ]; then
-            search_pattern="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${correct_device}"
-        else
-            search_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${correct_device}"
-        fi
-    else
-        search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}"
-    fi
+    search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${correct_device}"
     
     found_config=$(grep -E "^${search_pattern}=y" .config 2>/dev/null | head -1)
     
@@ -4433,34 +4075,6 @@ workflow_step15_generate_config() {
         log "⚠️ DEVICE为空，使用参数: $DEVICE"
     fi
     
-    # ============================================
-    # 设备名转换（仅针对 immortalwrt-mt798x 源码）
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        local converted_device="$DEVICE"
-        case "$DEVICE" in
-            cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
-                converted_device="cmcc_rax3000m"
-                log "🔧 [MT798x] 设备名转换: $DEVICE -> $converted_device"
-                ;;
-            ac42u|rt-ac42u)
-                converted_device="asus_rt-ac42u"
-                log "🔧 [MT798x] 设备名转换: $DEVICE -> $converted_device"
-                ;;
-        esac
-        
-        if [ "$converted_device" != "$DEVICE" ]; then
-            DEVICE="$converted_device"
-            export DEVICE
-            if [ -f "$BUILD_DIR/build_env.sh" ]; then
-                sed -i "s/^export DEVICE=.*/export DEVICE=\"$converted_device\"/" "$BUILD_DIR/build_env.sh" 2>/dev/null || true
-            fi
-            if [ -n "$GITHUB_ENV" ]; then
-                echo "DEVICE=$converted_device" >> $GITHUB_ENV
-            fi
-        fi
-    fi
-    
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     log ""
@@ -4941,56 +4555,14 @@ workflow_step23_pre_build_check() {
     fi
     
     # ============================================
-    # 根据源码类型和设备定义文件确定设备配置格式
+    # 根据源码类型确定设备配置格式
     # ============================================
     local expected_config=""
     local search_pattern=""
-    local platform_sub=""
     
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
-        # 从 mk 文件中提取正确的子平台名称
-        local mk_file=""
-        for mkf in target/linux/mediatek/image/*.mk; do
-            if [ -f "$mkf" ] && grep -q "define Device.*$DEVICE" "$mkf" 2>/dev/null; then
-                mk_file="$mkf"
-                break
-            fi
-        done
-        
-        if [ -n "$mk_file" ]; then
-            platform_sub=$(basename "$mk_file" .mk)
-            expected_config="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${DEVICE}=y"
-            search_pattern="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${DEVICE}"
-            log "🔧 [MT798x] 从设备定义文件提取子平台: $platform_sub"
-            log "🔧 [MT798x] 期望配置: $expected_config"
-        else
-            expected_config="CONFIG_TARGET_mediatek_mt7981_DEVICE_${DEVICE}=y"
-            search_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${DEVICE}"
-            log "🔧 [MT798x] 未找到设备定义文件，使用默认 mt7981 格式"
-        fi
-    elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
-        expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-        search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
-        log "🔧 [MT798x] ipq40xx平台，期望配置: $expected_config"
-    else
-        expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
-        search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
-        log "🔧 标准格式，期望配置: $expected_config"
-    fi
-    
-    # ============================================
-    # 针对 ac42u 在 immortalwrt-mt798x 下增加额外设备名兼容
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
-        if [ "$TARGET" = "ipq40xx" ]; then
-            local alt_pattern="CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u=y"
-            if grep -q "^${alt_pattern}$" .config 2>/dev/null; then
-                expected_config="$alt_pattern"
-                search_pattern="CONFIG_TARGET_ipq40xx_generic_DEVICE_asus_rt-ac42u"
-                log "🔧 [MT798x ac42u ipq40xx] 检测到实际生效配置: $expected_config"
-            fi
-        fi
-    fi
+    expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+    search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
+    log "🔧 标准格式，期望配置: $expected_config"
     
     # 检查设备配置是否存在
     local config_exists=0
@@ -5062,17 +4634,7 @@ workflow_step23_pre_build_check() {
         local device_for_check="$DEVICE"
         local check_pattern=""
         
-        if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "mediatek" ]; then
-            if [ -n "$platform_sub" ]; then
-                check_pattern="CONFIG_TARGET_mediatek_${platform_sub}_DEVICE_${device_for_check}"
-            else
-                check_pattern="CONFIG_TARGET_mediatek_mt7981_DEVICE_${device_for_check}"
-            fi
-        elif [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [ "$TARGET" = "ipq40xx" ]; then
-            check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
-        else
-            check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
-        fi
+        check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
         
         if grep -q "^${check_pattern}=y" .config; then
             echo "   ✅ 设备配置正确: $(grep "^${check_pattern}=y" .config | head -1)"
@@ -5084,27 +4646,6 @@ workflow_step23_pre_build_check() {
         else
             echo "   ❌ 设备配置可能不正确，未找到: ${check_pattern}"
             error_count=$((error_count + 1))
-        fi
-        
-        # ============================================
-        # 针对 immortalwrt-mt798x 下 ac42u 设备额外检查关键配置
-        # ============================================
-        if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
-            echo ""
-            echo "   🔧 [MT798x ac42u] 检查关键配置项:"
-            local key_configs=(
-                "CONFIG_TARGET_ROOTFS_SQUASHFS"
-                "CONFIG_MTD_SPI_NOR"
-                "CONFIG_PACKAGE_kmod-ath10k-ct"
-            )
-            for cfg in "${key_configs[@]}"; do
-                if grep -q "^${cfg}=y" .config; then
-                    echo "      ✅ $cfg: 已启用"
-                else
-                    echo "      ⚠️ $cfg: 未启用，尝试添加..."
-                    echo "${cfg}=y" >> .config
-                fi
-            done
         fi
     else
         echo "   ❌ .config 文件不存在"
@@ -5270,476 +4811,6 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # ============================================
-    # 针对 immortalwrt-mt798x 源码下 ac42u 的深度修复
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
-        log "🔧 [MT798x ac42u] 应用深度修复..."
-        
-        # 1. 创建设备树文件目录
-        local dts_dir="target/linux/ipq40xx/files/arch/arm/boot/dts"
-        mkdir -p "$dts_dir" 2>/dev/null || true
-        
-        # 2. 创建完整的 ac42u 设备树文件
-        local dts_file="$dts_dir/qcom-ipq4019-asus_rt-ac42u.dts"
-        log "  📝 创建 ac42u 设备树文件..."
-        cat > "$dts_file" << 'DTS_EOF'
-// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
-
-#include "qcom-ipq4019.dtsi"
-#include <dt-bindings/gpio/gpio.h>
-#include <dt-bindings/input/input.h>
-#include <dt-bindings/soc/qcom,tcsr.h>
-
-/ {
-	model = "ASUS RT-AC42U";
-	compatible = "asus,rt-ac42u", "qcom,ipq4019";
-
-	aliases {
-		led-boot = &led_power;
-		led-failsafe = &led_power;
-		led-running = &led_power;
-		led-upgrade = &led_power;
-		label-mac-device = &gmac0;
-	};
-
-	chosen {
-		bootargs = "console=ttyMSM0,115200n8 root=/dev/mtdblock10 rootfstype=squashfs rootwait";
-		bootargs-append = " root=/dev/mtdblock10 rootfstype=squashfs rootwait";
-	};
-
-	soc {
-		rng@22000 {
-			status = "okay";
-		};
-
-		pinctrl@1000000 {
-			serial_pins: serial_pinmux {
-				mux {
-					pins = "gpio16", "gpio17";
-					function = "blsp_uart0";
-					bias-disable;
-				};
-			};
-
-			spi_0_pins: spi_0_pinmux {
-				mux {
-					pins = "gpio12", "gpio13", "gpio14", "gpio15";
-					function = "blsp0_spi";
-					bias-disable;
-				};
-			};
-
-			nand_pins: nand_pins {
-				pullups {
-					pins = "gpio53", "gpio58", "gpio59";
-					function = "qpic";
-					bias-pull-up;
-				};
-
-				pulldowns {
-					pins = "gpio52", "gpio54", "gpio55", "gpio56",
-					       "gpio57", "gpio60", "gpio61", "gpio62",
-					       "gpio63", "gpio64", "gpio65", "gpio66",
-					       "gpio67", "gpio68", "gpio69";
-					function = "qpic";
-					bias-pull-down;
-				};
-			};
-
-			led_pins: led_pinmux {
-				mux {
-					pins = "gpio3", "gpio4";
-					function = "gpio";
-					bias-disable;
-				};
-			};
-
-			button_pins: button_pinmux {
-				mux {
-					pins = "gpio0", "gpio1";
-					function = "gpio";
-					bias-disable;
-				};
-			};
-
-			mdio_pins: mdio_pinmux {
-				mux_1 {
-					pins = "gpio6";
-					function = "mdio";
-					bias-pull-up;
-				};
-				mux_2 {
-					pins = "gpio7";
-					function = "mdc";
-					bias-pull-up;
-				};
-			};
-
-			usb_power_pin: usb_power_pin {
-				mux {
-					pins = "gpio2";
-					function = "gpio";
-					bias-disable;
-					output-high;
-				};
-			};
-		};
-
-		serial@78af000 {
-			pinctrl-0 = <&serial_pins>;
-			pinctrl-names = "default";
-			status = "okay";
-		};
-
-		spi@78b5000 {
-			pinctrl-0 = <&spi_0_pins>;
-			pinctrl-names = "default";
-			status = "okay";
-			cs-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>;
-
-			flash@0 {
-				compatible = "jedec,spi-nor";
-				reg = <0>;
-				spi-max-frequency = <24000000>;
-				
-				partitions {
-					compatible = "fixed-partitions";
-					#address-cells = <1>;
-					#size-cells = <1>;
-
-					partition@0 {
-						label = "SBL1";
-						reg = <0x00000000 0x00040000>;
-						read-only;
-					};
-					partition@40000 {
-						label = "MIBIB";
-						reg = <0x00040000 0x00020000>;
-						read-only;
-					};
-					partition@60000 {
-						label = "QSEE";
-						reg = <0x00060000 0x00060000>;
-						read-only;
-					};
-					partition@c0000 {
-						label = "CDT";
-						reg = <0x000c0000 0x00010000>;
-						read-only;
-					};
-					partition@d0000 {
-						label = "DDRPARAMS";
-						reg = <0x000d0000 0x00010000>;
-						read-only;
-					};
-					partition@e0000 {
-						label = "APPSBLENV";
-						reg = <0x000e0000 0x00010000>;
-					};
-					partition@f0000 {
-						label = "APPSBL";
-						reg = <0x000f0000 0x00080000>;
-						read-only;
-					};
-					partition@170000 {
-						label = "ART";
-						reg = <0x00170000 0x00010000>;
-						read-only;
-					};
-					partition@180000 {
-						label = "kernel";
-						reg = <0x00180000 0x00300000>;
-					};
-					partition@480000 {
-						label = "rootfs";
-						reg = <0x00480000 0x00200000>;
-					};
-					partition@680000 {
-						label = "rootfs_data";
-						reg = <0x00680000 0x01980000>;
-					};
-				};
-			};
-		};
-
-		qpic-nand@79b0000 {
-			pinctrl-0 = <&nand_pins>;
-			pinctrl-names = "default";
-			status = "disabled";
-		};
-
-		usb2@60f8800 {
-			status = "okay";
-		};
-
-		usb3@8af8800 {
-			status = "okay";
-		};
-
-		crypto@8e3a000 {
-			status = "okay";
-		};
-
-		watchdog@b017000 {
-			status = "okay";
-		};
-
-		ess-switch@c000000 {
-			status = "okay";
-		};
-
-		edma@c080000 {
-			status = "okay";
-		};
-	};
-
-	gpio-keys {
-		compatible = "gpio-keys";
-
-		reset {
-			label = "reset";
-			gpios = <&tlmm 0 GPIO_ACTIVE_LOW>;
-			linux,code = <KEY_RESTART>;
-		};
-
-		wps {
-			label = "wps";
-			gpios = <&tlmm 1 GPIO_ACTIVE_LOW>;
-			linux,code = <KEY_WPS_BUTTON>;
-		};
-	};
-
-	gpio-leds {
-		compatible = "gpio-leds";
-		pinctrl-0 = <&led_pins>;
-		pinctrl-names = "default";
-
-		led_power: power {
-			label = "green:power";
-			gpios = <&tlmm 3 GPIO_ACTIVE_LOW>;
-			default-state = "on";
-		};
-
-		usb {
-			label = "green:usb";
-			gpios = <&tlmm 4 GPIO_ACTIVE_LOW>;
-			trigger-sources = <&usb2>, <&usb3>;
-			linux,default-trigger = "usbport";
-		};
-	};
-
-	usb_power: usb_power {
-		compatible = "regulator-fixed";
-		regulator-name = "usb-power";
-		regulator-min-microvolt = <5000000>;
-		regulator-max-microvolt = <5000000>;
-		gpio = <&tlmm 2 GPIO_ACTIVE_HIGH>;
-		enable-active-high;
-		regulator-boot-on;
-		regulator-always-on;
-	};
-};
-
-&gmac0 {
-	status = "okay";
-	qcom,no-mac-address-in-nvmem;
-	nvmem-cell-names = "mac-address";
-	nvmem-cells = <&macaddr_art_0>;
-};
-
-&gmac1 {
-	status = "okay";
-	qcom,no-mac-address-in-nvmem;
-	nvmem-cell-names = "mac-address";
-	nvmem-cells = <&macaddr_art_6>;
-};
-
-&wifi0 {
-	status = "okay";
-	qcom,ath10k-calibration-variant = "ASUS-RT-AC42U";
-	qcom,ath10k-pre-calibration-data-size = <2116>;
-};
-
-&wifi1 {
-	status = "okay";
-	qcom,ath10k-calibration-variant = "ASUS-RT-AC42U";
-	qcom,ath10k-pre-calibration-data-size = <2116>;
-};
-
-&art {
-	compatible = "nvmem-cells";
-	#address-cells = <1>;
-	#size-cells = <1>;
-
-	macaddr_art_0: macaddr@0 {
-		reg = <0x0 0x6>;
-	};
-
-	macaddr_art_6: macaddr@6 {
-		reg = <0x6 0x6>;
-	};
-};
-DTS_EOF
-        log "  ✅ 设备树文件已创建"
-        
-        # 3. 修复内核配置文件 - 添加启动必需的内核配置
-        log "  📝 添加内核启动必需配置..."
-        cat >> .config << 'KERNEL_CFG_EOF'
-# 内核启动必需配置
-CONFIG_CMDLINE="console=ttyMSM0,115200n8 root=/dev/mtdblock10 rootfstype=squashfs rootwait"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-CONFIG_CMDLINE_EXTEND=y
-CONFIG_USE_OF=y
-CONFIG_ARCH_QCOM=y
-CONFIG_ARCH_IPQ40XX=y
-CONFIG_ARM=y
-CONFIG_ARM_CPUIDLE=y
-CONFIG_ARM_ARCH_TIMER=y
-CONFIG_ARM_GIC=y
-
-# CPU 支持
-CONFIG_CPU_V7=y
-CONFIG_CPU_32v7=y
-CONFIG_CPU_ABRT_EV7=y
-CONFIG_CPU_PABRT_V7=y
-CONFIG_CPU_CACHE_V7=y
-CONFIG_CPU_CACHE_VIPT=y
-CONFIG_CPU_CP15=y
-CONFIG_CPU_CP15_MMU=y
-
-# MTD 和文件系统
-CONFIG_MTD=y
-CONFIG_MTD_BLOCK=y
-CONFIG_MTD_SPI_NOR=y
-CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y
-CONFIG_MTD_CMDLINE_PARTS=y
-CONFIG_MTD_OF_PARTS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-CONFIG_SQUASHFS_ZLIB=y
-CONFIG_SQUASHFS_FILE_DIRECT=y
-CONFIG_SQUASHFS_DECOMP_SINGLE=y
-CONFIG_SQUASHFS_EMBEDDED=y
-
-# 网络驱动
-CONFIG_NET=y
-CONFIG_NET_VENDOR_QUALCOMM=y
-CONFIG_QCA7000_SPI=y
-CONFIG_QCOM_EMAC=y
-
-# WiFi 驱动
-CONFIG_ATH_COMMON=y
-CONFIG_ATH10K=y
-CONFIG_ATH10K_PCI=y
-
-# USB 支持
-CONFIG_USB=y
-CONFIG_USB_SUPPORT=y
-CONFIG_USB_COMMON=y
-CONFIG_USB_DWC3=y
-CONFIG_USB_DWC3_QCOM=y
-CONFIG_USB_DWC3_OF_SIMPLE=y
-CONFIG_USB_XHCI_HCD=y
-CONFIG_USB_XHCI_PLATFORM=y
-CONFIG_USB_STORAGE=y
-
-# GPIO 和 LED
-CONFIG_GPIOLIB=y
-CONFIG_GPIO_SYSFS=y
-CONFIG_LEDS_GPIO=y
-CONFIG_NEW_LEDS=y
-
-# 看门狗
-CONFIG_WATCHDOG=y
-CONFIG_QCOM_WDT=y
-
-# 时钟
-CONFIG_COMMON_CLK=y
-CONFIG_COMMON_CLK_QCOM=y
-CONFIG_IPQ_GCC_4019=y
-
-# 复位控制器
-CONFIG_RESET_CONTROLLER=y
-CONFIG_RESET_QCOM=y
-
-# 固件加载
-CONFIG_FW_LOADER=y
-
-# 禁用可能导致崩溃的功能
-# CONFIG_KALLSYMS is not set
-# CONFIG_DEBUG_KERNEL is not set
-# CONFIG_DEBUG_INFO is not set
-# CONFIG_SLUB_DEBUG is not set
-# CONFIG_KPROBES is not set
-# CONFIG_FTRACE is not set
-# CONFIG_STACKTRACE is not set
-KERNEL_CFG_EOF
-        log "  ✅ 内核配置已添加"
-        
-        # 4. 修复 image Makefile - 确保生成正确的 sysupgrade 固件
-        local image_mk="target/linux/ipq40xx/image/generic.mk"
-        if [ -f "$image_mk" ]; then
-            log "  📝 修复 image Makefile..."
-            
-            # 检查是否有 ac42u 定义
-            if ! grep -q "define Device/asus_rt-ac42u" "$image_mk" 2>/dev/null; then
-                cat >> "$image_mk" << 'IMAGE_MK_EOF'
-
-define Device/asus_rt-ac42u
-	$(call Device/FitImage)
-	$(call Device/UbiFit)
-	DEVICE_VENDOR := ASUS
-	DEVICE_MODEL := RT-AC42U
-	BLOCKSIZE := 128k
-	PAGESIZE := 2048
-	DEVICE_DTS_CONFIG := config@1
-	SOC := qcom-ipq4019
-	DEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca9984-ct
-	IMAGE_SIZE := 31232k
-	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
-	IMAGE/factory.bin := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-ubi
-endef
-TARGET_DEVICES += asus_rt-ac42u
-IMAGE_MK_EOF
-                log "    ✅ 添加了 ac42u 设备定义"
-            else
-                log "    ℹ️ ac42u 设备定义已存在"
-            fi
-        fi
-        
-        # 5. 确保 squashfs 格式
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=32" >> .config
-        echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
-        
-        log "  ✅ ac42u 深度修复完成"
-    fi
-    
-    # ============================================
-    # 针对 immortalwrt-mt798x 源码下 rax3000m 的修复
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "cmcc_rax3000m" || "$DEVICE" == "cmcc_rax3000m-nand" ]]; then
-        log "🔧 [MT798x rax3000m] 应用深度修复..."
-        
-        # 确保 squashfs 格式
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=64" >> .config
-        echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
-        
-        # 添加内核配置
-        cat >> .config << 'MTK_CFG_EOF'
-CONFIG_CMDLINE="console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-CONFIG_MTD_SPI_NAND=y
-CONFIG_MTD_UBI=y
-CONFIG_MTD_UBI_BLOCK=y
-CONFIG_UBIFS_FS=y
-MTK_CFG_EOF
-        
-        log "  ✅ rax3000m 深度修复完成"
-    fi
-    
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -5818,7 +4889,7 @@ EOF
         "openwrt"|"lede")
             make_args="V=s FORCE_UNSAFE_CONFIGURE=1"
             ;;
-        "immortalwrt"|"immortalwrt-mt798x")
+        "immortalwrt")
             make_args="V=s"
             ;;
     esac
@@ -5879,29 +4950,6 @@ EOF
     }
     
     # ============================================
-    # 源码特定预处理
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
-        log "🔧 [MT798x] 执行源码特殊预处理..."
-        
-        local problem_patches_dir="target/linux/ipq40xx/patches-5.15"
-        if [ -d "$problem_patches_dir" ]; then
-            local problem_patches=(
-                "401-mmc-sdhci-msm-comment-unused-sdhci_msm_set_clock.patch"
-            )
-            
-            for patch in "${problem_patches[@]}"; do
-                if [ -f "$problem_patches_dir/$patch" ]; then
-                    log "  🗑️ 预删除补丁: $patch"
-                    rm -f "$problem_patches_dir/$patch"
-                fi
-            done
-        fi
-        
-        log "  ✅ MT798x 预处理完成"
-    fi
-    
-    # ============================================
     # 全局分步编译流程
     # ============================================
     log "🔧 使用分步编译流程..."
@@ -5953,9 +5001,11 @@ EOF
         
         log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
         
+        # 检查是否是补丁失败
         if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    🔧 检测到补丁失败，正在修复..."
             
+            # 提取失败的补丁文件
             local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
             
             if [ -z "$failed_patches" ]; then
@@ -5970,6 +5020,7 @@ EOF
                 done
             done
             
+            # 如果没有提取到具体补丁名，删除常见的ath79问题补丁
             if [ -z "$failed_patches" ] && [ "$TARGET" = "ath79" ]; then
                 log "      🗑️ 删除 ath79 已知问题补丁: 910-unaligned_access_hacks.patch"
                 find target/linux/ath79 -name "910-unaligned_access_hacks.patch" -type f 2>/dev/null | while read patch_file; do
@@ -5978,12 +5029,17 @@ EOF
                 done
             fi
             
+            # 彻底清理内核构建目录
+            log "    🔧 清理内核构建目录..."
             rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
             rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+            
+            # 清理 quilt 状态目录
             find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
             find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
         fi
         
+        # 检查其他常见错误
         if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    ❌ 磁盘空间不足，无法继续"
             break
@@ -6055,6 +5111,7 @@ EOF
     fi
     log "  ✅ 步骤5完成"
     
+    # 合并所有日志
     cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
     
     log "  ✅ 分步编译完成"
@@ -6075,17 +5132,20 @@ EOF
     > "$hash_file" 2>/dev/null || true
     
     if [ -d "$target_dir" ]; then
+        # 首先删除不需要的文件（.itb、.manifest 等）
         log "  🗑️ 清理不需要的文件..."
         find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) 2>/dev/null | while read file; do
             log "    删除: $(basename "$file")"
             rm -f "$file"
         done
         
+        # 删除 packages 子目录（不需要上传）
         if [ -d "$target_dir/packages" ]; then
             log "    删除 packages 目录"
             rm -rf "$target_dir/packages"
         fi
         
+        # 然后验证固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             local fname=$(basename "$file")
@@ -6120,15 +5180,6 @@ EOF
     if [ $valid_firmware -gt 0 ]; then
         echo "VALID_FIRMWARE_COUNT=$valid_firmware" >> $GITHUB_ENV 2>/dev/null || true
         echo "FIRMWARE_HASH_FILE=$hash_file" >> $GITHUB_ENV 2>/dev/null || true
-    fi
-    
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
-        log "🔍 [MT798x ac42u] 检查特定固件文件..."
-        local special_firmware=""
-        special_firmware=$(find "$target_dir" -maxdepth 1 -type f -name "*asus_rt-ac42u*sysupgrade*.bin" 2>/dev/null | head -1)
-        if [ -n "$special_firmware" ]; then
-            log "  ✅ 找到 ac42u 刷机固件: $(basename "$special_firmware")"
-        fi
     fi
     
     if [ $valid_firmware -eq 0 ]; then
