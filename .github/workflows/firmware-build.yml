@@ -14,7 +14,7 @@ on:
         required: true
         type: choice
         default: "immortalwrt"
-        options: ["immortalwrt", "immortalwrt-mt798x", "openwrt", "lede"]
+        options: ["immortalwrt", "openwrt", "lede"]
       
       # 预定义设备下拉选择（保留）
       device_name:
