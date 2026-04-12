@@ -5270,6 +5270,332 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
+    # ============================================
+    # 针对 immortalwrt-mt798x 源码下 ac42u 的设备树修复
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
+        log "🔧 [MT798x ac42u] 应用设备树修复补丁..."
+        
+        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-asus_rt-ac42u.dts"
+        local dtsi_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019.dtsi"
+        
+        # 创建 dts 目录
+        mkdir -p "$(dirname "$dts_file")" 2>/dev/null || true
+        
+        # 如果设备树文件不存在，创建它
+        if [ ! -f "$dts_file" ]; then
+            log "  📝 创建 ac42u 设备树文件..."
+            cat > "$dts_file" << 'EOF'
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+
+#include "qcom-ipq4019.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/soc/qcom,tcsr.h>
+
+/ {
+	model = "ASUS RT-AC42U";
+	compatible = "asus,rt-ac42u", "qcom,ipq4019";
+
+	aliases {
+		led-boot = &led_power;
+		led-failsafe = &led_power;
+		led-running = &led_power;
+		led-upgrade = &led_power;
+		label-mac-device = &gmac0;
+	};
+
+	chosen {
+		bootargs = "console=ttyMSM0,115200n8 root=/dev/mtdblock10 rootfstype=squashfs";
+		bootargs-append = " root=/dev/mtdblock10 rootfstype=squashfs";
+	};
+
+	soc {
+		rng@22000 {
+			status = "okay";
+		};
+
+		pinctrl@1000000 {
+			serial_pins: serial_pinmux {
+				mux {
+					pins = "gpio16", "gpio17";
+					function = "blsp_uart0";
+					bias-disable;
+				};
+			};
+
+			spi_0_pins: spi_0_pinmux {
+				mux {
+					pins = "gpio12", "gpio13", "gpio14", "gpio15";
+					function = "blsp0_spi";
+					bias-disable;
+				};
+			};
+
+			nand_pins: nand_pins {
+				pullups {
+					pins = "gpio53", "gpio58", "gpio59";
+					function = "qpic";
+					bias-pull-up;
+				};
+
+				pulldowns {
+					pins = "gpio52", "gpio54", "gpio55", "gpio56",
+					       "gpio57", "gpio60", "gpio61", "gpio62",
+					       "gpio63", "gpio64", "gpio65", "gpio66",
+					       "gpio67", "gpio68", "gpio69";
+					function = "qpic";
+					bias-pull-down;
+				};
+			};
+
+			led_pins: led_pinmux {
+				mux_1 {
+					pins = "gpio3", "gpio4";
+					function = "gpio";
+					bias-disable;
+				};
+			};
+
+			button_pins: button_pinmux {
+				mux {
+					pins = "gpio0", "gpio1";
+					function = "gpio";
+					bias-disable;
+				};
+			};
+
+			mdio_pins: mdio_pinmux {
+				mux_1 {
+					pins = "gpio6";
+					function = "mdio";
+					bias-pull-up;
+				};
+				mux_2 {
+					pins = "gpio7";
+					function = "mdc";
+					bias-pull-up;
+				};
+			};
+
+			usb_power_pin: usb_power_pin {
+				mux {
+					pins = "gpio2";
+					function = "gpio";
+					bias-disable;
+					output-high;
+				};
+			};
+		};
+
+		serial@78af000 {
+			pinctrl-0 = <&serial_pins>;
+			pinctrl-names = "default";
+			status = "okay";
+		};
+
+		spi@78b5000 {
+			pinctrl-0 = <&spi_0_pins>;
+			pinctrl-names = "default";
+			status = "okay";
+			cs-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>;
+
+			flash@0 {
+				compatible = "jedec,spi-nor";
+				reg = <0>;
+				spi-max-frequency = <24000000>;
+				
+				partitions {
+					compatible = "fixed-partitions";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					partition@0 {
+						label = "SBL1";
+						reg = <0x00000000 0x00040000>;
+						read-only;
+					};
+					partition@40000 {
+						label = "MIBIB";
+						reg = <0x00040000 0x00020000>;
+						read-only;
+					};
+					partition@60000 {
+						label = "QSEE";
+						reg = <0x00060000 0x00060000>;
+						read-only;
+					};
+					partition@c0000 {
+						label = "CDT";
+						reg = <0x000c0000 0x00010000>;
+						read-only;
+					};
+					partition@d0000 {
+						label = "DDRPARAMS";
+						reg = <0x000d0000 0x00010000>;
+						read-only;
+					};
+					partition@e0000 {
+						label = "APPSBLENV";
+						reg = <0x000e0000 0x00010000>;
+						read-only;
+					};
+					partition@f0000 {
+						label = "APPSBL";
+						reg = <0x000f0000 0x00080000>;
+						read-only;
+					};
+					partition@170000 {
+						label = "ART";
+						reg = <0x00170000 0x00010000>;
+						read-only;
+					};
+					partition@180000 {
+						label = "kernel";
+						reg = <0x00180000 0x00280000>;
+					};
+					partition@400000 {
+						label = "ubi";
+						reg = <0x00400000 0x07c00000>;
+					};
+				};
+			};
+		};
+
+		qpic-nand@79b0000 {
+			pinctrl-0 = <&nand_pins>;
+			pinctrl-names = "default";
+			status = "disabled";
+		};
+
+		usb2@60f8800 {
+			status = "okay";
+		};
+
+		usb3@8af8800 {
+			status = "okay";
+		};
+
+		crypto@8e3a000 {
+			status = "okay";
+		};
+
+		watchdog@b017000 {
+			status = "okay";
+		};
+
+		ess-switch@c000000 {
+			status = "okay";
+		};
+
+		edma@c080000 {
+			status = "okay";
+		};
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+
+		reset {
+			label = "reset";
+			gpios = <&tlmm 0 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_RESTART>;
+		};
+
+		wps {
+			label = "wps";
+			gpios = <&tlmm 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_WPS_BUTTON>;
+		};
+	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+		pinctrl-0 = <&led_pins>;
+		pinctrl-names = "default";
+
+		led_power: power {
+			label = "green:power";
+			gpios = <&tlmm 3 GPIO_ACTIVE_LOW>;
+			default-state = "on";
+		};
+
+		usb {
+			label = "green:usb";
+			gpios = <&tlmm 4 GPIO_ACTIVE_LOW>;
+			trigger-sources = <&usb2>, <&usb3>;
+			linux,default-trigger = "usbport";
+		};
+	};
+
+	usb_power: usb_power {
+		compatible = "regulator-fixed";
+		regulator-name = "usb-power";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		gpio = <&tlmm 2 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+};
+
+&gmac0 {
+	status = "okay";
+};
+
+&gmac1 {
+	status = "okay";
+};
+
+&wifi0 {
+	status = "okay";
+	qcom,ath10k-calibration-variant = "ASUS-RT-AC42U";
+};
+
+&wifi1 {
+	status = "okay";
+	qcom,ath10k-calibration-variant = "ASUS-RT-AC42U";
+};
+EOF
+            log "  ✅ 设备树文件已创建"
+        else
+            # 如果文件已存在，修复其中的关键配置
+            log "  🔧 修复现有设备树文件..."
+            
+            # 确保 bootargs 正确
+            if ! grep -q "root=/dev/mtdblock10" "$dts_file" 2>/dev/null; then
+                sed -i 's/bootargs = ".*"/bootargs = "console=ttyMSM0,115200n8 root=\/dev\/mtdblock10 rootfstype=squashfs";/' "$dts_file" 2>/dev/null || true
+            fi
+            
+            # 确保 SPI NOR 分区正确
+            if ! grep -q "label = \"ubi\"" "$dts_file" 2>/dev/null; then
+                log "    ⚠️ 设备树缺少 UBI 分区定义，可能影响启动"
+            fi
+        fi
+        
+        log "  ✅ ac42u 设备树修复完成"
+    fi
+    
+    # ============================================
+    # 针对 immortalwrt-mt798x 源码下 rax3000m 的设备树修复
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "cmcc_rax3000m" || "$DEVICE" == "cmcc_rax3000m-nand" ]]; then
+        log "🔧 [MT798x rax3000m] 应用设备树修复..."
+        
+        local rax3000m_dts="target/linux/mediatek/dts/mt7981-cmcc-rax3000m.dts"
+        
+        if [ -f "$rax3000m_dts" ]; then
+            # 确保 bootargs 正确
+            if ! grep -q "root=/dev/ubiblock0_0" "$rax3000m_dts" 2>/dev/null; then
+                log "  🔧 修复 bootargs..."
+                sed -i 's/bootargs = ".*"/bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 root=\/dev\/ubiblock0_0 rootfstype=squashfs";/' "$rax3000m_dts" 2>/dev/null || true
+            fi
+        fi
+        
+        log "  ✅ rax3000m 设备树修复完成"
+    fi
+    
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -5483,11 +5809,9 @@ EOF
         
         log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
         
-        # 检查是否是补丁失败
         if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    🔧 检测到补丁失败，正在修复..."
             
-            # 提取失败的补丁文件
             local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
             
             if [ -z "$failed_patches" ]; then
@@ -5502,7 +5826,6 @@ EOF
                 done
             done
             
-            # 如果没有提取到具体补丁名，删除常见的ath79问题补丁
             if [ -z "$failed_patches" ] && [ "$TARGET" = "ath79" ]; then
                 log "      🗑️ 删除 ath79 已知问题补丁: 910-unaligned_access_hacks.patch"
                 find target/linux/ath79 -name "910-unaligned_access_hacks.patch" -type f 2>/dev/null | while read patch_file; do
@@ -5511,17 +5834,12 @@ EOF
                 done
             fi
             
-            # 彻底清理内核构建目录
-            log "    🔧 清理内核构建目录..."
             rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
             rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-            
-            # 清理 quilt 状态目录
             find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
             find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
         fi
         
-        # 检查其他常见错误
         if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    ❌ 磁盘空间不足，无法继续"
             break
@@ -5593,7 +5911,6 @@ EOF
     fi
     log "  ✅ 步骤5完成"
     
-    # 合并所有日志
     cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
     
     log "  ✅ 分步编译完成"
@@ -5614,20 +5931,17 @@ EOF
     > "$hash_file" 2>/dev/null || true
     
     if [ -d "$target_dir" ]; then
-        # 首先删除不需要的文件（.itb、.manifest 等）
         log "  🗑️ 清理不需要的文件..."
         find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) 2>/dev/null | while read file; do
             log "    删除: $(basename "$file")"
             rm -f "$file"
         done
         
-        # 删除 packages 子目录（不需要上传）
         if [ -d "$target_dir/packages" ]; then
             log "    删除 packages 目录"
             rm -rf "$target_dir/packages"
         fi
         
-        # 然后验证固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             local fname=$(basename "$file")
