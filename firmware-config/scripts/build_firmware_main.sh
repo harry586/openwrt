@@ -1171,7 +1171,7 @@ EOF
     fi
     
     # ============================================
-    # 对于 MT798x 源码，禁用有问题的 swconfig（不影响 Luci）
+    # 对于 MT798x 源码，禁用有问题的 swconfig
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ]; then
         log "🔧 [MT798x] 禁用有问题的 swconfig..."
@@ -1250,44 +1250,135 @@ EOF
     esac
     
     # ============================================
-    # 针对 immortalwrt-mt798x 源码下 ac42u (ipq40xx) 设备增加强制配置修复刷机后无法启动
+    # 针对 immortalwrt-mt798x 源码下 ac42u (ipq40xx) 设备的特殊配置
+    # 解决刷机后无法启动的问题
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
-        log "🔧 [MT798x ac42u] 检测到 ipq40xx 平台设备，添加特定配置项以确保固件可启动..."
+        log "🔧 [MT798x ac42u] 添加 ipq40xx 平台启动必需的内核配置..."
+        
         cat >> .config << 'EOF'
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_IMAGES_GZIP=y
-CONFIG_TARGET_ROOTFS_PARTSIZE=32
+# 内核启动必需配置
+CONFIG_CMDLINE="console=ttyMSM0,115200n8"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+CONFIG_USE_OF=y
+CONFIG_ARCH_QCOM=y
+CONFIG_ARCH_IPQ40XX=y
+
+# MTD 和文件系统支持
+CONFIG_MTD=y
 CONFIG_MTD_SPI_NOR=y
 CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+
+# 网络驱动
+CONFIG_NET_VENDOR_QUALCOMM=y
+CONFIG_QCA7000_SPI=y
+CONFIG_QCOM_EMAC=y
+
+# WiFi 驱动
+CONFIG_ATH10K=y
+CONFIG_ATH10K_PCI=y
+CONFIG_ATH10K_DEBUG=y
+
+# USB 支持
+CONFIG_USB=y
+CONFIG_USB_DWC3=y
+CONFIG_USB_DWC3_QCOM=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_XHCI_PLATFORM=y
+
+# GPIO 和 LED
+CONFIG_GPIOLIB=y
+CONFIG_GPIO_SYSFS=y
+CONFIG_LEDS_GPIO=y
+CONFIG_NEW_LEDS=y
+
+# 看门狗
+CONFIG_WATCHDOG=y
+CONFIG_QCOM_WDT=y
+
+# 硬件监控
+CONFIG_HWMON=y
+CONFIG_SENSORS_TMP103=y
+EOF
+        
+        # 添加必要的软件包
+        cat >> .config << 'EOF'
 CONFIG_PACKAGE_kmod-ath10k-ct=y
-CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y
 CONFIG_PACKAGE_ath10k-firmware-qca9984=y
 CONFIG_PACKAGE_ath10k-firmware-qca9984-ct=y
-CONFIG_PACKAGE_kmod-hwmon-core=y
+CONFIG_PACKAGE_kmod-usb-dwc3=y
+CONFIG_PACKAGE_kmod-usb-dwc3-qcom=y
+CONFIG_PACKAGE_kmod-usb-xhci-hcd=y
+CONFIG_PACKAGE_kmod-usb-xhci-plat-hcd=y
+CONFIG_PACKAGE_kmod-mtd-rw=y
 CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
 CONFIG_PACKAGE_kmod-leds-gpio=y
 CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
+CONFIG_PACKAGE_kmod-hwmon-core=y
+CONFIG_PACKAGE_kmod-hwmon-tmp103=y
 EOF
+        
         log "  ✅ 已添加 ac42u (ipq40xx) 启动必需配置项"
     fi
     
     # ============================================
-    # 针对 immortalwrt-mt798x 源码下 cmcc_rax3000m (mediatek) 设备增加强制配置
+    # 针对 immortalwrt-mt798x 源码下 cmcc_rax3000m (mediatek) 设备的特殊配置
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "cmcc_rax3000m" || "$DEVICE" == "cmcc_rax3000m-nand" ]]; then
-        log "🔧 [MT798x rax3000m] 检测到 mediatek 平台设备，添加特定配置项..."
+        log "🔧 [MT798x rax3000m] 添加 mediatek 平台启动必需的内核配置..."
+        
         cat >> .config << 'EOF'
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_IMAGES_GZIP=y
-CONFIG_TARGET_ROOTFS_PARTSIZE=64
+# 内核启动必需配置
+CONFIG_CMDLINE="console=ttyS0,115200n8"
+CONFIG_USE_OF=y
+CONFIG_ARCH_MEDIATEK=y
+CONFIG_MACH_MT7981=y
+
+# MTD 和文件系统支持
+CONFIG_MTD=y
 CONFIG_MTD_SPI_NAND=y
 CONFIG_MTD_UBI=y
 CONFIG_UBIFS_FS=y
-CONFIG_MTD_UBI_BLOCK=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+
+# 网络驱动
+CONFIG_NET_VENDOR_MEDIATEK=y
+CONFIG_NET_MEDIATEK_SOC=y
+
+# WiFi 驱动
+CONFIG_MT76=y
+CONFIG_MT7915E=y
+
+# USB 支持
+CONFIG_USB=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_XHCI_MTK=y
+
+# GPIO 和 LED
+CONFIG_GPIOLIB=y
+CONFIG_GPIO_SYSFS=y
+CONFIG_LEDS_GPIO=y
+
+# 看门狗
+CONFIG_WATCHDOG=y
+CONFIG_MTK_WDT=y
+EOF
+        
+        # 添加必要的软件包
+        cat >> .config << 'EOF'
 CONFIG_PACKAGE_kmod-mt7915e=y
 CONFIG_PACKAGE_kmod-mt7981-firmware=y
+CONFIG_PACKAGE_kmod-usb-xhci-mtk=y
+CONFIG_PACKAGE_kmod-mtd-rw=y
+CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+CONFIG_PACKAGE_kmod-leds-gpio=y
 EOF
+        
         log "  ✅ 已添加 rax3000m (mediatek) 启动必需配置项"
     fi
     
