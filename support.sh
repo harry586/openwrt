@@ -55,9 +55,6 @@ init_sdk_info() {
     SDK_INFO["mediatek/filogic/lede"]=""
     SDK_INFO["ath79/generic/lede"]=""
     
-    # ImmortalWrt MT798x 使用源码自带工具链
-    SDK_INFO["mediatek/filogic/immortalwrt-mt798x"]=""
-    
     # 通用SDK（如果找不到精确匹配）
     SDK_INFO["generic/21.02"]="https://downloads.openwrt.org/releases/21.02.7/targets/x86/64/openwrt-sdk-21.02.7-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz"
     SDK_INFO["generic/23.05"]="https://downloads.openwrt.org/releases/23.05.5/targets/x86/64/openwrt-sdk-23.05.5-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
@@ -183,7 +180,7 @@ get_device_platform() {
         return 0
     fi
     
-    # 设备名映射（仅针对 MT798x 相关设备）
+    # 设备名映射
     local mapped_name="$device_name"
     case "$device_name" in
         cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
