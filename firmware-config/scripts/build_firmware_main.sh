@@ -5271,21 +5271,19 @@ workflow_step25_build_firmware() {
     log "  ✅ 当前文件描述符限制: $current_limit"
     
     # ============================================
-    # 针对 immortalwrt-mt798x 源码下 ac42u 的设备树修复
+    # 针对 immortalwrt-mt798x 源码下 ac42u 的深度修复
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" ]]; then
-        log "🔧 [MT798x ac42u] 应用设备树修复补丁..."
+        log "🔧 [MT798x ac42u] 应用深度修复..."
         
-        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-asus_rt-ac42u.dts"
-        local dtsi_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019.dtsi"
+        # 1. 创建设备树文件目录
+        local dts_dir="target/linux/ipq40xx/files/arch/arm/boot/dts"
+        mkdir -p "$dts_dir" 2>/dev/null || true
         
-        # 创建 dts 目录
-        mkdir -p "$(dirname "$dts_file")" 2>/dev/null || true
-        
-        # 如果设备树文件不存在，创建它
-        if [ ! -f "$dts_file" ]; then
-            log "  📝 创建 ac42u 设备树文件..."
-            cat > "$dts_file" << 'EOF'
+        # 2. 创建完整的 ac42u 设备树文件
+        local dts_file="$dts_dir/qcom-ipq4019-asus_rt-ac42u.dts"
+        log "  📝 创建 ac42u 设备树文件..."
+        cat > "$dts_file" << 'DTS_EOF'
 // SPDX-License-Identifier: GPL-2.0-or-later OR MIT
 
 #include "qcom-ipq4019.dtsi"
@@ -5306,8 +5304,8 @@ workflow_step25_build_firmware() {
 	};
 
 	chosen {
-		bootargs = "console=ttyMSM0,115200n8 root=/dev/mtdblock10 rootfstype=squashfs";
-		bootargs-append = " root=/dev/mtdblock10 rootfstype=squashfs";
+		bootargs = "console=ttyMSM0,115200n8 root=/dev/mtdblock10 rootfstype=squashfs rootwait";
+		bootargs-append = " root=/dev/mtdblock10 rootfstype=squashfs rootwait";
 	};
 
 	soc {
@@ -5350,7 +5348,7 @@ workflow_step25_build_firmware() {
 			};
 
 			led_pins: led_pinmux {
-				mux_1 {
+				mux {
 					pins = "gpio3", "gpio4";
 					function = "gpio";
 					bias-disable;
@@ -5438,7 +5436,6 @@ workflow_step25_build_firmware() {
 					partition@e0000 {
 						label = "APPSBLENV";
 						reg = <0x000e0000 0x00010000>;
-						read-only;
 					};
 					partition@f0000 {
 						label = "APPSBL";
@@ -5452,11 +5449,15 @@ workflow_step25_build_firmware() {
 					};
 					partition@180000 {
 						label = "kernel";
-						reg = <0x00180000 0x00280000>;
+						reg = <0x00180000 0x00300000>;
 					};
-					partition@400000 {
-						label = "ubi";
-						reg = <0x00400000 0x07c00000>;
+					partition@480000 {
+						label = "rootfs";
+						reg = <0x00480000 0x00200000>;
+					};
+					partition@680000 {
+						label = "rootfs_data";
+						reg = <0x00680000 0x01980000>;
 					};
 				};
 			};
@@ -5542,58 +5543,201 @@ workflow_step25_build_firmware() {
 
 &gmac0 {
 	status = "okay";
+	qcom,no-mac-address-in-nvmem;
+	nvmem-cell-names = "mac-address";
+	nvmem-cells = <&macaddr_art_0>;
 };
 
 &gmac1 {
 	status = "okay";
+	qcom,no-mac-address-in-nvmem;
+	nvmem-cell-names = "mac-address";
+	nvmem-cells = <&macaddr_art_6>;
 };
 
 &wifi0 {
 	status = "okay";
 	qcom,ath10k-calibration-variant = "ASUS-RT-AC42U";
+	qcom,ath10k-pre-calibration-data-size = <2116>;
 };
 
 &wifi1 {
 	status = "okay";
 	qcom,ath10k-calibration-variant = "ASUS-RT-AC42U";
+	qcom,ath10k-pre-calibration-data-size = <2116>;
 };
-EOF
-            log "  ✅ 设备树文件已创建"
-        else
-            # 如果文件已存在，修复其中的关键配置
-            log "  🔧 修复现有设备树文件..."
+
+&art {
+	compatible = "nvmem-cells";
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	macaddr_art_0: macaddr@0 {
+		reg = <0x0 0x6>;
+	};
+
+	macaddr_art_6: macaddr@6 {
+		reg = <0x6 0x6>;
+	};
+};
+DTS_EOF
+        log "  ✅ 设备树文件已创建"
+        
+        # 3. 修复内核配置文件 - 添加启动必需的内核配置
+        log "  📝 添加内核启动必需配置..."
+        cat >> .config << 'KERNEL_CFG_EOF'
+# 内核启动必需配置
+CONFIG_CMDLINE="console=ttyMSM0,115200n8 root=/dev/mtdblock10 rootfstype=squashfs rootwait"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+CONFIG_CMDLINE_EXTEND=y
+CONFIG_USE_OF=y
+CONFIG_ARCH_QCOM=y
+CONFIG_ARCH_IPQ40XX=y
+CONFIG_ARM=y
+CONFIG_ARM_CPUIDLE=y
+CONFIG_ARM_ARCH_TIMER=y
+CONFIG_ARM_GIC=y
+
+# CPU 支持
+CONFIG_CPU_V7=y
+CONFIG_CPU_32v7=y
+CONFIG_CPU_ABRT_EV7=y
+CONFIG_CPU_PABRT_V7=y
+CONFIG_CPU_CACHE_V7=y
+CONFIG_CPU_CACHE_VIPT=y
+CONFIG_CPU_CP15=y
+CONFIG_CPU_CP15_MMU=y
+
+# MTD 和文件系统
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPI_NOR=y
+CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y
+CONFIG_MTD_CMDLINE_PARTS=y
+CONFIG_MTD_OF_PARTS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZLIB=y
+CONFIG_SQUASHFS_FILE_DIRECT=y
+CONFIG_SQUASHFS_DECOMP_SINGLE=y
+CONFIG_SQUASHFS_EMBEDDED=y
+
+# 网络驱动
+CONFIG_NET=y
+CONFIG_NET_VENDOR_QUALCOMM=y
+CONFIG_QCA7000_SPI=y
+CONFIG_QCOM_EMAC=y
+
+# WiFi 驱动
+CONFIG_ATH_COMMON=y
+CONFIG_ATH10K=y
+CONFIG_ATH10K_PCI=y
+
+# USB 支持
+CONFIG_USB=y
+CONFIG_USB_SUPPORT=y
+CONFIG_USB_COMMON=y
+CONFIG_USB_DWC3=y
+CONFIG_USB_DWC3_QCOM=y
+CONFIG_USB_DWC3_OF_SIMPLE=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_XHCI_PLATFORM=y
+CONFIG_USB_STORAGE=y
+
+# GPIO 和 LED
+CONFIG_GPIOLIB=y
+CONFIG_GPIO_SYSFS=y
+CONFIG_LEDS_GPIO=y
+CONFIG_NEW_LEDS=y
+
+# 看门狗
+CONFIG_WATCHDOG=y
+CONFIG_QCOM_WDT=y
+
+# 时钟
+CONFIG_COMMON_CLK=y
+CONFIG_COMMON_CLK_QCOM=y
+CONFIG_IPQ_GCC_4019=y
+
+# 复位控制器
+CONFIG_RESET_CONTROLLER=y
+CONFIG_RESET_QCOM=y
+
+# 固件加载
+CONFIG_FW_LOADER=y
+
+# 禁用可能导致崩溃的功能
+# CONFIG_KALLSYMS is not set
+# CONFIG_DEBUG_KERNEL is not set
+# CONFIG_DEBUG_INFO is not set
+# CONFIG_SLUB_DEBUG is not set
+# CONFIG_KPROBES is not set
+# CONFIG_FTRACE is not set
+# CONFIG_STACKTRACE is not set
+KERNEL_CFG_EOF
+        log "  ✅ 内核配置已添加"
+        
+        # 4. 修复 image Makefile - 确保生成正确的 sysupgrade 固件
+        local image_mk="target/linux/ipq40xx/image/generic.mk"
+        if [ -f "$image_mk" ]; then
+            log "  📝 修复 image Makefile..."
             
-            # 确保 bootargs 正确
-            if ! grep -q "root=/dev/mtdblock10" "$dts_file" 2>/dev/null; then
-                sed -i 's/bootargs = ".*"/bootargs = "console=ttyMSM0,115200n8 root=\/dev\/mtdblock10 rootfstype=squashfs";/' "$dts_file" 2>/dev/null || true
-            fi
-            
-            # 确保 SPI NOR 分区正确
-            if ! grep -q "label = \"ubi\"" "$dts_file" 2>/dev/null; then
-                log "    ⚠️ 设备树缺少 UBI 分区定义，可能影响启动"
+            # 检查是否有 ac42u 定义
+            if ! grep -q "define Device/asus_rt-ac42u" "$image_mk" 2>/dev/null; then
+                cat >> "$image_mk" << 'IMAGE_MK_EOF'
+
+define Device/asus_rt-ac42u
+	$(call Device/FitImage)
+	$(call Device/UbiFit)
+	DEVICE_VENDOR := ASUS
+	DEVICE_MODEL := RT-AC42U
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	DEVICE_DTS_CONFIG := config@1
+	SOC := qcom-ipq4019
+	DEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca9984-ct
+	IMAGE_SIZE := 31232k
+	IMAGE/sysupgrade.bin := append-kernel | append-rootfs | pad-rootfs | append-metadata
+	IMAGE/factory.bin := append-kernel | pad-to $$$$(KERNEL_SIZE) | append-ubi
+endef
+TARGET_DEVICES += asus_rt-ac42u
+IMAGE_MK_EOF
+                log "    ✅ 添加了 ac42u 设备定义"
+            else
+                log "    ℹ️ ac42u 设备定义已存在"
             fi
         fi
         
-        log "  ✅ ac42u 设备树修复完成"
+        # 5. 确保 squashfs 格式
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=32" >> .config
+        echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
+        
+        log "  ✅ ac42u 深度修复完成"
     fi
     
     # ============================================
-    # 针对 immortalwrt-mt798x 源码下 rax3000m 的设备树修复
+    # 针对 immortalwrt-mt798x 源码下 rax3000m 的修复
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "immortalwrt-mt798x" ] && [[ "$DEVICE" == "cmcc_rax3000m" || "$DEVICE" == "cmcc_rax3000m-nand" ]]; then
-        log "🔧 [MT798x rax3000m] 应用设备树修复..."
+        log "🔧 [MT798x rax3000m] 应用深度修复..."
         
-        local rax3000m_dts="target/linux/mediatek/dts/mt7981-cmcc-rax3000m.dts"
+        # 确保 squashfs 格式
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        echo "CONFIG_TARGET_ROOTFS_PARTSIZE=64" >> .config
+        echo "# CONFIG_TARGET_IMAGES_FIT is not set" >> .config
         
-        if [ -f "$rax3000m_dts" ]; then
-            # 确保 bootargs 正确
-            if ! grep -q "root=/dev/ubiblock0_0" "$rax3000m_dts" 2>/dev/null; then
-                log "  🔧 修复 bootargs..."
-                sed -i 's/bootargs = ".*"/bootargs = "console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 root=\/dev\/ubiblock0_0 rootfstype=squashfs";/' "$rax3000m_dts" 2>/dev/null || true
-            fi
-        fi
+        # 添加内核配置
+        cat >> .config << 'MTK_CFG_EOF'
+CONFIG_CMDLINE="console=ttyS0,115200n8 earlycon=uart8250,mmio32,0x11002000 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+CONFIG_MTD_SPI_NAND=y
+CONFIG_MTD_UBI=y
+CONFIG_MTD_UBI_BLOCK=y
+CONFIG_UBIFS_FS=y
+MTK_CFG_EOF
         
-        log "  ✅ rax3000m 设备树修复完成"
+        log "  ✅ rax3000m 深度修复完成"
     fi
     
     log "🔧 创建双固件保护脚本..."
