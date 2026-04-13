@@ -2906,6 +2906,7 @@ integrate_custom_files() {
         local checked_count=0
         local failed_count=0
         local skipped_count=0
+        local no_conflict_count=0
         local total_deleted_files=0
         local conflict_patterns=(
             "usr/lib/lua/luci/fs.lua"           # 与 luci-lib-fs 冲突
@@ -2926,6 +2927,7 @@ integrate_custom_files() {
             local temp_dir=$(mktemp -d)
             local original_dir=$(pwd)
             local ipk_fixed=0
+            local ipk_has_conflict=0
             local deleted_list=()
             
             cd "$temp_dir" || {
@@ -2934,36 +2936,101 @@ integrate_custom_files() {
                 continue
             }
             
-            # 解包 IPK
-            if ar x "$ipk_file" 2>/dev/null; then
+            # 解包 IPK（尝试多种方式）
+            local unpack_success=0
+            
+            # 方式1：使用 ar 命令（标准 IPK 格式）
+            if ar x "$ipk_file" 2>/dev/null && [ -f "debian-binary" ]; then
+                unpack_success=1
+            # 方式2：使用 tar 直接解压（某些 IPK 实际上是 tar.gz 格式）
+            elif tar -xzf "$ipk_file" 2>/dev/null && [ -f "./control" ] 2>/dev/null; then
+                unpack_success=1
+                # 这种情况下需要手动创建必要文件
+                touch debian-binary 2>/dev/null || true
+                echo "2.0" > debian-binary 2>/dev/null || true
+            # 方式3：尝试用 dpkg-deb（如果系统有）
+            elif command -v dpkg-deb >/dev/null 2>&1 && dpkg-deb -x "$ipk_file" . 2>/dev/null; then
+                unpack_success=1
+            fi
+            
+            if [ $unpack_success -eq 1 ]; then
                 local needs_repack=0
                 
-                # 检查是否存在 data.tar.gz
+                # 查找数据文件（可能是 data.tar.gz, data.tar.xz, 或直接是目录结构）
+                local data_file=""
                 if [ -f "data.tar.gz" ]; then
-                    # 解压 data.tar.gz
+                    data_file="data.tar.gz"
                     tar -xzf data.tar.gz 2>/dev/null || true
-                    
-                    # 检查冲突文件
+                elif [ -f "data.tar.xz" ]; then
+                    data_file="data.tar.xz"
+                    tar -xJf data.tar.xz 2>/dev/null || true
+                fi
+                
+                # 检查冲突文件
+                for pattern in "${conflict_patterns[@]}"; do
+                    if [ -f "./$pattern" ]; then
+                        echo "      🗑️ 发现冲突: $pattern"
+                        rm -f "./$pattern"
+                        deleted_list+=("$pattern")
+                        needs_repack=1
+                        ipk_has_conflict=1
+                    fi
+                done
+                
+                # 如果目录结构存在（dpkg-deb 解压方式），也检查
+                if [ -z "$data_file" ]; then
                     for pattern in "${conflict_patterns[@]}"; do
                         if [ -f "./$pattern" ]; then
                             echo "      🗑️ 发现冲突: $pattern"
                             rm -f "./$pattern"
                             deleted_list+=("$pattern")
                             needs_repack=1
+                            ipk_has_conflict=1
                         fi
                     done
+                fi
+                
+                # 额外检查：如果 data 目录下除了冲突文件外没有其他内容，则跳过
+                local file_count_after=$(find . -type f ! -path "./control.tar.gz" ! -path "./debian-binary" ! -path "./data.tar.gz" ! -path "./data.tar.xz" ! -name "control" ! -name "postinst" ! -name "prerm" 2>/dev/null | wc -l)
+                
+                if [ $needs_repack -eq 1 ] && [ $file_count_after -gt 0 ]; then
+                    # 重新打包
+                    if [ -n "$data_file" ]; then
+                        # 删除旧的数据文件
+                        rm -f "$data_file"
+                        # 重新打包（排除控制文件）
+                        if [[ "$data_file" == "data.tar.gz" ]]; then
+                            tar -czf data.tar.gz ./* --exclude=control.tar.gz --exclude=debian-binary --exclude=control --exclude=postinst --exclude=prerm 2>/dev/null || tar -czf data.tar.gz ./*
+                        elif [[ "$data_file" == "data.tar.xz" ]]; then
+                            tar -cJf data.tar.xz ./* --exclude=control.tar.gz --exclude=debian-binary --exclude=control --exclude=postinst --exclude=prerm 2>/dev/null || tar -cJf data.tar.xz ./*
+                        fi
+                    fi
                     
-                    # 额外检查：如果 data 目录下除了冲突文件外没有其他内容，则跳过
-                    local file_count_after=$(find . -type f ! -path "./control.tar.gz" ! -path "./debian-binary" ! -path "./data.tar.gz" 2>/dev/null | wc -l)
+                    # 重新生成 IPK
+                    rm -f "$ipk_file"
                     
-                    if [ $needs_repack -eq 1 ] && [ $file_count_after -gt 0 ]; then
-                        # 重新打包 data.tar.gz
-                        rm -f data.tar.gz
-                        tar -czf data.tar.gz ./* --exclude=control.tar.gz --exclude=debian-binary 2>/dev/null || tar -czf data.tar.gz ./*
-                        
-                        # 重新生成 IPK
-                        rm -f "$ipk_file"
-                        ar rcs "$ipk_file" debian-binary control.tar.gz data.tar.gz 2>/dev/null
+                    # 收集所有需要的文件
+                    local repack_files=""
+                    if [ -f "debian-binary" ]; then
+                        repack_files="$repack_files debian-binary"
+                    fi
+                    if [ -f "control.tar.gz" ]; then
+                        repack_files="$repack_files control.tar.gz"
+                    elif [ -f "control" ]; then
+                        # 如果有 control 文件但没有 control.tar.gz，创建一个
+                        tar -czf control.tar.gz control postinst prerm 2>/dev/null || true
+                        if [ -f "control.tar.gz" ]; then
+                            repack_files="$repack_files control.tar.gz"
+                        fi
+                    fi
+                    if [ -f "data.tar.gz" ]; then
+                        repack_files="$repack_files data.tar.gz"
+                    elif [ -f "data.tar.xz" ]; then
+                        repack_files="$repack_files data.tar.xz"
+                    fi
+                    
+                    if [ -n "$repack_files" ]; then
+                        ar rcs "$ipk_file" $repack_files 2>/dev/null
                         
                         if [ -f "$ipk_file" ]; then
                             ipk_fixed=1
@@ -2978,18 +3045,19 @@ integrate_custom_files() {
                             echo "      ❌ 重新打包失败"
                             failed_count=$((failed_count + 1))
                         fi
-                    elif [ $needs_repack -eq 1 ] && [ $file_count_after -eq 0 ]; then
-                        echo "      ⚠️ IPK 中除冲突文件外无其他有效内容，跳过修复"
-                        skipped_count=$((skipped_count + 1))
                     else
-                        echo "      ✅ 未发现冲突文件"
+                        echo "      ❌ 没有找到可打包的文件"
+                        failed_count=$((failed_count + 1))
                     fi
+                elif [ $needs_repack -eq 1 ] && [ $file_count_after -eq 0 ]; then
+                    echo "      ⚠️ IPK 中除冲突文件外无其他有效内容，跳过修复"
+                    skipped_count=$((skipped_count + 1))
                 else
-                    echo "      ⚠️ IPK 中未找到 data.tar.gz"
-                    failed_count=$((failed_count + 1))
+                    echo "      ✅ 未发现冲突文件"
+                    no_conflict_count=$((no_conflict_count + 1))
                 fi
             else
-                echo "      ❌ 解包 IPK 失败（可能不是有效的 ar 格式）"
+                echo "      ⚠️ 解包失败，将保留原文件（刷机后可能需要手动处理）"
                 failed_count=$((failed_count + 1))
             fi
             
@@ -3002,6 +3070,7 @@ integrate_custom_files() {
         echo "  📊 IPK 修复统计:"
         echo "     总检查数: $checked_count 个"
         echo "     成功修复: $fixed_count 个"
+        echo "     无冲突: $no_conflict_count 个"
         echo "     修复失败: $failed_count 个"
         echo "     跳过处理: $skipped_count 个"
         echo "     删除冲突文件总数: $total_deleted_files 个"
@@ -3009,6 +3078,8 @@ integrate_custom_files() {
         
         if [ $fixed_count -gt 0 ]; then
             log "✅ 共修复 $fixed_count 个 IPK 包的文件冲突"
+        elif [ $failed_count -gt 0 ]; then
+            log "⚠️ 有 $failed_count 个 IPK 包解包失败，将保留原文件"
         else
             log "✅ 所有 IPK 包检查通过，无冲突"
         fi
@@ -5459,11 +5530,11 @@ EOF
 
 #【build_firmware_main.sh-41】
 # ============================================
-# 步骤26: 检查构建产物（只保留 factory 和 sysupgrade.bin）
+# 步骤26: 检查构建产物（增强版 - 增加固件大小验证）
 # 对应 firmware-build.yml 步骤26
 # ============================================
 workflow_step26_check_artifacts() {
-    log "=== 步骤26: 检查构建产物（只保留 factory 和 sysupgrade.bin） ==="
+    log "=== 步骤26: 检查构建产物（增强版 - 增加固件大小验证） ==="
     
     set -e
     trap 'echo "❌ 步骤26 失败，退出代码: $?"; exit 1' ERR
@@ -5473,15 +5544,23 @@ workflow_step26_check_artifacts() {
     if [ -d "bin/targets" ]; then
         echo "✅ 找到固件目录"
         
+        # 查找所有固件文件
         echo ""
         echo "📁 固件文件列表:"
         echo "=========================================="
         
         local sysupgrade_count=0
+        local initramfs_count=0
         local factory_count=0
+        local itb_count=0
+        local preloader_count=0
+        local gpt_count=0
+        local other_count=0
         
-        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | grep -v "sha256sums" | sort)
+        # 先收集所有文件，避免管道中的子shell问题
+        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" -o -name "*.tar" -o -name "*.gz" \) 2>/dev/null | grep -v "sha256sums" | sort)
         
+        # 遍历所有文件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             
@@ -5489,20 +5568,89 @@ workflow_step26_check_artifacts() {
             FILE_NAME=$(basename "$file")
             FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
             
+            # 判断文件类型并添加注释
             if echo "$FILE_NAME" | grep -q "sysupgrade"; then
-                echo "  ✅ $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
-                echo ""
-                sysupgrade_count=$((sysupgrade_count + 1))
+                if echo "$FILE_NAME" | grep -q "\.itb$"; then
+                    echo "  ✅ $FILE_NAME (FIT格式)"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🚀 刷机用 - FIT格式固件，通过 sysupgrade 命令刷入"
+                    echo "    注释: *sysupgrade.itb - 刷机用"
+                    echo ""
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                else
+                    echo "  ✅ $FILE_NAME"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
+                    echo "    注释: *sysupgrade.bin - 刷机用"
+                    echo ""
+                    sysupgrade_count=$((sysupgrade_count + 1))
+                fi
             elif echo "$FILE_NAME" | grep -q "factory"; then
                 echo "  🏭 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
                 echo "    用途: 📦 原厂刷机 - 用于从原厂固件第一次刷入 OpenWrt"
+                echo "    注释: *factory.img/*factory.bin - 原厂刷机用"
                 echo ""
                 factory_count=$((factory_count + 1))
+            elif echo "$FILE_NAME" | grep -q "initramfs"; then
+                if echo "$FILE_NAME" | grep -q "\.itb$"; then
+                    echo "  🔷 $FILE_NAME (FIT格式)"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🆘 FIT格式恢复镜像 - 用于支持FIT的引导加载程序"
+                    itb_count=$((itb_count + 1))
+                else
+                    echo "  🔷 $FILE_NAME"
+                    echo "    大小: $SIZE"
+                    echo "    路径: $FILE_PATH"
+                    echo "    用途: 🆘 恢复用 - 内存启动镜像，不写入闪存"
+                    initramfs_count=$((initramfs_count + 1))
+                fi
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "preloader"; then
+                echo "  ⚙️ $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🔧 预加载器 - 用于启动引导程序"
+                preloader_count=$((preloader_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "gpt"; then
+                echo "  💽 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 📋 GPT分区表 - 用于eMMC分区"
+                gpt_count=$((gpt_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "kernel"; then
+                echo "  🔶 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🧩 内核镜像 - 仅包含内核，不包含根文件系统"
+                other_count=$((other_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "rootfs"; then
+                echo "  📦 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🗄️ 根文件系统 - 仅包含根文件系统，不包含内核"
+                other_count=$((other_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "sha256sums"; then
+                # 跳过校验和文件
+                continue
+            elif echo "$FILE_NAME" | grep -q "Packages\.gz"; then
+                # 跳过软件包索引文件
+                continue
+            else
+                echo "  📄 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: ❓ 其他文件"
+                other_count=$((other_count + 1))
+                echo ""
             fi
         done <<< "$all_files"
         
@@ -5511,10 +5659,18 @@ workflow_step26_check_artifacts() {
         echo "📊 固件统计:"
         echo "----------------------------------------"
         echo "  ✅ sysupgrade固件: $sysupgrade_count 个 - 🚀 **刷机用**"
+        echo "  🔷 initramfs恢复镜像: $initramfs_count 个 - 🆘 **传统恢复用**"
+        echo "  🔷 FIT恢复镜像: $itb_count 个 - 🆘 **FIT格式恢复用**"
         echo "  🏭 factory镜像: $factory_count 个 - 📦 **原厂刷机用**"
+        echo "  ⚙️ preloader: $preloader_count 个 - 🔧 **引导加载程序**"
+        echo "  💽 GPT分区表: $gpt_count 个 - 📋 **eMMC分区表**"
+        echo "  📦 其他文件: $other_count 个"
         echo "----------------------------------------"
         echo ""
         
+        # ============================================
+        # 固件大小验证 - 拒绝小于5MB的无效固件
+        # ============================================
         echo "🔍 ===== 固件大小验证（拒绝小于5MB的无效固件） ====="
         echo ""
         
@@ -5523,14 +5679,16 @@ workflow_step26_check_artifacts() {
         local total_size_mb=0
         local firmware_list=()
         
+        # 收集所有可刷机固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
-            if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
+            if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"sysupgrade.itb" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
                 local fname=$(basename "$file")
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
                 local fsize_human=$(ls -lh "$file" | awk '{print $5}')
                 
+                # 检查文件类型
                 local ftype=""
                 if [[ "$fname" == *"sysupgrade"* ]]; then
                     ftype="sysupgrade"
@@ -5542,6 +5700,7 @@ workflow_step26_check_artifacts() {
             fi
         done <<< "$all_files"
         
+        # 验证固件大小
         echo "📋 固件大小验证结果:"
         echo "----------------------------------------"
         
@@ -5553,6 +5712,7 @@ workflow_step26_check_artifacts() {
                 echo "     大小: $fsize_human (${fsize_mb}MB) - 小于5MB，判定为无效固件！"
                 echo "     状态: 将不会被上传"
                 
+                # 删除无效固件
                 rm -f "$file"
                 echo "     已删除无效固件文件"
                 echo ""
@@ -5566,12 +5726,14 @@ workflow_step26_check_artifacts() {
                     echo "     大小: $fsize_human (${fsize_mb}MB) - 通过验证"
                 fi
                 
+                # 统计有效固件
                 if [ "$ftype" = "sysupgrade" ]; then
                     valid_sysupgrade=$((valid_sysupgrade + 1))
                 elif [ "$ftype" = "factory" ]; then
                     valid_factory=$((valid_factory + 1))
                 fi
                 
+                # 累计总大小
                 total_size_mb=$((total_size_mb + fsize_mb))
                 echo ""
             fi
@@ -5586,11 +5748,37 @@ workflow_step26_check_artifacts() {
         echo "  固件总大小: ${total_size_gb}GB"
         echo ""
         
+        # 重要提示
+        echo "🔔 固件类型说明:"
+        echo "  ✅ *sysupgrade.bin/*.itb - **刷机用** (已安装OpenWrt时升级)"
+        echo "  🔷 *initramfs-*.bin        - **传统恢复用** (内存启动，用于恢复)"
+        echo "  🔷 *initramfs-*.itb        - **FIT格式恢复** (适用于支持FIT的引导程序)"
+        echo "  🏭 *factory.img/*.bin      - **原厂刷机用** (从原厂固件第一次刷入)"
+        echo "  ⚙️ *preloader.bin          - **引导预加载器** (写入特定分区)"
+        echo "  💽 *gpt.bin                - **GPT分区表** (用于eMMC)"
+        echo ""
+        
+        # 检测缺少的固件类型
+        local missing_types=""
+        if [ $valid_sysupgrade -eq 0 ]; then
+            missing_types="$missing_types sysupgrade"
+        fi
+        if [ $valid_factory -eq 0 ]; then
+            missing_types="$missing_types factory"
+        fi
+        
+        if [ -n "$missing_types" ]; then
+            echo "⚠️ 警告: 缺少以下有效固件类型 -$missing_types"
+            echo "   编译可能不完整，但可用的固件文件如下:"
+        fi
+        
+        # 显示实际找到的可刷机固件文件
         local flashable_count=0
         echo ""
         echo "📋 可刷机的固件文件:"
         echo "----------------------------------------"
         
+        # 显示所有可刷机的固件
         for firmware in "${firmware_list[@]}"; do
             IFS=':' read -r ftype fname fsize_mb fsize_human file <<< "$firmware"
             
@@ -5614,29 +5802,61 @@ workflow_step26_check_artifacts() {
         
         if [ $flashable_count -eq 0 ]; then
             echo "  ⚠️ 没有找到可刷机的固件文件"
+            
+            # 尝试查找initramfs作为替代
+            local found_alt=0
+            while IFS= read -r file; do
+                [ -z "$file" ] && continue
+                if [[ "$file" == *"initramfs"* ]]; then
+                    local fname=$(basename "$file")
+                    local fsize=$(ls -lh "$file" | awk '{print $5}')
+                    printf "  🔷 %-60s %s [恢复用]\n" "$fname" "$fsize"
+                    found_alt=1
+                fi
+            done <<< "$all_files" | head -5
+            
+            if [ $found_alt -eq 0 ]; then
+                echo "  ❌ 完全没有找到任何固件文件"
+            fi
         fi
         
         echo "----------------------------------------"
         echo ""
         
+        # 提供刷机建议
         if [ $valid_sysupgrade -gt 0 ]; then
             echo "📝 刷机建议:"
             echo "   如果您已经安装了OpenWrt，请使用 sysupgrade 固件文件"
-            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin"
+            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin 或 *sysupgrade.itb"
         elif [ $valid_factory -gt 0 ]; then
             echo "📝 刷机建议:"
             echo "   如果您是从原厂固件第一次刷入，请使用 factory.img 文件"
             echo "   通过路由器原厂Web界面刷入"
+        elif [ $initramfs_count -gt 0 ] || [ $itb_count -gt 0 ]; then
+            echo "📝 刷机建议:"
+            echo "   没有找到sysupgrade或factory固件，但找到了initramfs恢复镜像"
+            echo "   initramfs是内存启动镜像，可用于恢复系统，但不能永久刷入"
+            echo "   如需永久刷入，需要先启动initramfs，然后在系统中刷入sysupgrade"
+        fi
+        
+        # 如果是RAX3000M，提供特定说明
+        if [[ "$TARGET" == "mediatek" ]] && [[ "$SUBTARGET" == "filogic" ]]; then
+            echo ""
+            echo "📌 适用于 CMCC RAX3000M 的说明:"
+            echo "   - NAND版本: 使用 nand-preloader.bin 和 sysupgrade.itb"
+            echo "   - eMMC版本: 使用 emmc-gpt.bin, emmc-preloader.bin 和 sysupgrade.itb"
+            echo "   - 刷机前请确认您的硬件版本"
         fi
         
         echo "=========================================="
         
+        # 最终判定：如果没有有效固件，标记为失败
         if [ $valid_sysupgrade -eq 0 ] && [ $valid_factory -eq 0 ]; then
             echo "❌❌❌ 错误：没有找到任何有效固件（大小≥5MB）❌❌❌"
             echo "   编译失败，所有固件文件均小于5MB"
             exit 1
         else
-            echo "✅ 构建产物检查通过，找到有效固件"
+            echo "✅ 构建产物检查通过，找到 $((valid_sysupgrade + valid_factory)) 个有效固件"
         fi
         
         echo "✅ 步骤26 完成"
