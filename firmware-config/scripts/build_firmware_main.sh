@@ -1284,9 +1284,190 @@ CONFIG_CMDLINE_FROM_BOOTLOADER=y
 # 看门狗支持
 CONFIG_WATCHDOG=y
 CONFIG_QCOM_WDT=y
+
+# 禁用新式 LED 类支持（LEDE 旧内核可能不支持）
+# CONFIG_LEDS_CLASS_MULTICOLOR is not set
+# CONFIG_LEDS_QCOM_LPG is not set
+
+# 确保使用传统 GPIO LED 驱动
+CONFIG_LEDS_GPIO=y
+CONFIG_NEW_LEDS=y
 EOF
         
         log "  ✅ 已添加 LEDE AC42U 启动修复内核配置"
+        
+        # ============================================
+        # 修复 DTS 文件（LEDE 旧内核不支持新的 LED 绑定）
+        # ============================================
+        log "🔧 [LEDE AC42U] 修复 DTS 文件（移除新式 LED 绑定）..."
+        
+        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
+        
+        if [ -f "$dts_file" ]; then
+            # 备份原文件
+            cp "$dts_file" "$dts_file.bak"
+            log "  📁 已备份原 DTS 文件: $dts_file.bak"
+            
+            # 检查是否包含新式 LED 绑定
+            if grep -q "color = <LED_COLOR_ID_" "$dts_file" || grep -q "function = LED_FUNCTION_" "$dts_file"; then
+                log "  🔍 检测到新式 LED 绑定，正在转换为旧格式..."
+                
+                # 使用 sed 进行转换
+                # 1. 删除新式 LED 绑定属性
+                sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
+                sed -i '/function = LED_FUNCTION_/d' "$dts_file"
+                sed -i '/function-enumerator = /d' "$dts_file"
+                
+                # 2. 移除不需要的头文件
+                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
+                
+                # 3. 修复默认触发器（确保使用正确的触发器名称）
+                sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
+                
+                # 4. 修复 WAN LED 触发器
+                sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
+                
+                log "  ✅ DTS 文件修复完成"
+                log "  📋 修改内容:"
+                log "     - 删除 color 属性"
+                log "     - 删除 function 属性"
+                log "     - 删除 function-enumerator 属性"
+                log "     - 删除 leds/common.h 头文件"
+                log "     - 修复 LED 触发器"
+            else
+                log "  ℹ️ DTS 文件已是旧格式，无需修复"
+            fi
+        else
+            log "  ⚠️ DTS 文件不存在: $dts_file"
+            
+            # 尝试查找其他可能的路径
+            local alt_dts=$(find target/linux/ipq40xx -name "*ac42u*.dts" 2>/dev/null | head -1)
+            if [ -n "$alt_dts" ]; then
+                log "  📁 找到替代 DTS 文件: $alt_dts"
+                cp "$alt_dts" "$alt_dts.bak"
+                sed -i '/color = <LED_COLOR_ID_/d' "$alt_dts"
+                sed -i '/function = LED_FUNCTION_/d' "$alt_dts"
+                sed -i '/function-enumerator = /d' "$alt_dts"
+                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$alt_dts"
+                log "  ✅ 替代 DTS 文件修复完成"
+            fi
+        fi
+        
+        # ============================================
+        # 创建内核补丁（作为备用方案）
+        # ============================================
+        log "🔧 [LEDE AC42U] 创建内核补丁..."
+        
+        local patch_dir="target/linux/ipq40xx/patches-5.4"
+        mkdir -p "$patch_dir"
+        
+        cat > "$patch_dir/999-fix-ac42u-led.patch" << 'EOF'
+--- a/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
++++ b/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
+@@ -3,7 +3,6 @@
+ #include "qcom-ipq4019.dtsi"
+ #include <dt-bindings/gpio/gpio.h>
+ #include <dt-bindings/input/input.h>
+-#include <dt-bindings/leds/common.h>
+ #include <dt-bindings/soc/qcom,tcsr.h>
+ 
+ / {
+@@ -98,64 +97,54 @@
+ 	leds {
+ 		compatible = "gpio-leds";
+ 
+-		led_power: led-0 {
+-			color = <LED_COLOR_ID_BLUE>;
+-			function = LED_FUNCTION_STATUS;
++		led_power: power {
++			label = "blue:power";
+ 			gpios = <&tlmm 40 GPIO_ACTIVE_LOW>;
+-			label = "blue:status";
++			default-state = "on";
+ 		};
+ 
+-		led-1 {
+-			color = <LED_COLOR_ID_BLUE>;
+-			function = LED_FUNCTION_WAN;
++		wan_blue {
++			label = "blue:wan";
+ 			gpios = <&tlmm 61 GPIO_ACTIVE_HIGH>;
+ 			linux,default-trigger = "90000.mdio-1:04:link";
+ 		};
+ 
+-		led-2 {
+-			color = <LED_COLOR_ID_RED>;
+-			function = LED_FUNCTION_WAN;
++		wan_red {
++			label = "red:wan";
+ 			gpios = <&tlmm 68 GPIO_ACTIVE_HIGH>;
+ 			linux,default-trigger = "none";
+ 		};
+ 
+-		led-3 {
+-			color = <LED_COLOR_ID_BLUE>;
+-			function = LED_FUNCTION_WLAN;
+-			function-enumerator = <0>;
++		wlan2g {
++			label = "blue:wlan2g";
+ 			gpios = <&tlmm 52 GPIO_ACTIVE_LOW>;
+-			linux,default-trigger = "phy1tpt";
++			linux,default-trigger = "phy0tpt";
+ 		};
+ 
+-		led-4 {
+-			color = <LED_COLOR_ID_BLUE>;
+-			function = LED_FUNCTION_WLAN;
+-			function-enumerator = <1>;
++		wlan5g {
++			label = "blue:wlan5g";
+ 			gpios = <&tlmm 54 GPIO_ACTIVE_LOW>;
+ 			linux,default-trigger = "phy0tpt";
+ 		};
+ 
+-		led-5 {
+-			color = <LED_COLOR_ID_BLUE>;
+-			function = LED_FUNCTION_LAN;
+-			function-enumerator = <1>;
++		lan1 {
++			label = "blue:lan1";
+ 			gpios = <&tlmm 45 GPIO_ACTIVE_LOW>;
+ 		};
+ 
+-		led-6 {
+-			color = <LED_COLOR_ID_BLUE>;
+-			function = LED_FUNCTION_LAN;
+-			function-enumerator = <2>;
++		lan2 {
++			label = "blue:lan2";
+ 			gpios = <&tlmm 43 GPIO_ACTIVE_LOW>;
+ 		};
+ 
+-		led-7 {
+-			color = <LED_COLOR_ID_BLUE>;
+-			function = LED_FUNCTION_LAN;
+-			function-enumerator = <3>;
++		lan3 {
++			label = "blue:lan3";
+ 			gpios = <&tlmm 42 GPIO_ACTIVE_LOW>;
+ 		};
+ 
+-		led-8 {
+-			color = <LED_COLOR_ID_BLUE>;
+-			function = LED_FUNCTION_LAN;
+-			function-enumerator = <4>;
++		lan4 {
++			label = "blue:lan4";
+ 			gpios = <&tlmm 49 GPIO_ACTIVE_LOW>;
+ 		};
+ 	};
+EOF
+        
+        if [ -f "$patch_dir/999-fix-ac42u-led.patch" ]; then
+            log "  ✅ 已创建 DTS 修复补丁: $patch_dir/999-fix-ac42u-led.patch"
+        fi
+        
+        log "  ✅ LEDE AC42U 特殊处理完成"
     fi
     # ============================================
     
