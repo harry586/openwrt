@@ -1256,6 +1256,40 @@ EOF
             ;;
     esac
     
+    # ============================================
+    # LEDE源码 AC42U 特殊内核配置修复
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
+        log "🔧 [LEDE AC42U] 添加特殊内核配置修复（解决无法启动问题）..."
+        
+        cat >> .config << 'EOF'
+# LEDE AC42U 启动修复 - 内核分区解析支持
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+
+# 确保 MTD 和 UBI 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPLIT=y
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="console=ttyMSM0,115200n8"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 看门狗支持
+CONFIG_WATCHDOG=y
+CONFIG_QCOM_WDT=y
+EOF
+        
+        log "  ✅ 已添加 LEDE AC42U 启动修复内核配置"
+    fi
+    # ============================================
+    
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
@@ -2801,6 +2835,7 @@ integrate_custom_files() {
     local other_count=0
     local english_count=0
     local non_english_count=0
+    local ipk_files=()
     
     echo ""
     log "📋 详细文件列表:"
@@ -2824,6 +2859,7 @@ integrate_custom_files() {
         if [[ "$file_name" =~ .ipk$ ]] || [[ "$file_name" =~ .IPK$ ]] || [[ "$file_name" =~ .Ipk$ ]]; then
             local type_desc="📦 IPK包"
             ipk_count=$((ipk_count + 1))
+            ipk_files+=("$file")
         elif [[ "$file_name" =~ .sh$ ]] || [[ "$file_name" =~ .Sh$ ]] || [[ "$file_name" =~ .SH$ ]]; then
             local type_desc="📜 脚本"
             script_count=$((script_count + 1))
@@ -2857,6 +2893,128 @@ integrate_custom_files() {
         log "  为了更好的兼容性，方便复制、运行，建议使用英文文件名"
         log "  当前系统会自动处理非英文文件名，但英文名有更好的兼容性"
     fi
+    
+    # ============================================
+    # 新增：修复 IPK 包中的文件冲突
+    # ============================================
+    if [ $ipk_count -gt 0 ]; then
+        echo ""
+        log "🔧 ===== 扫描并修复 IPK 包中的文件冲突 ====="
+        echo ""
+        
+        local fixed_count=0
+        local checked_count=0
+        local failed_count=0
+        local skipped_count=0
+        local total_deleted_files=0
+        local conflict_patterns=(
+            "usr/lib/lua/luci/fs.lua"           # 与 luci-lib-fs 冲突
+            "usr/lib/lua/luci/util.lua"         # 与 luci-lib-base 冲突
+            "usr/lib/lua/luci/ip.lua"           # 与 luci-lib-ip 冲突
+            "usr/lib/lua/luci/json.lua"         # 与 luci-lib-jsonc 冲突
+            "etc/init.d/boot"                   # 系统关键文件
+            "etc/rc.common"                     # 系统关键文件
+        )
+        
+        for ipk_file in "${ipk_files[@]}"; do
+            local ipk_name=$(basename "$ipk_file")
+            checked_count=$((checked_count + 1))
+            
+            echo "  📦 [$checked_count/$ipk_count] 检查: $ipk_name"
+            
+            # 创建临时目录
+            local temp_dir=$(mktemp -d)
+            local original_dir=$(pwd)
+            local ipk_fixed=0
+            local deleted_list=()
+            
+            cd "$temp_dir" || {
+                echo "      ❌ 无法创建临时目录"
+                failed_count=$((failed_count + 1))
+                continue
+            }
+            
+            # 解包 IPK
+            if ar x "$ipk_file" 2>/dev/null; then
+                local needs_repack=0
+                
+                # 检查是否存在 data.tar.gz
+                if [ -f "data.tar.gz" ]; then
+                    # 解压 data.tar.gz
+                    tar -xzf data.tar.gz 2>/dev/null || true
+                    
+                    # 检查冲突文件
+                    for pattern in "${conflict_patterns[@]}"; do
+                        if [ -f "./$pattern" ]; then
+                            echo "      🗑️ 发现冲突: $pattern"
+                            rm -f "./$pattern"
+                            deleted_list+=("$pattern")
+                            needs_repack=1
+                        fi
+                    done
+                    
+                    # 额外检查：如果 data 目录下除了冲突文件外没有其他内容，则跳过
+                    local file_count_after=$(find . -type f ! -path "./control.tar.gz" ! -path "./debian-binary" ! -path "./data.tar.gz" 2>/dev/null | wc -l)
+                    
+                    if [ $needs_repack -eq 1 ] && [ $file_count_after -gt 0 ]; then
+                        # 重新打包 data.tar.gz
+                        rm -f data.tar.gz
+                        tar -czf data.tar.gz ./* --exclude=control.tar.gz --exclude=debian-binary 2>/dev/null || tar -czf data.tar.gz ./*
+                        
+                        # 重新生成 IPK
+                        rm -f "$ipk_file"
+                        ar rcs "$ipk_file" debian-binary control.tar.gz data.tar.gz 2>/dev/null
+                        
+                        if [ -f "$ipk_file" ]; then
+                            ipk_fixed=1
+                            fixed_count=$((fixed_count + 1))
+                            total_deleted_files=$((total_deleted_files + ${#deleted_list[@]}))
+                            
+                            echo "      ✅ 修复成功！已删除 ${#deleted_list[@]} 个冲突文件"
+                            for deleted in "${deleted_list[@]}"; do
+                                echo "         - $deleted"
+                            done
+                        else
+                            echo "      ❌ 重新打包失败"
+                            failed_count=$((failed_count + 1))
+                        fi
+                    elif [ $needs_repack -eq 1 ] && [ $file_count_after -eq 0 ]; then
+                        echo "      ⚠️ IPK 中除冲突文件外无其他有效内容，跳过修复"
+                        skipped_count=$((skipped_count + 1))
+                    else
+                        echo "      ✅ 未发现冲突文件"
+                    fi
+                else
+                    echo "      ⚠️ IPK 中未找到 data.tar.gz"
+                    failed_count=$((failed_count + 1))
+                fi
+            else
+                echo "      ❌ 解包 IPK 失败（可能不是有效的 ar 格式）"
+                failed_count=$((failed_count + 1))
+            fi
+            
+            cd "$original_dir"
+            rm -rf "$temp_dir"
+            echo ""
+        done
+        
+        echo "  ----------------------------------------"
+        echo "  📊 IPK 修复统计:"
+        echo "     总检查数: $checked_count 个"
+        echo "     成功修复: $fixed_count 个"
+        echo "     修复失败: $failed_count 个"
+        echo "     跳过处理: $skipped_count 个"
+        echo "     删除冲突文件总数: $total_deleted_files 个"
+        echo "  ----------------------------------------"
+        
+        if [ $fixed_count -gt 0 ]; then
+            log "✅ 共修复 $fixed_count 个 IPK 包的文件冲突"
+        else
+            log "✅ 所有 IPK 包检查通过，无冲突"
+        fi
+        echo ""
+    fi
+    # ============================================
     
     echo ""
     log "🔧 步骤1: 创建自定义文件目录"
@@ -2964,7 +3122,8 @@ if [ -d "$CUSTOM_DIR" ]; then
             echo "  🔧 正在安装 [$IPK_COUNT]: $rel_path" >> $LOG_FILE
             echo "      开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
             
-            if opkg install "$file" >> $LOG_FILE 2>&1; then
+            # 使用 --force-overwrite 避免文件冲突
+            if opkg install --force-overwrite "$file" >> $LOG_FILE 2>&1; then
                 echo "      ✅ 安装成功" >> $LOG_FILE
                 IPK_SUCCESS=$((IPK_SUCCESS + 1))
             else
