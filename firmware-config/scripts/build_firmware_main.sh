@@ -1284,190 +1284,9 @@ CONFIG_CMDLINE_FROM_BOOTLOADER=y
 # 看门狗支持
 CONFIG_WATCHDOG=y
 CONFIG_QCOM_WDT=y
-
-# 禁用新式 LED 类支持（LEDE 旧内核可能不支持）
-# CONFIG_LEDS_CLASS_MULTICOLOR is not set
-# CONFIG_LEDS_QCOM_LPG is not set
-
-# 确保使用传统 GPIO LED 驱动
-CONFIG_LEDS_GPIO=y
-CONFIG_NEW_LEDS=y
 EOF
         
         log "  ✅ 已添加 LEDE AC42U 启动修复内核配置"
-        
-        # ============================================
-        # 修复 DTS 文件（LEDE 旧内核不支持新的 LED 绑定）
-        # ============================================
-        log "🔧 [LEDE AC42U] 修复 DTS 文件（移除新式 LED 绑定）..."
-        
-        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
-        
-        if [ -f "$dts_file" ]; then
-            # 备份原文件
-            cp "$dts_file" "$dts_file.bak"
-            log "  📁 已备份原 DTS 文件: $dts_file.bak"
-            
-            # 检查是否包含新式 LED 绑定
-            if grep -q "color = <LED_COLOR_ID_" "$dts_file" || grep -q "function = LED_FUNCTION_" "$dts_file"; then
-                log "  🔍 检测到新式 LED 绑定，正在转换为旧格式..."
-                
-                # 使用 sed 进行转换
-                # 1. 删除新式 LED 绑定属性
-                sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
-                sed -i '/function = LED_FUNCTION_/d' "$dts_file"
-                sed -i '/function-enumerator = /d' "$dts_file"
-                
-                # 2. 移除不需要的头文件
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
-                
-                # 3. 修复默认触发器（确保使用正确的触发器名称）
-                sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
-                
-                # 4. 修复 WAN LED 触发器
-                sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
-                
-                log "  ✅ DTS 文件修复完成"
-                log "  📋 修改内容:"
-                log "     - 删除 color 属性"
-                log "     - 删除 function 属性"
-                log "     - 删除 function-enumerator 属性"
-                log "     - 删除 leds/common.h 头文件"
-                log "     - 修复 LED 触发器"
-            else
-                log "  ℹ️ DTS 文件已是旧格式，无需修复"
-            fi
-        else
-            log "  ⚠️ DTS 文件不存在: $dts_file"
-            
-            # 尝试查找其他可能的路径
-            local alt_dts=$(find target/linux/ipq40xx -name "*ac42u*.dts" 2>/dev/null | head -1)
-            if [ -n "$alt_dts" ]; then
-                log "  📁 找到替代 DTS 文件: $alt_dts"
-                cp "$alt_dts" "$alt_dts.bak"
-                sed -i '/color = <LED_COLOR_ID_/d' "$alt_dts"
-                sed -i '/function = LED_FUNCTION_/d' "$alt_dts"
-                sed -i '/function-enumerator = /d' "$alt_dts"
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$alt_dts"
-                log "  ✅ 替代 DTS 文件修复完成"
-            fi
-        fi
-        
-        # ============================================
-        # 创建内核补丁（作为备用方案）
-        # ============================================
-        log "🔧 [LEDE AC42U] 创建内核补丁..."
-        
-        local patch_dir="target/linux/ipq40xx/patches-5.4"
-        mkdir -p "$patch_dir"
-        
-        cat > "$patch_dir/999-fix-ac42u-led.patch" << 'EOF'
---- a/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
-+++ b/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
-@@ -3,7 +3,6 @@
- #include "qcom-ipq4019.dtsi"
- #include <dt-bindings/gpio/gpio.h>
- #include <dt-bindings/input/input.h>
--#include <dt-bindings/leds/common.h>
- #include <dt-bindings/soc/qcom,tcsr.h>
- 
- / {
-@@ -98,64 +97,54 @@
- 	leds {
- 		compatible = "gpio-leds";
- 
--		led_power: led-0 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_STATUS;
-+		led_power: power {
-+			label = "blue:power";
- 			gpios = <&tlmm 40 GPIO_ACTIVE_LOW>;
--			label = "blue:status";
-+			default-state = "on";
- 		};
- 
--		led-1 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WAN;
-+		wan_blue {
-+			label = "blue:wan";
- 			gpios = <&tlmm 61 GPIO_ACTIVE_HIGH>;
- 			linux,default-trigger = "90000.mdio-1:04:link";
- 		};
- 
--		led-2 {
--			color = <LED_COLOR_ID_RED>;
--			function = LED_FUNCTION_WAN;
-+		wan_red {
-+			label = "red:wan";
- 			gpios = <&tlmm 68 GPIO_ACTIVE_HIGH>;
- 			linux,default-trigger = "none";
- 		};
- 
--		led-3 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WLAN;
--			function-enumerator = <0>;
-+		wlan2g {
-+			label = "blue:wlan2g";
- 			gpios = <&tlmm 52 GPIO_ACTIVE_LOW>;
--			linux,default-trigger = "phy1tpt";
-+			linux,default-trigger = "phy0tpt";
- 		};
- 
--		led-4 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WLAN;
--			function-enumerator = <1>;
-+		wlan5g {
-+			label = "blue:wlan5g";
- 			gpios = <&tlmm 54 GPIO_ACTIVE_LOW>;
- 			linux,default-trigger = "phy0tpt";
- 		};
- 
--		led-5 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <1>;
-+		lan1 {
-+			label = "blue:lan1";
- 			gpios = <&tlmm 45 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-6 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <2>;
-+		lan2 {
-+			label = "blue:lan2";
- 			gpios = <&tlmm 43 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-7 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <3>;
-+		lan3 {
-+			label = "blue:lan3";
- 			gpios = <&tlmm 42 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-8 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <4>;
-+		lan4 {
-+			label = "blue:lan4";
- 			gpios = <&tlmm 49 GPIO_ACTIVE_LOW>;
- 		};
- 	};
-EOF
-        
-        if [ -f "$patch_dir/999-fix-ac42u-led.patch" ]; then
-            log "  ✅ 已创建 DTS 修复补丁: $patch_dir/999-fix-ac42u-led.patch"
-        fi
-        
-        log "  ✅ LEDE AC42U 特殊处理完成"
     fi
     # ============================================
     
@@ -3076,7 +2895,7 @@ integrate_custom_files() {
     fi
     
     # ============================================
-    # 新增：修复 IPK 包中的文件冲突
+    # 扫描并修复 IPK 包中的文件冲突
     # ============================================
     if [ $ipk_count -gt 0 ]; then
         echo ""
@@ -3119,32 +2938,110 @@ integrate_custom_files() {
             
             # 解包 IPK（尝试多种方式）
             local unpack_success=0
+            local unpack_method=""
             
             # 方式1：使用 ar 命令（标准 IPK 格式）
-            if ar x "$ipk_file" 2>/dev/null && [ -f "debian-binary" ]; then
-                unpack_success=1
-            # 方式2：使用 tar 直接解压（某些 IPK 实际上是 tar.gz 格式）
-            elif tar -xzf "$ipk_file" 2>/dev/null && [ -f "./control" ] 2>/dev/null; then
-                unpack_success=1
-                # 这种情况下需要手动创建必要文件
-                touch debian-binary 2>/dev/null || true
-                echo "2.0" > debian-binary 2>/dev/null || true
+            # 有些系统需要安装 binutils 才有 ar 命令
+            if command -v ar >/dev/null 2>&1; then
+                if ar x "$ipk_file" 2>/dev/null; then
+                    if [ -f "debian-binary" ] || [ -f "control.tar.gz" ] || [ -f "data.tar.gz" ]; then
+                        unpack_success=1
+                        unpack_method="ar"
+                    fi
+                fi
+            fi
+            
+            # 方式2：使用 tar 直接提取（绕过 ar）
+            if [ $unpack_success -eq 0 ]; then
+                # 尝试用 tar 跳过 ar 头直接解压
+                # ar 格式的文件头是 "!<arch>\n"，后面跟着文件内容
+                # 我们可以用 dd 跳过头部，但更简单的是用 7z（如果可用）
+                if command -v 7z >/dev/null 2>&1; then
+                    if 7z x "$ipk_file" -o"$temp_dir" >/dev/null 2>&1; then
+                        unpack_success=1
+                        unpack_method="7z"
+                    fi
+                fi
+            fi
+            
             # 方式3：尝试用 dpkg-deb（如果系统有）
-            elif command -v dpkg-deb >/dev/null 2>&1 && dpkg-deb -x "$ipk_file" . 2>/dev/null; then
-                unpack_success=1
+            if [ $unpack_success -eq 0 ] && command -v dpkg-deb >/dev/null 2>&1; then
+                if dpkg-deb -x "$ipk_file" . 2>/dev/null; then
+                    dpkg-deb -e "$ipk_file" 2>/dev/null || true
+                    unpack_success=1
+                    unpack_method="dpkg-deb"
+                fi
+            fi
+            
+            # 方式4：使用 python 解包（GitHub Actions 默认有 python3）
+            if [ $unpack_success -eq 0 ] && command -v python3 >/dev/null 2>&1; then
+                cat > "$temp_dir/unpack_ipk.py" << 'PYEOF'
+import sys
+import tarfile
+import io
+
+def unpack_ipk(ipk_path, output_dir):
+    try:
+        with open(ipk_path, 'rb') as f:
+            # 读取 ar 头
+            header = f.read(8)
+            if header != b'!<arch>\n':
+                return False
+            
+            while True:
+                # 读取文件头
+                file_header = f.read(60)
+                if len(file_header) < 60:
+                    break
+                
+                # 解析文件名（16字节）
+                name = file_header[0:16].decode('ascii').strip()
+                # 解析文件大小（10字节）
+                size_str = file_header[48:58].decode('ascii').strip()
+                size = int(size_str) if size_str else 0
+                
+                if name and size > 0:
+                    data = f.read(size)
+                    # 跳过对齐字节（奇数大小补一个字节）
+                    if size % 2 == 1:
+                        f.read(1)
+                    
+                    # 保存文件
+                    if name == 'debian-binary':
+                        with open(f'{output_dir}/debian-binary', 'wb') as out:
+                            out.write(data)
+                    elif name.startswith('control.tar'):
+                        with open(f'{output_dir}/control.tar.gz', 'wb') as out:
+                            out.write(data)
+                    elif name.startswith('data.tar'):
+                        with open(f'{output_dir}/data.tar.gz', 'wb') as out:
+                            out.write(data)
+        return True
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return False
+
+if __name__ == '__main__':
+    if len(sys.argv) != 3:
+        sys.exit(1)
+    sys.exit(0 if unpack_ipk(sys.argv[1], sys.argv[2]) else 1)
+PYEOF
+                if python3 "$temp_dir/unpack_ipk.py" "$ipk_file" "$temp_dir" 2>/dev/null; then
+                    unpack_success=1
+                    unpack_method="python"
+                fi
             fi
             
             if [ $unpack_success -eq 1 ]; then
                 local needs_repack=0
                 
-                # 查找数据文件（可能是 data.tar.gz, data.tar.xz, 或直接是目录结构）
-                local data_file=""
+                # 解压数据文件
                 if [ -f "data.tar.gz" ]; then
-                    data_file="data.tar.gz"
                     tar -xzf data.tar.gz 2>/dev/null || true
                 elif [ -f "data.tar.xz" ]; then
-                    data_file="data.tar.xz"
                     tar -xJf data.tar.xz 2>/dev/null || true
+                elif [ -f "data.tar" ]; then
+                    tar -xf data.tar 2>/dev/null || true
                 fi
                 
                 # 检查冲突文件
@@ -3158,62 +3055,25 @@ integrate_custom_files() {
                     fi
                 done
                 
-                # 如果目录结构存在（dpkg-deb 解压方式），也检查
-                if [ -z "$data_file" ]; then
-                    for pattern in "${conflict_patterns[@]}"; do
-                        if [ -f "./$pattern" ]; then
-                            echo "      🗑️ 发现冲突: $pattern"
-                            rm -f "./$pattern"
-                            deleted_list+=("$pattern")
-                            needs_repack=1
-                            ipk_has_conflict=1
-                        fi
-                    done
-                fi
-                
-                # 额外检查：如果 data 目录下除了冲突文件外没有其他内容，则跳过
-                local file_count_after=$(find . -type f ! -path "./control.tar.gz" ! -path "./debian-binary" ! -path "./data.tar.gz" ! -path "./data.tar.xz" ! -name "control" ! -name "postinst" ! -name "prerm" 2>/dev/null | wc -l)
+                # 检查是否有其他文件
+                local file_count_after=$(find . -type f ! -name "debian-binary" ! -name "control.tar.gz" ! -name "data.tar.gz" ! -name "data.tar.xz" ! -name "data.tar" ! -name "*.py" 2>/dev/null | wc -l)
                 
                 if [ $needs_repack -eq 1 ] && [ $file_count_after -gt 0 ]; then
-                    # 重新打包
-                    if [ -n "$data_file" ]; then
-                        # 删除旧的数据文件
-                        rm -f "$data_file"
-                        # 重新打包（排除控制文件）
-                        if [[ "$data_file" == "data.tar.gz" ]]; then
-                            tar -czf data.tar.gz ./* --exclude=control.tar.gz --exclude=debian-binary --exclude=control --exclude=postinst --exclude=prerm 2>/dev/null || tar -czf data.tar.gz ./*
-                        elif [[ "$data_file" == "data.tar.xz" ]]; then
-                            tar -cJf data.tar.xz ./* --exclude=control.tar.gz --exclude=debian-binary --exclude=control --exclude=postinst --exclude=prerm 2>/dev/null || tar -cJf data.tar.xz ./*
-                        fi
+                    # 重新打包 data.tar.gz
+                    rm -f data.tar.gz data.tar.xz data.tar 2>/dev/null
+                    
+                    # 收集所有文件（排除控制文件）
+                    local files_to_pack=$(find . -type f ! -name "debian-binary" ! -name "control.tar.gz" ! -name "*.py" 2>/dev/null)
+                    
+                    if [ -n "$files_to_pack" ]; then
+                        tar -czf data.tar.gz ./* --exclude=debian-binary --exclude=control.tar.gz --exclude=*.py 2>/dev/null || tar -czf data.tar.gz ./* 2>/dev/null
                     fi
                     
                     # 重新生成 IPK
-                    rm -f "$ipk_file"
-                    
-                    # 收集所有需要的文件
-                    local repack_files=""
-                    if [ -f "debian-binary" ]; then
-                        repack_files="$repack_files debian-binary"
-                    fi
-                    if [ -f "control.tar.gz" ]; then
-                        repack_files="$repack_files control.tar.gz"
-                    elif [ -f "control" ]; then
-                        # 如果有 control 文件但没有 control.tar.gz，创建一个
-                        tar -czf control.tar.gz control postinst prerm 2>/dev/null || true
-                        if [ -f "control.tar.gz" ]; then
-                            repack_files="$repack_files control.tar.gz"
-                        fi
-                    fi
-                    if [ -f "data.tar.gz" ]; then
-                        repack_files="$repack_files data.tar.gz"
-                    elif [ -f "data.tar.xz" ]; then
-                        repack_files="$repack_files data.tar.xz"
-                    fi
-                    
-                    if [ -n "$repack_files" ]; then
-                        ar rcs "$ipk_file" $repack_files 2>/dev/null
+                    if [ -f "data.tar.gz" ] && [ -f "control.tar.gz" ] && [ -f "debian-binary" ]; then
+                        rm -f "$ipk_file"
                         
-                        if [ -f "$ipk_file" ]; then
+                        if ar rcs "$ipk_file" debian-binary control.tar.gz data.tar.gz 2>/dev/null; then
                             ipk_fixed=1
                             fixed_count=$((fixed_count + 1))
                             total_deleted_files=$((total_deleted_files + ${#deleted_list[@]}))
@@ -3223,11 +3083,11 @@ integrate_custom_files() {
                                 echo "         - $deleted"
                             done
                         else
-                            echo "      ❌ 重新打包失败"
+                            echo "      ❌ 重新打包失败（ar 命令不可用），将保留原文件"
                             failed_count=$((failed_count + 1))
                         fi
                     else
-                        echo "      ❌ 没有找到可打包的文件"
+                        echo "      ❌ 缺少必要文件，无法重新打包"
                         failed_count=$((failed_count + 1))
                     fi
                 elif [ $needs_repack -eq 1 ] && [ $file_count_after -eq 0 ]; then
@@ -3238,7 +3098,8 @@ integrate_custom_files() {
                     no_conflict_count=$((no_conflict_count + 1))
                 fi
             else
-                echo "      ⚠️ 解包失败，将保留原文件（刷机后可能需要手动处理）"
+                echo "      ⚠️ 无法解包（尝试了 ar/7z/dpkg-deb/python 均失败）"
+                echo "      💡 将保留原文件，刷机后使用 --force-overwrite 强制安装"
                 failed_count=$((failed_count + 1))
             fi
             
@@ -3252,16 +3113,18 @@ integrate_custom_files() {
         echo "     总检查数: $checked_count 个"
         echo "     成功修复: $fixed_count 个"
         echo "     无冲突: $no_conflict_count 个"
-        echo "     修复失败: $failed_count 个"
+        echo "     无法处理: $failed_count 个（将强制安装）"
         echo "     跳过处理: $skipped_count 个"
         echo "     删除冲突文件总数: $total_deleted_files 个"
         echo "  ----------------------------------------"
         
         if [ $fixed_count -gt 0 ]; then
             log "✅ 共修复 $fixed_count 个 IPK 包的文件冲突"
-        elif [ $failed_count -gt 0 ]; then
-            log "⚠️ 有 $failed_count 个 IPK 包解包失败，将保留原文件"
-        else
+        fi
+        if [ $failed_count -gt 0 ]; then
+            log "💡 有 $failed_count 个 IPK 包无法预处理，刷机后将使用 --force-overwrite 强制安装"
+        fi
+        if [ $fixed_count -eq 0 ] && [ $no_conflict_count -eq $checked_count ]; then
             log "✅ 所有 IPK 包检查通过，无冲突"
         fi
         echo ""
@@ -3375,8 +3238,10 @@ if [ -d "$CUSTOM_DIR" ]; then
             echo "      开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
             
             # 使用 --force-overwrite 避免文件冲突
+            # 原因：自定义 IPK 可能包含与系统包相同的文件（如 luci-lib-fs 的 fs.lua）
+            # 由于文件内容相同，覆盖是安全的
             if opkg install --force-overwrite "$file" >> $LOG_FILE 2>&1; then
-                echo "      ✅ 安装成功" >> $LOG_FILE
+                echo "      ✅ 安装成功（使用 --force-overwrite）" >> $LOG_FILE
                 IPK_SUCCESS=$((IPK_SUCCESS + 1))
             else
                 echo "      ❌ 安装失败，继续下一个..." >> $LOG_FILE
@@ -3511,11 +3376,17 @@ if [ -d "$CUSTOM_DIR" ]; then
     TOTAL_SUCCESS=$((IPK_SUCCESS + SCRIPT_SUCCESS + OTHER_SUCCESS))
     TOTAL_FAILED=$((IPK_FAILED + SCRIPT_FAILED + OTHER_FAILED))
     
+    if [ $((TOTAL_SUCCESS + TOTAL_FAILED)) -gt 0 ]; then
+        SUCCESS_RATE=$((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))
+    else
+        SUCCESS_RATE=0
+    fi
+    
     echo "📈 总体统计:" >> $LOG_FILE
     echo "  总文件数: $TOTAL_FILES 个" >> $LOG_FILE
     echo "  成功处理: $TOTAL_SUCCESS 个" >> $LOG_FILE
     echo "  失败处理: $TOTAL_FAILED 个" >> $LOG_FILE
-    echo "  成功率: $((TOTAL_SUCCESS * 100 / (TOTAL_SUCCESS + TOTAL_FAILED)))%" >> $LOG_FILE
+    echo "  成功率: ${SUCCESS_RATE}%" >> $LOG_FILE
     echo "" >> $LOG_FILE
     
     echo "📋 详细分类统计:" >> $LOG_FILE
@@ -5979,7 +5850,7 @@ workflow_step26_check_artifacts() {
                 printf "  📌 %-60s %s %s %s\n" "$fname" "$fsize_human" "$ftype_display" "$status"
                 flashable_count=$((flashable_count + 1))
             fi
-        done | head -20
+        done
         
         if [ $flashable_count -eq 0 ]; then
             echo "  ⚠️ 没有找到可刷机的固件文件"
@@ -5994,7 +5865,7 @@ workflow_step26_check_artifacts() {
                     printf "  🔷 %-60s %s [恢复用]\n" "$fname" "$fsize"
                     found_alt=1
                 fi
-            done <<< "$all_files" | head -5
+            done <<< "$all_files"
             
             if [ $found_alt -eq 0 ]; then
                 echo "  ❌ 完全没有找到任何固件文件"
