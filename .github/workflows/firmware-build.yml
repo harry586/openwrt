@@ -190,13 +190,13 @@ jobs:
       #【firmware-build.yml-02-end】
 
 #【firmware-build.yml-03】
-- name: "03. 上传源代码Artifacts"
-  uses: actions/upload-artifact@v4
-  with:
-    name: source-${{ env.TIMESTAMP_SEC }}
-    path: /tmp/build-artifacts/source-archive/
-    retention-days: 7
-    if-no-files-found: error
+      - name: "03. 上传源代码Artifacts"
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-${{ env.TIMESTAMP_SEC }}
+          path: /tmp/build-artifacts/source-archive/
+          retention-days: 7
+          if-no-files-found: error
 #【firmware-build.yml-03-end】
 
       #【firmware-build.yml-04】
