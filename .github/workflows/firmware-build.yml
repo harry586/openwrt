@@ -103,15 +103,20 @@ jobs:
             FINAL_DEVICE_NAME="${{ github.event.inputs.device_name }}"
           fi
           
+          # 获取源码名称
+          SOURCE_REPO_NAME="${{ github.event.inputs.source_repo }}"
+          
           TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
-          TIMESTAMP_SEC="$FINAL_DEVICE_NAME-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-$TIMESTAMP_LOCAL"
+          TIMESTAMP_SEC="${SOURCE_REPO_NAME}-${FINAL_DEVICE_NAME}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-${TIMESTAMP_LOCAL}"
           
           echo "TIMESTAMP_SEC=$TIMESTAMP_SEC" >> $GITHUB_ENV
           echo "START_TIME=$START_TIME" >> $GITHUB_ENV
           echo "FINAL_DEVICE_NAME=$FINAL_DEVICE_NAME" >> $GITHUB_ENV
+          echo "SOURCE_REPO_NAME=$SOURCE_REPO_NAME" >> $GITHUB_ENV
           
           echo "✅ 生成时间戳: $TIMESTAMP_SEC"
           echo "📋 构建配置:"
+          echo "  源码类型: $SOURCE_REPO_NAME"
           echo "  预定义设备: ${{ github.event.inputs.device_name }}"
           echo "  手动设备名: ${{ github.event.inputs.manual_device_name }}"
           echo "  最终设备名: $FINAL_DEVICE_NAME"
@@ -184,15 +189,15 @@ jobs:
           echo "✅ 步骤02 完成"
       #【firmware-build.yml-02-end】
 
-      #【firmware-build.yml-03】
-      - name: "03. 上传源代码Artifacts"
-        uses: actions/upload-artifact@v4
-        with:
-          name: source-${{ env.TIMESTAMP_SEC }}
-          path: /tmp/build-artifacts/source-archive/
-          retention-days: 7
-          if-no-files-found: error
-      #【firmware-build.yml-03-end】
+#【firmware-build.yml-03】
+- name: "03. 上传源代码Artifacts"
+  uses: actions/upload-artifact@v4
+  with:
+    name: source-${{ env.TIMESTAMP_SEC }}
+    path: /tmp/build-artifacts/source-archive/
+    retention-days: 7
+    if-no-files-found: error
+#【firmware-build.yml-03-end】
 
       #【firmware-build.yml-04】
       - name: "04. 修复权限问题"
@@ -525,13 +530,13 @@ jobs:
 
 #【firmware-build.yml-28】
       - name: "28. 上传配置文件"
-        if: always()  # 改为 always()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: config-${{ env.TIMESTAMP_SEC }}
           path: ${{ github.workspace }}/firmware-config/config-backup/
           retention-days: 7
-          if-no-files-found: warn  # 改为 warn
+          if-no-files-found: warn
 #【firmware-build.yml-28-end】
 
       #【firmware-build.yml-29】
@@ -573,13 +578,13 @@ jobs:
       
 #【firmware-build.yml-31】
       - name: "31. 上传错误检查报告"
-        if: always()  # 无论成功失败都上传
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: error-report-${{ env.TIMESTAMP_SEC }}
           path: ${{ github.workspace }}/error-reports/
           retention-days: 7
-          if-no-files-found: warn  # 改为 warn 而不是 error
+          if-no-files-found: warn
 #【firmware-build.yml-31-end】
 
 #【firmware-build.yml-32】
