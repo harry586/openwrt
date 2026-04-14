@@ -1304,27 +1304,17 @@ EOF
         local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
         
         if [ -f "$dts_file" ]; then
-            # 备份原文件
             cp "$dts_file" "$dts_file.bak"
             log "  📁 已备份原 DTS 文件: $dts_file.bak"
             
-            # 检查是否包含新式 LED 绑定
             if grep -q "color = <LED_COLOR_ID_" "$dts_file" || grep -q "function = LED_FUNCTION_" "$dts_file"; then
                 log "  🔍 检测到新式 LED 绑定，正在转换为旧格式..."
                 
-                # 使用 sed 进行转换
-                # 1. 删除新式 LED 绑定属性
                 sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
                 sed -i '/function = LED_FUNCTION_/d' "$dts_file"
                 sed -i '/function-enumerator = /d' "$dts_file"
-                
-                # 2. 移除不需要的头文件
                 sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
-                
-                # 3. 修复默认触发器（确保使用正确的触发器名称）
                 sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
-                
-                # 4. 修复 WAN LED 触发器
                 sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
                 
                 log "  ✅ DTS 文件修复完成"
@@ -1340,7 +1330,6 @@ EOF
         else
             log "  ⚠️ DTS 文件不存在: $dts_file"
             
-            # 尝试查找其他可能的路径
             local alt_dts=$(find target/linux/ipq40xx -name "*ac42u*.dts" 2>/dev/null | head -1)
             if [ -n "$alt_dts" ]; then
                 log "  📁 找到替代 DTS 文件: $alt_dts"
@@ -1997,27 +1986,27 @@ EOF
     fi
     
     # ============================================
-    # 根据源码类型修正固件名称前缀（通用版）
+    # 修正固件名称前缀（根据源码类型）
     # ============================================
     log "🔧 修正固件名称前缀（根据源码类型）..."
     
-    # 直接使用 SOURCE_REPO_TYPE 作为固件前缀
-    local vendor_prefix="$SOURCE_REPO_TYPE"
-    
-    # 生成对应的发行版名称（首字母大写，其余小写）
+    local vendor_prefix=""
     local dist_name=""
     case "$SOURCE_REPO_TYPE" in
         "immortalwrt")
+            vendor_prefix="immortalwrt"
             dist_name="ImmortalWrt"
             ;;
         "lede")
+            vendor_prefix="lede"
             dist_name="LEDE"
             ;;
         "openwrt")
+            vendor_prefix="openwrt"
             dist_name="OpenWrt"
             ;;
         *)
-            # 通用处理：首字母大写，其余小写
+            vendor_prefix=$(echo "$SOURCE_REPO_TYPE" | tr '[:upper:]' '[:lower:]')
             dist_name=$(echo "$SOURCE_REPO_TYPE" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
             ;;
     esac
@@ -2026,57 +2015,88 @@ EOF
     log "  📌 固件前缀: $vendor_prefix"
     log "  📌 发行版名称: $dist_name"
     
-    # 1. 通过 CONFIG_VERSION_DIST 设置发行版名称
+    # 1. 设置 CONFIG_VERSION_DIST
     sed -i '/^CONFIG_VERSION_DIST=/d' .config
     sed -i '/^# CONFIG_VERSION_DIST/d' .config
     echo "CONFIG_VERSION_DIST=\"$dist_name\"" >> .config
+    log "    ✅ 设置 CONFIG_VERSION_DIST=\"$dist_name\""
     
-    # 2. 修改 include/image.mk 中的默认前缀
+    # 2. 设置 CONFIG_VERSION_REPO
+    sed -i '/^CONFIG_VERSION_REPO=/d' .config
+    sed -i '/^# CONFIG_VERSION_REPO/d' .config
+    echo "CONFIG_VERSION_REPO=\"https://github.com/$SOURCE_REPO_TYPE/$SOURCE_REPO_TYPE.git\"" >> .config
+    log "    ✅ 设置 CONFIG_VERSION_REPO"
+    
+    # 3. 设置 CONFIG_VERSION_CODE_FILENAME
+    sed -i '/^CONFIG_VERSION_CODE_FILENAME=/d' .config
+    sed -i '/^# CONFIG_VERSION_CODE_FILENAME/d' .config
+    echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"">> .config
+    log "    ✅ 设置 CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\""
+    
+    # 4. 设置 CONFIG_VERSION_MANUFACTURER
+    sed -i '/^CONFIG_VERSION_MANUFACTURER=/d' .config
+    sed -i '/^# CONFIG_VERSION_MANUFACTURER/d' .config
+    echo "CONFIG_VERSION_MANUFACTURER=\"$vendor_prefix\"" >> .config
+    log "    ✅ 设置 CONFIG_VERSION_MANUFACTURER=\"$vendor_prefix\""
+    
+    # 5. 修改 include/version.mk（如果存在）
+    if [ -f "include/version.mk" ]; then
+        cp include/version.mk include/version.mk.bak
+        sed -i "s/VERSION_DIST:=.*/VERSION_DIST:=$dist_name/g" include/version.mk
+        sed -i "s/VERSION_REPO:=.*/VERSION_REPO:=https:\/\/github.com\/$SOURCE_REPO_TYPE\/$SOURCE_REPO_TYPE.git/g" include/version.mk
+        sed -i "s/VERSION_CODE_FILENAME:=.*/VERSION_CODE_FILENAME:=$vendor_prefix/g" include/version.mk
+        sed -i "s/VERSION_MANUFACTURER:=.*/VERSION_MANUFACTURER:=$vendor_prefix/g" include/version.mk
+        log "    ✅ 修改 include/version.mk"
+    fi
+    
+    # 6. 修改 include/image.mk 中的 IMAGE_NAME 定义
     if [ -f "include/image.mk" ]; then
         cp include/image.mk include/image.mk.bak
-        
-        # 替换 VERSION_DIST
-        sed -i "s/VERSION_DIST:=.*/VERSION_DIST:=$dist_name/g" include/image.mk
-        
-        # 替换固件名称中的前缀（匹配 openwrt-、immortalwrt-、lede- 等）
         sed -i "s/openwrt-/$vendor_prefix-/g" include/image.mk
         sed -i "s/immortalwrt-/$vendor_prefix-/g" include/image.mk
         sed -i "s/lede-/$vendor_prefix-/g" include/image.mk
         sed -i "s/OpenWrt-/$vendor_prefix-/g" include/image.mk
         sed -i "s/ImmortalWrt-/$vendor_prefix-/g" include/image.mk
         sed -i "s/LEDE-/$vendor_prefix-/g" include/image.mk
-        
-        log "    ✅ 已修改 include/image.mk"
+        log "    ✅ 修改 include/image.mk 中的前缀"
     fi
     
-    # 3. 修改设备定义文件中的前缀
-    if [ -f "target/linux/$TARGET/image/$actual_subtarget.mk" ]; then
-        local image_mk="target/linux/$TARGET/image/$actual_subtarget.mk"
+    # 7. 修改设备定义文件
+    local image_mk="target/linux/$TARGET/image/$actual_subtarget.mk"
+    if [ -f "$image_mk" ]; then
         cp "$image_mk" "$image_mk.bak"
-        
         sed -i "s/openwrt-/$vendor_prefix-/g" "$image_mk"
         sed -i "s/immortalwrt-/$vendor_prefix-/g" "$image_mk"
         sed -i "s/lede-/$vendor_prefix-/g" "$image_mk"
         sed -i "s/OpenWrt/$vendor_prefix/g" "$image_mk"
         sed -i "s/ImmortalWrt/$vendor_prefix/g" "$image_mk"
         sed -i "s/LEDE/$vendor_prefix/g" "$image_mk"
-        
-        log "    ✅ 已修改 $image_mk"
+        log "    ✅ 修改 $image_mk"
     fi
     
-    # 4. 修改其他可能包含固件名称的文件
+    # 8. 修改 generic.mk
     if [ -f "target/linux/$TARGET/image/Makefile" ]; then
-        local image_makefile="target/linux/$TARGET/image/Makefile"
-        cp "$image_makefile" "$image_makefile.bak"
-        
-        sed -i "s/openwrt-/$vendor_prefix-/g" "$image_makefile"
-        sed -i "s/immortalwrt-/$vendor_prefix-/g" "$image_makefile"
-        sed -i "s/lede-/$vendor_prefix-/g" "$image_makefile"
-        
-        log "    ✅ 已修改 $image_makefile"
+        cp "target/linux/$TARGET/image/Makefile" "target/linux/$TARGET/image/Makefile.bak"
+        sed -i "s/openwrt-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
+        sed -i "s/immortalwrt-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
+        sed -i "s/lede-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
+        log "    ✅ 修改 target/linux/$TARGET/image/Makefile"
     fi
     
-    # 更新配置
+    # 9. LEDE 源码特殊处理：修改 feeds.conf.default 中的默认配置
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "  🔧 LEDE 源码特殊处理..."
+        if [ -f "feeds.conf.default" ]; then
+            sed -i 's/^# CONFIG_VERSION_DIST=.*/CONFIG_VERSION_DIST="LEDE"/g' feeds.conf.default 2>/dev/null || true
+        fi
+        if [ -f "package/base-files/files/etc/openwrt_release" ]; then
+            sed -i 's/DISTRIB_ID=.*/DISTRIB_ID="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
+            sed -i 's/DISTRIB_RELEASE=.*/DISTRIB_RELEASE="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
+        fi
+        log "    ✅ LEDE 特殊配置已应用"
+    fi
+    
+    # 10. 更新配置
     make defconfig > /dev/null 2>&1 || true
     
     log "✅ 固件名称前缀修正完成"
@@ -5534,6 +5554,26 @@ EOF
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     
+    # 设置 VERSION_DIST 环境变量，确保编译时使用正确的名称
+    local vendor_dist=""
+    case "$SOURCE_REPO_TYPE" in
+        "immortalwrt")
+            vendor_dist="ImmortalWrt"
+            ;;
+        "lede")
+            vendor_dist="LEDE"
+            ;;
+        "openwrt")
+            vendor_dist="OpenWrt"
+            ;;
+        *)
+            vendor_dist=$(echo "$SOURCE_REPO_TYPE" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+            ;;
+    esac
+    export VERSION_DIST="$vendor_dist"
+    export CONFIG_VERSION_DIST="$vendor_dist"
+    log "  📌 编译时 VERSION_DIST 环境变量: $VERSION_DIST"
+    
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
         "openwrt"|"lede")
@@ -5618,7 +5658,7 @@ EOF
     # 步骤1: 编译工具链
     log "  📦 步骤1: 编译工具链..."
     set +e
-    make -j$MAKE_JOBS toolchain/compile $make_args 2>&1 | tee build_step1.log
+    make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log
     STEP1_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
@@ -5639,7 +5679,7 @@ EOF
         log "    尝试 $kernel_retry/$max_kernel_retries..."
         
         set +e
-        make -j$MAKE_JOBS target/compile $make_args 2>&1 | tee build_step2_attempt${kernel_retry}.log
+        make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2_attempt${kernel_retry}.log
         STEP2_EXIT_CODE=${PIPESTATUS[0]}
         set -e
         
@@ -5718,7 +5758,7 @@ EOF
     # 步骤3: 编译所有软件包
     log "  📦 步骤3: 编译所有软件包..."
     set +e
-    make -j$MAKE_JOBS package/compile $make_args 2>&1 | tee build_step3.log
+    make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
     STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
@@ -5732,14 +5772,14 @@ EOF
     
     local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
     if [ $info_count -eq 0 ]; then
-        make package/index $make_args > /dev/null 2>&1 || true
+        make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
     fi
     log "  ✅ 步骤3完成"
     
     # 步骤4: 安装软件包
     log "  📦 步骤4: 安装软件包..."
     set +e
-    make -j1 package/install $make_args 2>&1 | tee build_step4.log
+    make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log
     STEP4_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
@@ -5752,7 +5792,7 @@ EOF
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     set +e
-    make -j1 target/install $make_args 2>&1 | tee build_step5.log
+    make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5.log
     STEP5_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
