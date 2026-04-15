@@ -1118,6 +1118,163 @@ EOF
     log "🔧 基础配置文件内容:"
     cat .config
     
+    # ============================================
+    # LEDE源码 AC42U 设备定义修复 - 必须在配置前执行
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
+        log "🔧 [LEDE AC42U] 修复设备定义文件（解决无法启动问题）..."
+        
+        local image_mk="target/linux/ipq40xx/image/generic.mk"
+        if [ -f "$image_mk" ]; then
+            cp "$image_mk" "$image_mk.bak"
+            log "  📁 已备份原文件: $image_mk.bak"
+            
+            # 检查当前设备定义
+            if grep -q "define Device/asus_rt-ac42u" "$image_mk"; then
+                log "  🔍 找到 AC42U 设备定义，正在修复..."
+                
+                # 提取当前定义的完整内容并替换
+                # 将 Device/FitImageLzma 替换为 Device/FitImage
+                sed -i '/define Device\/asus_rt-ac42u/,/endef/ s/(call Device\/FitImageLzma)/(call Device\/FitImage)/g' "$image_mk"
+                
+                # 检查是否修改成功
+                if grep -A 20 "define Device/asus_rt-ac42u" "$image_mk" | grep -q "Device/FitImage"; then
+                    log "  ✅ 已将 Device/FitImageLzma 替换为 Device/FitImage"
+                else
+                    log "  ⚠️ 替换失败，尝试强制覆盖..."
+                    
+                    # 强制替换整个设备定义块
+                    sed -i '/define Device\/asus_rt-ac42u/,/endef/c\
+define Device/asus_rt-ac42u\
+	$(call Device/FitImage)\
+	DEVICE_VENDOR := ASUS\
+	DEVICE_MODEL := RT-AC42U\
+	DEVICE_ALT0_VENDOR := ASUS\
+	DEVICE_ALT0_MODEL := RT-ACRH17\
+	DEVICE_ALT1_VENDOR := ASUS\
+	DEVICE_ALT1_MODEL := RT-AC2200\
+	SOC := qcom-ipq4019\
+	BLOCKSIZE := 128k\
+	PAGESIZE := 2048\
+	IMAGE_SIZE := 20439364\
+	FILESYSTEMS := squashfs\
+	UIMAGE_NAME := $(shell echo -e '\''\003\001\001\001RT-AC82U'\'')\
+	KERNEL_INITRAMFS := $$(KERNEL) | uImage none\
+	KERNEL_INITRAMFS_SUFFIX := -factory.trx\
+	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport\
+endef' "$image_mk"
+                    
+                    log "  ✅ 已强制替换 AC42U 设备定义"
+                fi
+            fi
+            
+            # 显示修改后的定义
+            log "  📋 修改后的 AC42U 设备定义:"
+            sed -n '/define Device\/asus_rt-ac42u/,/endef/p' "$image_mk" | head -15 | while read line; do
+                log "    $line"
+            done
+            
+            log "  ✅ 设备定义文件修复完成"
+        else
+            log "  ⚠️ 设备定义文件不存在: $image_mk"
+        fi
+        
+        # ============================================
+        # LEDE AC42U 特殊内核配置修复
+        # ============================================
+        log "🔧 [LEDE AC42U] 添加特殊内核配置修复..."
+        
+        cat >> .config << 'EOF'
+# LEDE AC42U 启动修复 - 内核分区解析支持
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+
+# 确保 MTD 和 UBI 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPLIT=y
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="console=ttyMSM0,115200n8"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 看门狗支持
+CONFIG_WATCHDOG=y
+CONFIG_QCOM_WDT=y
+
+# 禁用新式 LED 类支持（LEDE 旧内核可能不支持）
+# CONFIG_LEDS_CLASS_MULTICOLOR is not set
+# CONFIG_LEDS_QCOM_LPG is not set
+
+# 确保使用传统 GPIO LED 驱动
+CONFIG_LEDS_GPIO=y
+CONFIG_NEW_LEDS=y
+EOF
+        
+        log "  ✅ 已添加 LEDE AC42U 启动修复内核配置"
+        
+        # ============================================
+        # 修复 DTS 文件
+        # ============================================
+        log "🔧 [LEDE AC42U] 修复 DTS 文件..."
+        
+        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
+        
+        if [ -f "$dts_file" ]; then
+            cp "$dts_file" "$dts_file.bak"
+            log "  📁 已备份原 DTS 文件: $dts_file.bak"
+            
+            if grep -q "color = <LED_COLOR_ID_" "$dts_file" || grep -q "function = LED_FUNCTION_" "$dts_file"; then
+                log "  🔍 检测到新式 LED 绑定，正在转换..."
+                
+                sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
+                sed -i '/function = LED_FUNCTION_/d' "$dts_file"
+                sed -i '/function-enumerator = /d' "$dts_file"
+                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
+                sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
+                sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
+                
+                log "  ✅ DTS 文件修复完成"
+            else
+                log "  ℹ️ DTS 文件已是旧格式"
+            fi
+        else
+            log "  ⚠️ DTS 文件不存在: $dts_file"
+            local alt_dts=$(find target/linux/ipq40xx -name "*ac42u*.dts" 2>/dev/null | head -1)
+            if [ -n "$alt_dts" ]; then
+                log "  📁 找到 DTS 文件: $alt_dts"
+                cp "$alt_dts" "$alt_dts.bak"
+                sed -i '/color = <LED_COLOR_ID_/d' "$alt_dts"
+                sed -i '/function = LED_FUNCTION_/d' "$alt_dts"
+                sed -i '/function-enumerator = /d' "$alt_dts"
+                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$alt_dts"
+                log "  ✅ DTS 文件修复完成"
+            fi
+        fi
+        
+        # ============================================
+        # 删除可能冲突的内核补丁
+        # ============================================
+        log "🔧 [LEDE AC42U] 清理可能冲突的内核补丁..."
+        
+        local patch_dir="target/linux/ipq40xx/patches-5.4"
+        if [ -d "$patch_dir" ]; then
+            # 删除可能导致 LZMA/FIT 问题的补丁
+            find "$patch_dir" -name "*lzma*" -type f 2>/dev/null | while read p; do
+                log "  🗑️ 删除补丁: $(basename "$p")"
+                rm -f "$p"
+            done
+        fi
+        
+        log "  ✅ LEDE AC42U 特殊处理完成"
+    fi
+    # ============================================
+    
     log "📁 开始合并配置文件..."
     
     append_config() {
@@ -1255,292 +1412,6 @@ EOF
             log "  ✅ ATH79平台配置"
             ;;
     esac
-    
-    # ============================================
-    # LEDE源码 AC42U 特殊处理 - 修复无法启动问题
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
-        log "🔧 [LEDE AC42U] 修复设备定义文件（解决无法启动问题）..."
-        
-        local image_mk="target/linux/ipq40xx/image/generic.mk"
-        if [ -f "$image_mk" ]; then
-            cp "$image_mk" "$image_mk.bak"
-            log "  📁 已备份原文件: $image_mk.bak"
-            
-            # 将 Device/FitImageLzma 替换为 Device/FitImage
-            if grep -q "Device/FitImageLzma" "$image_mk"; then
-                sed -i 's/(call Device\/FitImageLzma)/(call Device\/FitImage)/g' "$image_mk"
-                log "  ✅ 已将 Device/FitImageLzma 替换为 Device/FitImage"
-            fi
-            
-            # 确保 KERNEL_INITRAMFS 使用正确的格式
-            if grep -q "KERNEL_INITRAMFS.*asus_rt-ac42u" "$image_mk" 2>/dev/null; then
-                log "  🔍 检查 AC42U 设备定义..."
-                # 显示当前定义
-                local ac42u_def=$(sed -n '/define Device\/asus_rt-ac42u/,/endef/p' "$image_mk")
-                log "  📋 当前设备定义:"
-                echo "$ac42u_def" | while read line; do
-                    log "    $line"
-                done
-            fi
-            
-            log "  ✅ 设备定义文件修复完成"
-        else
-            log "  ⚠️ 设备定义文件不存在: $image_mk"
-        fi
-        
-        # ============================================
-        # LEDE AC42U 特殊内核配置修复
-        # ============================================
-        log "🔧 [LEDE AC42U] 添加特殊内核配置修复..."
-        
-        cat >> .config << 'EOF'
-# LEDE AC42U 启动修复 - 内核分区解析支持
-CONFIG_CMDLINE_PARTITION=y
-CONFIG_MTD_SPLIT_FIRMWARE=y
-CONFIG_MTD_SPLIT_UIMAGE_FW=y
-
-# 确保 MTD 和 UBI 支持
-CONFIG_MTD=y
-CONFIG_MTD_BLOCK=y
-CONFIG_MTD_SPLIT=y
-CONFIG_MTD_UBI=y
-CONFIG_UBIFS_FS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-
-# 内核命令行参数
-CONFIG_CMDLINE="console=ttyMSM0,115200n8"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-
-# 看门狗支持
-CONFIG_WATCHDOG=y
-CONFIG_QCOM_WDT=y
-
-# 禁用新式 LED 类支持（LEDE 旧内核可能不支持）
-# CONFIG_LEDS_CLASS_MULTICOLOR is not set
-# CONFIG_LEDS_QCOM_LPG is not set
-
-# 确保使用传统 GPIO LED 驱动
-CONFIG_LEDS_GPIO=y
-CONFIG_NEW_LEDS=y
-EOF
-        
-        log "  ✅ 已添加 LEDE AC42U 启动修复内核配置"
-        
-        # ============================================
-        # 修复 DTS 文件（LEDE 旧内核不支持新的 LED 绑定）
-        # ============================================
-        log "🔧 [LEDE AC42U] 修复 DTS 文件（移除新式 LED 绑定）..."
-        
-        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
-        
-        if [ -f "$dts_file" ]; then
-            cp "$dts_file" "$dts_file.bak"
-            log "  📁 已备份原 DTS 文件: $dts_file.bak"
-            
-            if grep -q "color = <LED_COLOR_ID_" "$dts_file" || grep -q "function = LED_FUNCTION_" "$dts_file"; then
-                log "  🔍 检测到新式 LED 绑定，正在转换为旧格式..."
-                
-                sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
-                sed -i '/function = LED_FUNCTION_/d' "$dts_file"
-                sed -i '/function-enumerator = /d' "$dts_file"
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
-                sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
-                sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
-                
-                log "  ✅ DTS 文件修复完成"
-                log "  📋 修改内容:"
-                log "     - 删除 color 属性"
-                log "     - 删除 function 属性"
-                log "     - 删除 function-enumerator 属性"
-                log "     - 删除 leds/common.h 头文件"
-                log "     - 修复 LED 触发器"
-            else
-                log "  ℹ️ DTS 文件已是旧格式，无需修复"
-            fi
-        else
-            log "  ⚠️ DTS 文件不存在: $dts_file"
-            
-            local alt_dts=$(find target/linux/ipq40xx -name "*ac42u*.dts" 2>/dev/null | head -1)
-            if [ -n "$alt_dts" ]; then
-                log "  📁 找到替代 DTS 文件: $alt_dts"
-                cp "$alt_dts" "$alt_dts.bak"
-                sed -i '/color = <LED_COLOR_ID_/d' "$alt_dts"
-                sed -i '/function = LED_FUNCTION_/d' "$alt_dts"
-                sed -i '/function-enumerator = /d' "$alt_dts"
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$alt_dts"
-                log "  ✅ 替代 DTS 文件修复完成"
-            fi
-        fi
-        
-        # ============================================
-        # 创建内核补丁（作为备用方案）
-        # ============================================
-        log "🔧 [LEDE AC42U] 创建内核补丁..."
-        
-        local patch_dir="target/linux/ipq40xx/patches-5.4"
-        mkdir -p "$patch_dir"
-        
-        cat > "$patch_dir/999-fix-ac42u-led.patch" << 'EOF'
---- a/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
-+++ b/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
-@@ -3,7 +3,6 @@
- #include "qcom-ipq4019.dtsi"
- #include <dt-bindings/gpio/gpio.h>
- #include <dt-bindings/input/input.h>
--#include <dt-bindings/leds/common.h>
- #include <dt-bindings/soc/qcom,tcsr.h>
- 
- / {
-@@ -98,64 +97,54 @@
- 	leds {
- 		compatible = "gpio-leds";
- 
--		led_power: led-0 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_STATUS;
-+		led_power: power {
-+			label = "blue:power";
- 			gpios = <&tlmm 40 GPIO_ACTIVE_LOW>;
--			label = "blue:status";
-+			default-state = "on";
- 		};
- 
--		led-1 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WAN;
-+		wan_blue {
-+			label = "blue:wan";
- 			gpios = <&tlmm 61 GPIO_ACTIVE_HIGH>;
- 			linux,default-trigger = "90000.mdio-1:04:link";
- 		};
- 
--		led-2 {
--			color = <LED_COLOR_ID_RED>;
--			function = LED_FUNCTION_WAN;
-+		wan_red {
-+			label = "red:wan";
- 			gpios = <&tlmm 68 GPIO_ACTIVE_HIGH>;
- 			linux,default-trigger = "none";
- 		};
- 
--		led-3 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WLAN;
--			function-enumerator = <0>;
-+		wlan2g {
-+			label = "blue:wlan2g";
- 			gpios = <&tlmm 52 GPIO_ACTIVE_LOW>;
--			linux,default-trigger = "phy1tpt";
-+			linux,default-trigger = "phy0tpt";
- 		};
- 
--		led-4 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WLAN;
--			function-enumerator = <1>;
-+		wlan5g {
-+			label = "blue:wlan5g";
- 			gpios = <&tlmm 54 GPIO_ACTIVE_LOW>;
- 			linux,default-trigger = "phy0tpt";
- 		};
- 
--		led-5 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <1>;
-+		lan1 {
-+			label = "blue:lan1";
- 			gpios = <&tlmm 45 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-6 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <2>;
-+		lan2 {
-+			label = "blue:lan2";
- 			gpios = <&tlmm 43 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-7 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <3>;
-+		lan3 {
-+			label = "blue:lan3";
- 			gpios = <&tlmm 42 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-8 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <4>;
-+		lan4 {
-+			label = "blue:lan4";
- 			gpios = <&tlmm 49 GPIO_ACTIVE_LOW>;
- 		};
- 	};
-EOF
-        
-        if [ -f "$patch_dir/999-fix-ac42u-led.patch" ]; then
-            log "  ✅ 已创建 DTS 修复补丁: $patch_dir/999-fix-ac42u-led.patch"
-        fi
-        
-        # ============================================
-        # 创建镜像格式修复补丁
-        # ============================================
-        log "🔧 [LEDE AC42U] 创建镜像格式修复补丁..."
-        
-        local image_patch_dir="target/linux/ipq40xx/patches-5.4"
-        mkdir -p "$image_patch_dir"
-        
-        cat > "$image_patch_dir/998-fix-ac42u-image.patch" << 'EOF'
---- a/target/linux/ipq40xx/image/generic.mk
-+++ b/target/linux/ipq40xx/image/generic.mk
-@@ -105,7 +105,7 @@
- endef
- TARGET_DEVICES += asus_map-ac2200
- 
--define Device/asus_rt-ac42u
-+define Device/asus_rt-ac42u-fixed
- 	$(call Device/FitImage)
- 	DEVICE_VENDOR := ASUS
- 	DEVICE_MODEL := RT-AC42U
-@@ -127,6 +127,26 @@
- 	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport
- endef
- TARGET_DEVICES += asus_rt-ac42u
-+
-+define Device/asus_rt-acrh17
-+	$(call Device/FitImage)
-+	DEVICE_VENDOR := ASUS
-+	DEVICE_MODEL := RT-ACRH17
-+	DEVICE_ALT0_VENDOR := ASUS
-+	DEVICE_ALT0_MODEL := RT-AC42U
-+	DEVICE_ALT1_VENDOR := ASUS
-+	DEVICE_ALT1_MODEL := RT-AC2200
-+	SOC := qcom-ipq4019
-+	BLOCKSIZE := 128k
-+	PAGESIZE := 2048
-+	IMAGE_SIZE := 20439364
-+	FILESYSTEMS := squashfs
-+	UIMAGE_NAME := $(shell echo -e '\03\01\01\01RT-AC82U')
-+	KERNEL_INITRAMFS := $$(KERNEL) | uImage none
-+	KERNEL_INITRAMFS_SUFFIX := -factory.trx
-+	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport
-+endef
-+TARGET_DEVICES += asus_rt-acrh17
-EOF
-        
-        if [ -f "$image_patch_dir/998-fix-ac42u-image.patch" ]; then
-            log "  ✅ 已创建镜像格式修复补丁: $image_patch_dir/998-fix-ac42u-image.patch"
-        fi
-        
-        log "  ✅ LEDE AC42U 特殊处理完成"
-    fi
-    # ============================================
     
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
