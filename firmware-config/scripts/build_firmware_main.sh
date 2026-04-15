@@ -1065,15 +1065,17 @@ generate_config() {
     
     local correct_device="$DEVICE"
     local actual_device="$DEVICE"
+    local is_ac42u=0
     
     # ============================================
-    # LEDE源码 AC42U 特殊处理 - 使用 ACRH17 配置
+    # LEDE源码 AC42U 特殊处理 - 直接使用 ACRH17 配置
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
-        log "🔧 [LEDE AC42U] 检测到 AC42U，将使用 ACRH17 的设备配置（同一硬件）..."
+        log "🔧 [LEDE AC42U] 检测到 AC42U，将直接使用 ACRH17 的设备配置..."
         correct_device="asus_rt-acrh17"
+        is_ac42u=1
         log "  📌 实际编译设备: $correct_device"
-        log "  📌 原设备名: $actual_device (用于固件命名)"
+        log "  📌 原设备名: $actual_device"
         
         # 更新环境变量中的 DEVICE 为 ACRH17
         DEVICE="$correct_device"
@@ -1140,10 +1142,10 @@ EOF
     cat .config
     
     # ============================================
-    # LEDE AC42U 特殊处理 - 使用 ACRH17 配置但需要修复 DTS 和内核
+    # LEDE AC42U 特殊处理 - 修复 DTS 和内核配置
     # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$actual_device" == "asus_rt-ac42u" || "$actual_device" == "ac42u" || "$actual_device" == "rt-ac42u" ]]; then
-        log "🔧 [LEDE AC42U] 添加内核配置修复（使用 ACRH17 设备配置）..."
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $is_ac42u -eq 1 ]; then
+        log "🔧 [LEDE AC42U] 添加内核配置修复..."
         
         cat >> .config << 'EOF'
 # LEDE AC42U 启动修复 - 内核分区解析支持
@@ -1180,11 +1182,10 @@ EOF
         log "  ✅ 已添加 LEDE AC42U 内核配置修复"
         
         # ============================================
-        # 修复 DTS 文件 - 关键！
+        # 修复 DTS 文件
         # ============================================
         log "🔧 [LEDE AC42U] 修复 DTS 文件..."
         
-        # ACRH17 使用的 DTS 文件名
         local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
         local acrh17_dts="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-acrh17.dts"
         
@@ -1221,7 +1222,7 @@ EOF
         fi
         
         # ============================================
-        # 确保 ACRH17 设备定义正确
+        # 确保 ACRH17 设备定义使用标准 FitImage
         # ============================================
         log "🔧 [LEDE AC42U] 确保 ACRH17 设备定义正确..."
         
@@ -1232,7 +1233,6 @@ EOF
                 log "  ⚠️ ACRH17 设备定义不存在，正在添加..."
                 cp "$image_mk" "$image_mk.bak"
                 
-                # 在 AC42U 定义后添加 ACRH17 定义
                 cat >> "$image_mk" << 'EOF'
 
 define Device/asus_rt-acrh17
@@ -2044,32 +2044,49 @@ EOF
         log "    ✅ LEDE 特殊配置已应用"
     fi
     
-    # 10. 如果是 AC42U 但使用 ACRH17 配置，修改固件名称
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$actual_device" == "asus_rt-ac42u" || "$actual_device" == "ac42u" || "$actual_device" == "rt-ac42u" ]]; then
-        log "  🔧 修改固件名称：将 acrh17 替换为 ac42u..."
+    # 10. 如果是 AC42U 但使用 ACRH17 配置，在编译后修改固件名称
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $is_ac42u -eq 1 ]; then
+        log "  🔧 AC42U 固件名称处理：将在编译后重命名固件..."
         
-        # 在 image.mk 中添加名称替换规则
-        if [ -f "$image_mk" ]; then
-            # 添加自定义规则，将输出文件名中的 acrh17 替换为 ac42u
-            echo "" >> "$image_mk"
-            echo "# Custom rule for AC42U (using ACRH17 config)" >> "$image_mk"
-            echo "define Device/asus_rt-ac42u-custom" >> "$image_mk"
-            echo "  \$(call Device/asus_rt-acrh17)" >> "$image_mk"
-            echo "  DEVICE_MODEL := RT-AC42U" >> "$image_mk"
-            echo "  DEVICE_ALT0_MODEL := RT-ACRH17" >> "$image_mk"
-            echo "  SUPPORTED_DEVICES += asus_rt-ac42u asus_rt-acrh17" >> "$image_mk"
-            echo "endef" >> "$image_mk"
-            echo "TARGET_DEVICES += asus_rt-ac42u-custom" >> "$image_mk"
-            
-            log "    ✅ 已添加固件名称自定义规则"
+        # 创建编译后重命名脚本
+        local rename_script="$BUILD_DIR/rename_firmware.sh"
+        cat > "$rename_script" << EOF
+#!/bin/bash
+# 编译后重命名固件脚本
+TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$actual_subtarget"
+if [ -d "\$TARGET_DIR" ]; then
+    cd "\$TARGET_DIR"
+    # 将 acrh17 重命名为 ac42u
+    for f in *acrh17*.bin *acrh17*.img 2>/dev/null; do
+        if [ -f "\$f" ]; then
+            newname=\$(echo "\$f" | sed 's/acrh17/ac42u/g')
+            mv "\$f" "\$newname"
+            echo "  ✅ 重命名: \$f -> \$newname"
         fi
+    done
+    # 更新 sha256sums 文件
+    if [ -f "sha256sums" ]; then
+        sed -i 's/acrh17/ac42u/g' sha256sums
+    fi
+fi
+EOF
+        chmod +x "$rename_script"
+        log "    ✅ 已创建固件重命名脚本: $rename_script"
+        
+        # 保存脚本路径到环境变量
+        echo "RENAME_FIRMWARE_SCRIPT=$rename_script" >> $GITHUB_ENV 2>/dev/null || true
     fi
     
     # 11. 更新配置
     make defconfig > /dev/null 2>&1 || true
     
     log "✅ 固件名称前缀修正完成"
-    log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
+    if [ $is_ac42u -eq 1 ]; then
+        log "  📌 实际编译设备: asus_rt-acrh17"
+        log "  📌 固件将重命名为: ${vendor_prefix}-${TARGET}-${actual_subtarget}-asus_rt-ac42u-squashfs-sysupgrade.bin"
+    else
+        log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
+    fi
     
     log "✅ 配置生成完成"
 }
@@ -5774,6 +5791,15 @@ EOF
     cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
     
     log "  ✅ 分步编译完成"
+    
+    # ============================================
+    # 如果是 AC42U，执行固件重命名
+    # ============================================
+    if [ -n "$RENAME_FIRMWARE_SCRIPT" ] && [ -f "$RENAME_FIRMWARE_SCRIPT" ]; then
+        log "🔧 执行 AC42U 固件重命名脚本..."
+        source "$RENAME_FIRMWARE_SCRIPT"
+        log "  ✅ 固件重命名完成"
+    fi
     
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
