@@ -1064,6 +1064,27 @@ generate_config() {
     log "✅ 已清理旧配置文件"
     
     local correct_device="$DEVICE"
+    local actual_device="$DEVICE"
+    
+    # ============================================
+    # LEDE源码 AC42U 特殊处理 - 使用 ACRH17 配置
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
+        log "🔧 [LEDE AC42U] 检测到 AC42U，将使用 ACRH17 的设备配置（同一硬件）..."
+        correct_device="asus_rt-acrh17"
+        log "  📌 实际编译设备: $correct_device"
+        log "  📌 原设备名: $actual_device (用于固件命名)"
+        
+        # 更新环境变量中的 DEVICE 为 ACRH17
+        DEVICE="$correct_device"
+        if [ -f "$BUILD_DIR/build_env.sh" ]; then
+            sed -i "s/^export DEVICE=.*/export DEVICE=\"$correct_device\"/" "$BUILD_DIR/build_env.sh" 2>/dev/null || true
+        fi
+        if [ -n "$GITHUB_ENV" ]; then
+            echo "DEVICE=$correct_device" >> $GITHUB_ENV
+        fi
+    fi
+    
     log "🔧 使用传入的设备名: $correct_device"
     
     # ============================================
@@ -1119,70 +1140,10 @@ EOF
     cat .config
     
     # ============================================
-    # LEDE源码 AC42U 设备定义修复 - 必须在配置前执行
+    # LEDE AC42U 特殊处理 - 使用 ACRH17 配置但需要修复 DTS 和内核
     # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
-        log "🔧 [LEDE AC42U] 修复设备定义文件（解决无法启动问题）..."
-        
-        local image_mk="target/linux/ipq40xx/image/generic.mk"
-        if [ -f "$image_mk" ]; then
-            cp "$image_mk" "$image_mk.bak"
-            log "  📁 已备份原文件: $image_mk.bak"
-            
-            # 检查当前设备定义
-            if grep -q "define Device/asus_rt-ac42u" "$image_mk"; then
-                log "  🔍 找到 AC42U 设备定义，正在修复..."
-                
-                # 提取当前定义的完整内容并替换
-                # 将 Device/FitImageLzma 替换为 Device/FitImage
-                sed -i '/define Device\/asus_rt-ac42u/,/endef/ s/(call Device\/FitImageLzma)/(call Device\/FitImage)/g' "$image_mk"
-                
-                # 检查是否修改成功
-                if grep -A 20 "define Device/asus_rt-ac42u" "$image_mk" | grep -q "Device/FitImage"; then
-                    log "  ✅ 已将 Device/FitImageLzma 替换为 Device/FitImage"
-                else
-                    log "  ⚠️ 替换失败，尝试强制覆盖..."
-                    
-                    # 强制替换整个设备定义块
-                    sed -i '/define Device\/asus_rt-ac42u/,/endef/c\
-define Device/asus_rt-ac42u\
-	$(call Device/FitImage)\
-	DEVICE_VENDOR := ASUS\
-	DEVICE_MODEL := RT-AC42U\
-	DEVICE_ALT0_VENDOR := ASUS\
-	DEVICE_ALT0_MODEL := RT-ACRH17\
-	DEVICE_ALT1_VENDOR := ASUS\
-	DEVICE_ALT1_MODEL := RT-AC2200\
-	SOC := qcom-ipq4019\
-	BLOCKSIZE := 128k\
-	PAGESIZE := 2048\
-	IMAGE_SIZE := 20439364\
-	FILESYSTEMS := squashfs\
-	UIMAGE_NAME := $(shell echo -e '\''\003\001\001\001RT-AC82U'\'')\
-	KERNEL_INITRAMFS := $$(KERNEL) | uImage none\
-	KERNEL_INITRAMFS_SUFFIX := -factory.trx\
-	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport\
-endef' "$image_mk"
-                    
-                    log "  ✅ 已强制替换 AC42U 设备定义"
-                fi
-            fi
-            
-            # 显示修改后的定义
-            log "  📋 修改后的 AC42U 设备定义:"
-            sed -n '/define Device\/asus_rt-ac42u/,/endef/p' "$image_mk" | head -15 | while read line; do
-                log "    $line"
-            done
-            
-            log "  ✅ 设备定义文件修复完成"
-        else
-            log "  ⚠️ 设备定义文件不存在: $image_mk"
-        fi
-        
-        # ============================================
-        # LEDE AC42U 特殊内核配置修复
-        # ============================================
-        log "🔧 [LEDE AC42U] 添加特殊内核配置修复..."
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$actual_device" == "asus_rt-ac42u" || "$actual_device" == "ac42u" || "$actual_device" == "rt-ac42u" ]]; then
+        log "🔧 [LEDE AC42U] 添加内核配置修复（使用 ACRH17 设备配置）..."
         
         cat >> .config << 'EOF'
 # LEDE AC42U 启动修复 - 内核分区解析支持
@@ -1207,7 +1168,7 @@ CONFIG_CMDLINE_FROM_BOOTLOADER=y
 CONFIG_WATCHDOG=y
 CONFIG_QCOM_WDT=y
 
-# 禁用新式 LED 类支持（LEDE 旧内核可能不支持）
+# 禁用新式 LED 类支持
 # CONFIG_LEDS_CLASS_MULTICOLOR is not set
 # CONFIG_LEDS_QCOM_LPG is not set
 
@@ -1216,62 +1177,99 @@ CONFIG_LEDS_GPIO=y
 CONFIG_NEW_LEDS=y
 EOF
         
-        log "  ✅ 已添加 LEDE AC42U 启动修复内核配置"
+        log "  ✅ 已添加 LEDE AC42U 内核配置修复"
         
         # ============================================
-        # 修复 DTS 文件
+        # 修复 DTS 文件 - 关键！
         # ============================================
         log "🔧 [LEDE AC42U] 修复 DTS 文件..."
         
+        # ACRH17 使用的 DTS 文件名
         local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
+        local acrh17_dts="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-acrh17.dts"
         
+        # 如果 ACRH17 DTS 不存在，从 AC42U DTS 创建
+        if [ ! -f "$acrh17_dts" ] && [ -f "$dts_file" ]; then
+            log "  📁 从 AC42U DTS 创建 ACRH17 DTS..."
+            cp "$dts_file" "$acrh17_dts"
+            
+            # 修复新式 LED 绑定
+            sed -i '/color = <LED_COLOR_ID_/d' "$acrh17_dts"
+            sed -i '/function = LED_FUNCTION_/d' "$acrh17_dts"
+            sed -i '/function-enumerator = /d' "$acrh17_dts"
+            sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$acrh17_dts"
+            sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$acrh17_dts"
+            sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$acrh17_dts"
+            
+            # 修改 model 名称
+            sed -i 's/model = "ASUS RT-AC42U"/model = "ASUS RT-ACRH17"/g' "$acrh17_dts"
+            sed -i 's/RT-AC42U/RT-ACRH17/g' "$acrh17_dts"
+            
+            log "  ✅ 已创建 ACRH17 DTS 文件"
+        fi
+        
+        # 同时修复 AC42U DTS
         if [ -f "$dts_file" ]; then
             cp "$dts_file" "$dts_file.bak"
-            log "  📁 已备份原 DTS 文件: $dts_file.bak"
-            
-            if grep -q "color = <LED_COLOR_ID_" "$dts_file" || grep -q "function = LED_FUNCTION_" "$dts_file"; then
-                log "  🔍 检测到新式 LED 绑定，正在转换..."
+            sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
+            sed -i '/function = LED_FUNCTION_/d' "$dts_file"
+            sed -i '/function-enumerator = /d' "$dts_file"
+            sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
+            sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
+            sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
+            log "  ✅ 已修复 AC42U DTS 文件"
+        fi
+        
+        # ============================================
+        # 确保 ACRH17 设备定义正确
+        # ============================================
+        log "🔧 [LEDE AC42U] 确保 ACRH17 设备定义正确..."
+        
+        local image_mk="target/linux/ipq40xx/image/generic.mk"
+        if [ -f "$image_mk" ]; then
+            # 检查 ACRH17 定义是否存在
+            if ! grep -q "define Device/asus_rt-acrh17" "$image_mk"; then
+                log "  ⚠️ ACRH17 设备定义不存在，正在添加..."
+                cp "$image_mk" "$image_mk.bak"
                 
-                sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
-                sed -i '/function = LED_FUNCTION_/d' "$dts_file"
-                sed -i '/function-enumerator = /d' "$dts_file"
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
-                sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
-                sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
-                
-                log "  ✅ DTS 文件修复完成"
+                # 在 AC42U 定义后添加 ACRH17 定义
+                cat >> "$image_mk" << 'EOF'
+
+define Device/asus_rt-acrh17
+	$(call Device/FitImage)
+	DEVICE_VENDOR := ASUS
+	DEVICE_MODEL := RT-ACRH17
+	DEVICE_ALT0_VENDOR := ASUS
+	DEVICE_ALT0_MODEL := RT-AC42U
+	DEVICE_ALT1_VENDOR := ASUS
+	DEVICE_ALT1_MODEL := RT-AC2200
+	SOC := qcom-ipq4019
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	IMAGE_SIZE := 20439364
+	FILESYSTEMS := squashfs
+	UIMAGE_NAME := $(shell echo -e '\003\001\001\001RT-AC82U')
+	KERNEL_INITRAMFS := $$(KERNEL) | uImage none
+	KERNEL_INITRAMFS_SUFFIX := -factory.trx
+	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport
+endef
+TARGET_DEVICES += asus_rt-acrh17
+EOF
+                log "  ✅ 已添加 ACRH17 设备定义"
             else
-                log "  ℹ️ DTS 文件已是旧格式"
-            fi
-        else
-            log "  ⚠️ DTS 文件不存在: $dts_file"
-            local alt_dts=$(find target/linux/ipq40xx -name "*ac42u*.dts" 2>/dev/null | head -1)
-            if [ -n "$alt_dts" ]; then
-                log "  📁 找到 DTS 文件: $alt_dts"
-                cp "$alt_dts" "$alt_dts.bak"
-                sed -i '/color = <LED_COLOR_ID_/d' "$alt_dts"
-                sed -i '/function = LED_FUNCTION_/d' "$alt_dts"
-                sed -i '/function-enumerator = /d' "$alt_dts"
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$alt_dts"
-                log "  ✅ DTS 文件修复完成"
+                # 检查是否使用了正确的 FitImage
+                if grep -A 5 "define Device/asus_rt-acrh17" "$image_mk" | grep -q "FitImageLzma"; then
+                    log "  ⚠️ ACRH17 使用了 LZMA，正在修复..."
+                    cp "$image_mk" "$image_mk.bak"
+                    sed -i '/define Device\/asus_rt-acrh17/,/endef/ s/(call Device\/FitImageLzma)/(call Device\/FitImage)/g' "$image_mk"
+                    log "  ✅ 已修复 ACRH17 设备定义"
+                else
+                    log "  ✅ ACRH17 设备定义正确"
+                fi
             fi
         fi
         
-        # ============================================
-        # 删除可能冲突的内核补丁
-        # ============================================
-        log "🔧 [LEDE AC42U] 清理可能冲突的内核补丁..."
-        
-        local patch_dir="target/linux/ipq40xx/patches-5.4"
-        if [ -d "$patch_dir" ]; then
-            # 删除可能导致 LZMA/FIT 问题的补丁
-            find "$patch_dir" -name "*lzma*" -type f 2>/dev/null | while read p; do
-                log "  🗑️ 删除补丁: $(basename "$p")"
-                rm -f "$p"
-            done
-        fi
-        
-        log "  ✅ LEDE AC42U 特殊处理完成"
+        log "  ✅ LEDE AC42U 特殊处理完成（使用 ACRH17 配置）"
     fi
     # ============================================
     
@@ -2036,12 +2034,9 @@ EOF
         log "    ✅ 修改 target/linux/$TARGET/image/Makefile"
     fi
     
-    # 9. LEDE 源码特殊处理：修改 feeds.conf.default 中的默认配置
+    # 9. LEDE 源码特殊处理
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "  🔧 LEDE 源码特殊处理..."
-        if [ -f "feeds.conf.default" ]; then
-            sed -i 's/^# CONFIG_VERSION_DIST=.*/CONFIG_VERSION_DIST="LEDE"/g' feeds.conf.default 2>/dev/null || true
-        fi
         if [ -f "package/base-files/files/etc/openwrt_release" ]; then
             sed -i 's/DISTRIB_ID=.*/DISTRIB_ID="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
             sed -i 's/DISTRIB_RELEASE=.*/DISTRIB_RELEASE="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
@@ -2049,7 +2044,28 @@ EOF
         log "    ✅ LEDE 特殊配置已应用"
     fi
     
-    # 10. 更新配置
+    # 10. 如果是 AC42U 但使用 ACRH17 配置，修改固件名称
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$actual_device" == "asus_rt-ac42u" || "$actual_device" == "ac42u" || "$actual_device" == "rt-ac42u" ]]; then
+        log "  🔧 修改固件名称：将 acrh17 替换为 ac42u..."
+        
+        # 在 image.mk 中添加名称替换规则
+        if [ -f "$image_mk" ]; then
+            # 添加自定义规则，将输出文件名中的 acrh17 替换为 ac42u
+            echo "" >> "$image_mk"
+            echo "# Custom rule for AC42U (using ACRH17 config)" >> "$image_mk"
+            echo "define Device/asus_rt-ac42u-custom" >> "$image_mk"
+            echo "  \$(call Device/asus_rt-acrh17)" >> "$image_mk"
+            echo "  DEVICE_MODEL := RT-AC42U" >> "$image_mk"
+            echo "  DEVICE_ALT0_MODEL := RT-ACRH17" >> "$image_mk"
+            echo "  SUPPORTED_DEVICES += asus_rt-ac42u asus_rt-acrh17" >> "$image_mk"
+            echo "endef" >> "$image_mk"
+            echo "TARGET_DEVICES += asus_rt-ac42u-custom" >> "$image_mk"
+            
+            log "    ✅ 已添加固件名称自定义规则"
+        fi
+    fi
+    
+    # 11. 更新配置
     make defconfig > /dev/null 2>&1 || true
     
     log "✅ 固件名称前缀修正完成"
