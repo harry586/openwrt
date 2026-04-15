@@ -1257,10 +1257,42 @@ EOF
     esac
     
     # ============================================
-    # LEDE源码 AC42U 特殊内核配置修复
+    # LEDE源码 AC42U 特殊处理 - 修复无法启动问题
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
-        log "🔧 [LEDE AC42U] 添加特殊内核配置修复（解决无法启动问题）..."
+        log "🔧 [LEDE AC42U] 修复设备定义文件（解决无法启动问题）..."
+        
+        local image_mk="target/linux/ipq40xx/image/generic.mk"
+        if [ -f "$image_mk" ]; then
+            cp "$image_mk" "$image_mk.bak"
+            log "  📁 已备份原文件: $image_mk.bak"
+            
+            # 将 Device/FitImageLzma 替换为 Device/FitImage
+            if grep -q "Device/FitImageLzma" "$image_mk"; then
+                sed -i 's/(call Device\/FitImageLzma)/(call Device\/FitImage)/g' "$image_mk"
+                log "  ✅ 已将 Device/FitImageLzma 替换为 Device/FitImage"
+            fi
+            
+            # 确保 KERNEL_INITRAMFS 使用正确的格式
+            if grep -q "KERNEL_INITRAMFS.*asus_rt-ac42u" "$image_mk" 2>/dev/null; then
+                log "  🔍 检查 AC42U 设备定义..."
+                # 显示当前定义
+                local ac42u_def=$(sed -n '/define Device\/asus_rt-ac42u/,/endef/p' "$image_mk")
+                log "  📋 当前设备定义:"
+                echo "$ac42u_def" | while read line; do
+                    log "    $line"
+                done
+            fi
+            
+            log "  ✅ 设备定义文件修复完成"
+        else
+            log "  ⚠️ 设备定义文件不存在: $image_mk"
+        fi
+        
+        # ============================================
+        # LEDE AC42U 特殊内核配置修复
+        # ============================================
+        log "🔧 [LEDE AC42U] 添加特殊内核配置修复..."
         
         cat >> .config << 'EOF'
 # LEDE AC42U 启动修复 - 内核分区解析支持
@@ -1454,6 +1486,56 @@ EOF
         
         if [ -f "$patch_dir/999-fix-ac42u-led.patch" ]; then
             log "  ✅ 已创建 DTS 修复补丁: $patch_dir/999-fix-ac42u-led.patch"
+        fi
+        
+        # ============================================
+        # 创建镜像格式修复补丁
+        # ============================================
+        log "🔧 [LEDE AC42U] 创建镜像格式修复补丁..."
+        
+        local image_patch_dir="target/linux/ipq40xx/patches-5.4"
+        mkdir -p "$image_patch_dir"
+        
+        cat > "$image_patch_dir/998-fix-ac42u-image.patch" << 'EOF'
+--- a/target/linux/ipq40xx/image/generic.mk
++++ b/target/linux/ipq40xx/image/generic.mk
+@@ -105,7 +105,7 @@
+ endef
+ TARGET_DEVICES += asus_map-ac2200
+ 
+-define Device/asus_rt-ac42u
++define Device/asus_rt-ac42u-fixed
+ 	$(call Device/FitImage)
+ 	DEVICE_VENDOR := ASUS
+ 	DEVICE_MODEL := RT-AC42U
+@@ -127,6 +127,26 @@
+ 	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport
+ endef
+ TARGET_DEVICES += asus_rt-ac42u
++
++define Device/asus_rt-acrh17
++	$(call Device/FitImage)
++	DEVICE_VENDOR := ASUS
++	DEVICE_MODEL := RT-ACRH17
++	DEVICE_ALT0_VENDOR := ASUS
++	DEVICE_ALT0_MODEL := RT-AC42U
++	DEVICE_ALT1_VENDOR := ASUS
++	DEVICE_ALT1_MODEL := RT-AC2200
++	SOC := qcom-ipq4019
++	BLOCKSIZE := 128k
++	PAGESIZE := 2048
++	IMAGE_SIZE := 20439364
++	FILESYSTEMS := squashfs
++	UIMAGE_NAME := $(shell echo -e '\03\01\01\01RT-AC82U')
++	KERNEL_INITRAMFS := $$(KERNEL) | uImage none
++	KERNEL_INITRAMFS_SUFFIX := -factory.trx
++	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport
++endef
++TARGET_DEVICES += asus_rt-acrh17
+EOF
+        
+        if [ -f "$image_patch_dir/998-fix-ac42u-image.patch" ]; then
+            log "  ✅ 已创建镜像格式修复补丁: $image_patch_dir/998-fix-ac42u-image.patch"
         fi
         
         log "  ✅ LEDE AC42U 特殊处理完成"
@@ -2030,7 +2112,7 @@ EOF
     # 3. 设置 CONFIG_VERSION_CODE_FILENAME
     sed -i '/^CONFIG_VERSION_CODE_FILENAME=/d' .config
     sed -i '/^# CONFIG_VERSION_CODE_FILENAME/d' .config
-    echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"">> .config
+    echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"" >> .config
     log "    ✅ 设置 CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\""
     
     # 4. 设置 CONFIG_VERSION_MANUFACTURER
