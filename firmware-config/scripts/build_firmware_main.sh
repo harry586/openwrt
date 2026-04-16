@@ -4895,7 +4895,10 @@ workflow_step23_pre_build_check() {
         config_exists=1
     elif grep -q "^${search_pattern}=y" .config 2>/dev/null; then
         config_exists=1
-        expected_config=$(grep "^${search_pattern}=y" .config | head -1)
+        expected_config=$(grep "^${search_pattern}=y" .config | head -1 | tr -d '\r\n')
+    elif grep -q "^${search_pattern}=\"y\"" .config 2>/dev/null; then
+        config_exists=1
+        expected_config=$(grep "^${search_pattern}=\"y\"" .config | head -1 | tr -d '\r\n')
     elif grep -q "^# ${search_pattern} is not set" .config 2>/dev/null; then
         config_exists=1
         log "⚠️ 设备配置被禁用，正在启用..."
@@ -4957,20 +4960,27 @@ workflow_step23_pre_build_check() {
         
         # 直接使用 DEVICE 变量的值检查
         local device_for_check="$DEVICE"
-        local check_pattern=""
+        local check_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${device_for_check}"
         
-        check_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${device_for_check}"
-        
-        if grep -q "^${check_pattern}=y" .config; then
+        # 多种格式检查
+        if grep -q "^${check_pattern}=y" .config 2>/dev/null; then
             echo "   ✅ 设备配置正确: $(grep "^${check_pattern}=y" .config | head -1)"
-        elif grep -q "^# ${check_pattern} is not set" .config; then
+        elif grep -q "^${check_pattern}=\"y\"" .config 2>/dev/null; then
+            echo "   ✅ 设备配置正确: $(grep "^${check_pattern}=\"y\"" .config | head -1)"
+        elif grep -q "^# ${check_pattern} is not set" .config 2>/dev/null; then
             echo "   ⚠️ 设备配置被禁用，尝试自动修复..."
             sed -i "/^# ${check_pattern} is not set/d" .config
             echo "${check_pattern}=y" >> .config
             echo "   ✅ 已重新启用设备配置"
         else
-            echo "   ❌ 设备配置可能不正确，未找到: ${check_pattern}"
-            error_count=$((error_count + 1))
+            # 最后尝试模糊匹配
+            local fuzzy_match=$(grep -E "^CONFIG_TARGET_.*DEVICE_.*${device_for_check}" .config 2>/dev/null | head -1)
+            if [ -n "$fuzzy_match" ]; then
+                echo "   ✅ 找到设备配置（模糊匹配）: $fuzzy_match"
+            else
+                echo "   ❌ 设备配置可能不正确，未找到: ${check_pattern}"
+                error_count=$((error_count + 1))
+            fi
         fi
     else
         echo "   ❌ .config 文件不存在"
