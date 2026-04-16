@@ -1068,10 +1068,10 @@ generate_config() {
     local is_ac42u=0
     
     # ============================================
-    # LEDE源码 AC42U 特殊处理 - 完全使用 ACRH17 配置
+    # LEDE源码 AC42U 特殊处理 - 使用 ACRH17 配置
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
-        log "🔧 [LEDE AC42U] 检测到 AC42U，将完全使用 ACRH17 配置编译..."
+        log "🔧 [LEDE AC42U] 检测到 AC42U，将使用 ACRH17 配置编译..."
         correct_device="asus_rt-acrh17"
         is_ac42u=1
         log "  📌 实际编译设备: $correct_device"
@@ -1084,103 +1084,7 @@ generate_config() {
         if [ -n "$GITHUB_ENV" ]; then
             echo "DEVICE=$correct_device" >> $GITHUB_ENV
         fi
-        
-        # ============================================
-        # 强制修复 ACRH17 设备定义为完整正确版本
-        # ============================================
-        log "🔧 [LEDE AC42U] 强制修复 ACRH17 设备定义为正确版本..."
-        
-        local image_mk="target/linux/ipq40xx/image/generic.mk"
-        if [ -f "$image_mk" ]; then
-            cp "$image_mk" "$image_mk.bak"
-            
-            # 删除旧的 ACRH17 定义（如果存在）
-            sed -i '/^define Device\/asus_rt-acrh17/,/^endef/d' "$image_mk"
-            sed -i '/^TARGET_DEVICES += asus_rt-acrh17/d' "$image_mk"
-            
-            # 添加完整正确的 ACRH17 定义
-            cat >> "$image_mk" << 'EOF'
-
-define Device/asus_rt-acrh17
-	$(call Device/FitImage)
-	DEVICE_VENDOR := ASUS
-	DEVICE_MODEL := RT-ACRH17
-	DEVICE_ALT0_VENDOR := ASUS
-	DEVICE_ALT0_MODEL := RT-AC42U
-	DEVICE_ALT1_VENDOR := ASUS
-	DEVICE_ALT1_MODEL := RT-AC2200
-	SOC := qcom-ipq4019
-	BLOCKSIZE := 128k
-	PAGESIZE := 2048
-	IMAGE_SIZE := 20439364
-	FILESYSTEMS := squashfs
-	UIMAGE_NAME := $(shell echo -e '\003\001\001\001RT-AC82U')
-	KERNEL := kernel-bin | append-dtb | lzma | fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb
-	KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb
-	IMAGES := sysupgrade.bin
-	IMAGE/sysupgrade.bin := append-kernel | pad-to 64k | append-rootfs | pad-rootfs | append-metadata
-	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport
-endef
-TARGET_DEVICES += asus_rt-acrh17
-EOF
-            log "  ✅ 已添加完整正确的 ACRH17 设备定义"
-        fi
-        
-        # ============================================
-        # 修复 DTS 文件
-        # ============================================
-        log "🔧 [LEDE AC42U] 修复 DTS 文件..."
-        
-        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
-        local acrh17_dts="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-acrh17.dts"
-        
-        # 创建/修复 ACRH17 DTS
-        if [ -f "$dts_file" ]; then
-            cp "$dts_file" "$acrh17_dts" 2>/dev/null || true
-            
-            for dts in "$acrh17_dts" "$dts_file"; do
-                if [ -f "$dts" ]; then
-                    sed -i '/color = <LED_COLOR_ID_/d' "$dts"
-                    sed -i '/function = LED_FUNCTION_/d' "$dts"
-                    sed -i '/function-enumerator = /d' "$dts"
-                    sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts"
-                    sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts"
-                    sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts"
-                fi
-            done
-            log "  ✅ DTS 文件修复完成"
-        fi
-        
-        # ============================================
-        # 添加内核配置
-        # ============================================
-        log "🔧 [LEDE AC42U] 添加内核配置..."
-        
-        cat >> .config << 'EOF'
-CONFIG_CMDLINE_PARTITION=y
-CONFIG_MTD_SPLIT_FIRMWARE=y
-CONFIG_MTD_SPLIT_UIMAGE_FW=y
-CONFIG_MTD=y
-CONFIG_MTD_BLOCK=y
-CONFIG_MTD_SPLIT=y
-CONFIG_MTD_UBI=y
-CONFIG_UBIFS_FS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-CONFIG_CMDLINE="console=ttyMSM0,115200n8"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-CONFIG_WATCHDOG=y
-CONFIG_QCOM_WDT=y
-# CONFIG_LEDS_CLASS_MULTICOLOR is not set
-# CONFIG_LEDS_QCOM_LPG is not set
-CONFIG_LEDS_GPIO=y
-CONFIG_NEW_LEDS=y
-EOF
-        log "  ✅ 内核配置已添加"
-        
-        log "  ✅ LEDE AC42U 特殊处理完成（使用 ACRH17 完整配置）"
     fi
-    # ============================================
     
     log "🔧 使用传入的设备名: $correct_device"
     
@@ -1232,6 +1136,18 @@ EOF
     
     log "🔧 基础配置文件内容:"
     cat .config
+    
+    # ============================================
+    # LEDE AC42U 特殊处理 - 恢复原始设备定义
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $is_ac42u -eq 1 ]; then
+        log "🔧 [LEDE AC42U] 恢复原始设备定义（不做修改）..."
+        
+        # 不做任何设备定义修改，完全依赖源码原有配置
+        # 因为 ACRH17 在 LEDE 源码中已经有正确的定义
+        
+        log "  ✅ 使用 LEDE 源码自带的 ACRH17 设备定义"
+    fi
     
     log "📁 开始合并配置文件..."
     
@@ -1835,38 +1751,13 @@ EOF
         sed -i 's/DISTRIB_ID=.*/DISTRIB_ID="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
     fi
     
-    # ============================================
-    # AC42U 固件重命名脚本
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $is_ac42u -eq 1 ]; then
-        log "  🔧 创建 AC42U 固件重命名脚本..."
-        
-        local rename_script="$BUILD_DIR/rename_firmware.sh"
-        cat > "$rename_script" << EOF
-#!/bin/bash
-TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$actual_subtarget"
-if [ -d "\$TARGET_DIR" ]; then
-    cd "\$TARGET_DIR"
-    for f in *acrh17*.bin *acrh17*.img *acrh17*.trx 2>/dev/null; do
-        if [ -f "\$f" ]; then
-            newname=\$(echo "\$f" | sed 's/acrh17/ac42u/g')
-            mv "\$f" "\$newname"
-            echo "  ✅ 重命名: \$f -> \$newname"
-        fi
-    done
-    if [ -f "sha256sums" ]; then
-        sed -i 's/acrh17/ac42u/g' sha256sums
-    fi
-fi
-EOF
-        chmod +x "$rename_script"
-        echo "RENAME_FIRMWARE_SCRIPT=$rename_script" >> $GITHUB_ENV 2>/dev/null || true
-        log "    ✅ 已创建固件重命名脚本"
-    fi
-    
     make defconfig > /dev/null 2>&1 || true
     
     log "✅ 配置生成完成"
+    log "  📌 实际编译设备: $correct_device"
+    if [ $is_ac42u -eq 1 ]; then
+        log "  📌 原设备名: $actual_device (将在编译后重命名固件)"
+    fi
 }
 #【build_firmware_main.sh-13-end】
 
