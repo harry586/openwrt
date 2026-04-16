@@ -1068,16 +1068,15 @@ generate_config() {
     local is_ac42u=0
     
     # ============================================
-    # LEDE源码 AC42U 特殊处理 - 直接使用 ACRH17 配置
+    # LEDE源码 AC42U 特殊处理 - 完全使用 ACRH17 配置
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
-        log "🔧 [LEDE AC42U] 检测到 AC42U，将直接使用 ACRH17 的设备配置..."
+        log "🔧 [LEDE AC42U] 检测到 AC42U，将完全使用 ACRH17 配置编译..."
         correct_device="asus_rt-acrh17"
         is_ac42u=1
         log "  📌 实际编译设备: $correct_device"
         log "  📌 原设备名: $actual_device"
         
-        # 更新环境变量中的 DEVICE 为 ACRH17
         DEVICE="$correct_device"
         if [ -f "$BUILD_DIR/build_env.sh" ]; then
             sed -i "s/^export DEVICE=.*/export DEVICE=\"$correct_device\"/" "$BUILD_DIR/build_env.sh" 2>/dev/null || true
@@ -1085,7 +1084,103 @@ generate_config() {
         if [ -n "$GITHUB_ENV" ]; then
             echo "DEVICE=$correct_device" >> $GITHUB_ENV
         fi
+        
+        # ============================================
+        # 强制修复 ACRH17 设备定义为完整正确版本
+        # ============================================
+        log "🔧 [LEDE AC42U] 强制修复 ACRH17 设备定义为正确版本..."
+        
+        local image_mk="target/linux/ipq40xx/image/generic.mk"
+        if [ -f "$image_mk" ]; then
+            cp "$image_mk" "$image_mk.bak"
+            
+            # 删除旧的 ACRH17 定义（如果存在）
+            sed -i '/^define Device\/asus_rt-acrh17/,/^endef/d' "$image_mk"
+            sed -i '/^TARGET_DEVICES += asus_rt-acrh17/d' "$image_mk"
+            
+            # 添加完整正确的 ACRH17 定义
+            cat >> "$image_mk" << 'EOF'
+
+define Device/asus_rt-acrh17
+	$(call Device/FitImage)
+	DEVICE_VENDOR := ASUS
+	DEVICE_MODEL := RT-ACRH17
+	DEVICE_ALT0_VENDOR := ASUS
+	DEVICE_ALT0_MODEL := RT-AC42U
+	DEVICE_ALT1_VENDOR := ASUS
+	DEVICE_ALT1_MODEL := RT-AC2200
+	SOC := qcom-ipq4019
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	IMAGE_SIZE := 20439364
+	FILESYSTEMS := squashfs
+	UIMAGE_NAME := $(shell echo -e '\003\001\001\001RT-AC82U')
+	KERNEL := kernel-bin | append-dtb | lzma | fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb
+	KERNEL_INITRAMFS := kernel-bin | append-dtb | lzma | fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb
+	IMAGES := sysupgrade.bin
+	IMAGE/sysupgrade.bin := append-kernel | pad-to 64k | append-rootfs | pad-rootfs | append-metadata
+	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport
+endef
+TARGET_DEVICES += asus_rt-acrh17
+EOF
+            log "  ✅ 已添加完整正确的 ACRH17 设备定义"
+        fi
+        
+        # ============================================
+        # 修复 DTS 文件
+        # ============================================
+        log "🔧 [LEDE AC42U] 修复 DTS 文件..."
+        
+        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
+        local acrh17_dts="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-acrh17.dts"
+        
+        # 创建/修复 ACRH17 DTS
+        if [ -f "$dts_file" ]; then
+            cp "$dts_file" "$acrh17_dts" 2>/dev/null || true
+            
+            for dts in "$acrh17_dts" "$dts_file"; do
+                if [ -f "$dts" ]; then
+                    sed -i '/color = <LED_COLOR_ID_/d' "$dts"
+                    sed -i '/function = LED_FUNCTION_/d' "$dts"
+                    sed -i '/function-enumerator = /d' "$dts"
+                    sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts"
+                    sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts"
+                    sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts"
+                fi
+            done
+            log "  ✅ DTS 文件修复完成"
+        fi
+        
+        # ============================================
+        # 添加内核配置
+        # ============================================
+        log "🔧 [LEDE AC42U] 添加内核配置..."
+        
+        cat >> .config << 'EOF'
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPLIT=y
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_CMDLINE="console=ttyMSM0,115200n8"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+CONFIG_WATCHDOG=y
+CONFIG_QCOM_WDT=y
+# CONFIG_LEDS_CLASS_MULTICOLOR is not set
+# CONFIG_LEDS_QCOM_LPG is not set
+CONFIG_LEDS_GPIO=y
+CONFIG_NEW_LEDS=y
+EOF
+        log "  ✅ 内核配置已添加"
+        
+        log "  ✅ LEDE AC42U 特殊处理完成（使用 ACRH17 完整配置）"
     fi
+    # ============================================
     
     log "🔧 使用传入的设备名: $correct_device"
     
@@ -1095,9 +1190,7 @@ generate_config() {
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
-    # 修正 mediatek 平台的子目标名称
     if [ "$TARGET" = "mediatek" ]; then
-        # 检查实际存在的子目标
         if [ -d "target/linux/mediatek/filogic" ]; then
             actual_subtarget="filogic"
         elif [ -d "target/linux/mediatek/mt7622" ]; then
@@ -1109,7 +1202,6 @@ generate_config() {
     device_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}=y"
     log "🔧 标准设备配置格式: $device_config"
     
-    # 更新 SUBTARGET 变量
     SUBTARGET="$actual_subtarget"
     
     log "🔧 最终设备配置变量: $device_config"
@@ -1140,138 +1232,6 @@ EOF
     
     log "🔧 基础配置文件内容:"
     cat .config
-    
-    # ============================================
-    # LEDE AC42U 特殊处理 - 修复 DTS 和内核配置
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $is_ac42u -eq 1 ]; then
-        log "🔧 [LEDE AC42U] 添加内核配置修复..."
-        
-        cat >> .config << 'EOF'
-# LEDE AC42U 启动修复 - 内核分区解析支持
-CONFIG_CMDLINE_PARTITION=y
-CONFIG_MTD_SPLIT_FIRMWARE=y
-CONFIG_MTD_SPLIT_UIMAGE_FW=y
-
-# 确保 MTD 和 UBI 支持
-CONFIG_MTD=y
-CONFIG_MTD_BLOCK=y
-CONFIG_MTD_SPLIT=y
-CONFIG_MTD_UBI=y
-CONFIG_UBIFS_FS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-
-# 内核命令行参数
-CONFIG_CMDLINE="console=ttyMSM0,115200n8"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-
-# 看门狗支持
-CONFIG_WATCHDOG=y
-CONFIG_QCOM_WDT=y
-
-# 禁用新式 LED 类支持
-# CONFIG_LEDS_CLASS_MULTICOLOR is not set
-# CONFIG_LEDS_QCOM_LPG is not set
-
-# 确保使用传统 GPIO LED 驱动
-CONFIG_LEDS_GPIO=y
-CONFIG_NEW_LEDS=y
-EOF
-        
-        log "  ✅ 已添加 LEDE AC42U 内核配置修复"
-        
-        # ============================================
-        # 修复 DTS 文件
-        # ============================================
-        log "🔧 [LEDE AC42U] 修复 DTS 文件..."
-        
-        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
-        local acrh17_dts="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-acrh17.dts"
-        
-        # 如果 ACRH17 DTS 不存在，从 AC42U DTS 创建
-        if [ ! -f "$acrh17_dts" ] && [ -f "$dts_file" ]; then
-            log "  📁 从 AC42U DTS 创建 ACRH17 DTS..."
-            cp "$dts_file" "$acrh17_dts"
-            
-            # 修复新式 LED 绑定
-            sed -i '/color = <LED_COLOR_ID_/d' "$acrh17_dts"
-            sed -i '/function = LED_FUNCTION_/d' "$acrh17_dts"
-            sed -i '/function-enumerator = /d' "$acrh17_dts"
-            sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$acrh17_dts"
-            sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$acrh17_dts"
-            sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$acrh17_dts"
-            
-            # 修改 model 名称
-            sed -i 's/model = "ASUS RT-AC42U"/model = "ASUS RT-ACRH17"/g' "$acrh17_dts"
-            sed -i 's/RT-AC42U/RT-ACRH17/g' "$acrh17_dts"
-            
-            log "  ✅ 已创建 ACRH17 DTS 文件"
-        fi
-        
-        # 同时修复 AC42U DTS
-        if [ -f "$dts_file" ]; then
-            cp "$dts_file" "$dts_file.bak"
-            sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
-            sed -i '/function = LED_FUNCTION_/d' "$dts_file"
-            sed -i '/function-enumerator = /d' "$dts_file"
-            sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
-            sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
-            sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
-            log "  ✅ 已修复 AC42U DTS 文件"
-        fi
-        
-        # ============================================
-        # 确保 ACRH17 设备定义使用标准 FitImage
-        # ============================================
-        log "🔧 [LEDE AC42U] 确保 ACRH17 设备定义正确..."
-        
-        local image_mk="target/linux/ipq40xx/image/generic.mk"
-        if [ -f "$image_mk" ]; then
-            # 检查 ACRH17 定义是否存在
-            if ! grep -q "define Device/asus_rt-acrh17" "$image_mk"; then
-                log "  ⚠️ ACRH17 设备定义不存在，正在添加..."
-                cp "$image_mk" "$image_mk.bak"
-                
-                cat >> "$image_mk" << 'EOF'
-
-define Device/asus_rt-acrh17
-	$(call Device/FitImage)
-	DEVICE_VENDOR := ASUS
-	DEVICE_MODEL := RT-ACRH17
-	DEVICE_ALT0_VENDOR := ASUS
-	DEVICE_ALT0_MODEL := RT-AC42U
-	DEVICE_ALT1_VENDOR := ASUS
-	DEVICE_ALT1_MODEL := RT-AC2200
-	SOC := qcom-ipq4019
-	BLOCKSIZE := 128k
-	PAGESIZE := 2048
-	IMAGE_SIZE := 20439364
-	FILESYSTEMS := squashfs
-	UIMAGE_NAME := $(shell echo -e '\003\001\001\001RT-AC82U')
-	KERNEL_INITRAMFS := $$(KERNEL) | uImage none
-	KERNEL_INITRAMFS_SUFFIX := -factory.trx
-	DEVICE_PACKAGES := ath10k-firmware-qca9984-ct kmod-usb-ledtrig-usbport
-endef
-TARGET_DEVICES += asus_rt-acrh17
-EOF
-                log "  ✅ 已添加 ACRH17 设备定义"
-            else
-                # 检查是否使用了正确的 FitImage
-                if grep -A 5 "define Device/asus_rt-acrh17" "$image_mk" | grep -q "FitImageLzma"; then
-                    log "  ⚠️ ACRH17 使用了 LZMA，正在修复..."
-                    cp "$image_mk" "$image_mk.bak"
-                    sed -i '/define Device\/asus_rt-acrh17/,/endef/ s/(call Device\/FitImageLzma)/(call Device\/FitImage)/g' "$image_mk"
-                    log "  ✅ 已修复 ACRH17 设备定义"
-                else
-                    log "  ✅ ACRH17 设备定义正确"
-                fi
-            fi
-        fi
-        
-        log "  ✅ LEDE AC42U 特殊处理完成（使用 ACRH17 配置）"
-    fi
-    # ============================================
     
     log "📁 开始合并配置文件..."
     
@@ -1704,17 +1664,12 @@ EOF
         fi
     fi
     
-    # ============================================
-    # 验证设备配置
-    # ============================================
     log "🔍 正在验证设备 $correct_device 是否被选中..."
     
     make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || true
     
     local found_config=""
-    local search_pattern=""
-    
-    search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}"
+    local search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}"
     
     found_config=$(grep -E "^${search_pattern}=y" .config 2>/dev/null | head -1)
     
@@ -1723,10 +1678,6 @@ EOF
         device_config="$found_config"
     else
         log "⚠️ 未找到设备配置 $search_pattern"
-        log "📋 当前 .config 中的设备配置:"
-        grep "CONFIG_TARGET.*DEVICE" .config 2>/dev/null | head -10 | while read line; do
-            log "  $line"
-        done
     fi
     
     if [ -n "$device_config" ]; then
@@ -1740,8 +1691,6 @@ EOF
         
         if grep -q "$device_config" .config; then
             log "✅ 设备配置已成功设置: $device_config"
-        else
-            log "⚠️ 设备配置设置可能失败"
         fi
     fi
     
@@ -1762,7 +1711,6 @@ EOF
     log "📋 基础禁用插件: $base_forbidden"
     
     local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
     
     local search_keywords=()
     IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
@@ -1772,43 +1720,27 @@ EOF
         search_keywords+=("${pkg}-scripts")
     done
     
-    log "🔧 第一轮：彻底删除源文件..."
     for keyword in "${search_keywords[@]}"; do
         if [ -d "package/feeds" ]; then
             find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除 package/feeds: $dir"
                 rm -rf "$dir"
             done
         fi
         if [ -d "feeds" ]; then
             find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除 feeds: $dir"
                 rm -rf "$dir"
             done
         fi
     done
     
-    log "🔧 特别处理 vsftpd 冲突问题..."
-    find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-        log "  🗑️ 删除 vsftpd-alt 目录: $dir"
-        rm -rf "$dir"
-    done
-    find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-        log "  🗑️ 删除 feeds vsftpd-alt 目录: $dir"
-        rm -rf "$dir"
-    done
-    find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-        log "  🗑️ 删除 package vsftpd-alt 目录: $dir"
-        rm -rf "$dir"
-    done
-    
-    log "📋 第二轮：在 .config 中禁用所有相关包..."
+    find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do rm -rf "$dir"; done
+    find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do rm -rf "$dir"; done
+    find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do rm -rf "$dir"; done
     
     local disable_temp=$(mktemp)
     for plugin in "${full_forbidden_list[@]}"; do
         echo "$plugin" >> "$disable_temp"
     done
-    
     echo "vsftpd-alt" >> "$disable_temp"
     
     sort -u "$disable_temp" > "$disable_temp.sorted"
@@ -1823,121 +1755,28 @@ EOF
     
     rm -f "$disable_temp" "$disable_temp.sorted"
     
-    log "🔧 第三轮：删除所有包含关键字的配置行..."
     for keyword in "${search_keywords[@]}"; do
         sed -i "/${keyword}/d" .config
-        local upper_keyword=$(echo "$keyword" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-        sed -i "/${upper_keyword}/d" .config
     done
     
     sed -i "/vsftpd-alt/d" .config
-    sed -i "/VSFTPD-ALT/d" .config
-    
-    log "🔧 特别处理 DDNS 相关配置..."
     sed -i '/ddns/d' .config
-    sed -i '/DDNS/d' .config
     
-    log "🔧 确保 vsftpd 被启用..."
     if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        log "  ✅ 已启用 vsftpd"
     fi
-    
-    log "✅ 禁用完成"
     
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    log "🔄 运行 make defconfig 使禁用生效..."
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-            log "⚠️ olddefconfig 有警告，但继续..."
-        }
+        make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || true
     else
-        make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-            log "⚠️ make defconfig 有警告，但继续..."
-        }
-    fi
-    
-    log "🔍 第四轮：检查插件残留..."
-    
-    local remaining=()
-    local check_temp=$(mktemp)
-    
-    for plugin in "${full_forbidden_list[@]}"; do
-        echo "$plugin" >> "$check_temp"
-    done
-    
-    echo "vsftpd-alt" >> "$check_temp"
-    
-    sort -u "$check_temp" > "$check_temp.sorted"
-    
-    while read plugin; do
-        [ -z "$plugin" ] && continue
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            remaining+=("$plugin")
-        fi
-    done < "$check_temp.sorted"
-    
-    rm -f "$check_temp" "$check_temp.sorted"
-    
-    if [ ${#remaining[@]} -gt 0 ]; then
-        log "⚠️ 发现 ${#remaining[@]} 个插件残留，第四轮禁用..."
-        
-        for plugin in "${remaining[@]}"; do
-            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-            log "  ✅ 再次禁用: $plugin"
-        done
-        
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1
-        else
-            make defconfig > /dev/null 2>&1
-        fi
-    fi
-    
-    log "📊 最终插件状态验证:"
-    local still_enabled=0
-    
-    for plugin in "${BASE_PKGS[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
-            log "  ❌ $plugin 相关包仍被启用"
-            still_enabled=$((still_enabled + 1))
-        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
-            log "  ❌ $plugin 相关包仍被模块化"
-            still_enabled=$((still_enabled + 1))
-        else
-            log "  ✅ $plugin 已禁用"
-        fi
-    done
-    
-    if grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd-alt=m" .config; then
-        log "  ❌ vsftpd-alt 仍被启用"
-        still_enabled=$((still_enabled + 1))
-    else
-        log "  ✅ vsftpd-alt 已禁用"
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_vsftpd=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
-        log "  ✅ vsftpd 已启用"
-    else
-        log "  ⚠️ vsftpd 未启用，尝试启用"
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-    fi
-    
-    if [ $still_enabled -eq 0 ]; then
-        log "🎉 所有指定插件已成功禁用"
-    else
-        log "⚠️ 有 $still_enabled 个插件未能禁用，将在后续阶段再次尝试"
+        make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || true
     fi
     
     # ============================================
-    # 修正固件名称前缀（根据源码类型）
+    # 修正固件名称前缀
     # ============================================
     log "🔧 修正固件名称前缀（根据源码类型）..."
     
@@ -1966,127 +1805,66 @@ EOF
     log "  📌 固件前缀: $vendor_prefix"
     log "  📌 发行版名称: $dist_name"
     
-    # 1. 设置 CONFIG_VERSION_DIST
     sed -i '/^CONFIG_VERSION_DIST=/d' .config
-    sed -i '/^# CONFIG_VERSION_DIST/d' .config
     echo "CONFIG_VERSION_DIST=\"$dist_name\"" >> .config
-    log "    ✅ 设置 CONFIG_VERSION_DIST=\"$dist_name\""
     
-    # 2. 设置 CONFIG_VERSION_REPO
     sed -i '/^CONFIG_VERSION_REPO=/d' .config
-    sed -i '/^# CONFIG_VERSION_REPO/d' .config
     echo "CONFIG_VERSION_REPO=\"https://github.com/$SOURCE_REPO_TYPE/$SOURCE_REPO_TYPE.git\"" >> .config
-    log "    ✅ 设置 CONFIG_VERSION_REPO"
     
-    # 3. 设置 CONFIG_VERSION_CODE_FILENAME
     sed -i '/^CONFIG_VERSION_CODE_FILENAME=/d' .config
-    sed -i '/^# CONFIG_VERSION_CODE_FILENAME/d' .config
     echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"" >> .config
-    log "    ✅ 设置 CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\""
     
-    # 4. 设置 CONFIG_VERSION_MANUFACTURER
     sed -i '/^CONFIG_VERSION_MANUFACTURER=/d' .config
-    sed -i '/^# CONFIG_VERSION_MANUFACTURER/d' .config
     echo "CONFIG_VERSION_MANUFACTURER=\"$vendor_prefix\"" >> .config
-    log "    ✅ 设置 CONFIG_VERSION_MANUFACTURER=\"$vendor_prefix\""
     
-    # 5. 修改 include/version.mk（如果存在）
     if [ -f "include/version.mk" ]; then
         cp include/version.mk include/version.mk.bak
         sed -i "s/VERSION_DIST:=.*/VERSION_DIST:=$dist_name/g" include/version.mk
         sed -i "s/VERSION_REPO:=.*/VERSION_REPO:=https:\/\/github.com\/$SOURCE_REPO_TYPE\/$SOURCE_REPO_TYPE.git/g" include/version.mk
         sed -i "s/VERSION_CODE_FILENAME:=.*/VERSION_CODE_FILENAME:=$vendor_prefix/g" include/version.mk
-        sed -i "s/VERSION_MANUFACTURER:=.*/VERSION_MANUFACTURER:=$vendor_prefix/g" include/version.mk
-        log "    ✅ 修改 include/version.mk"
     fi
     
-    # 6. 修改 include/image.mk 中的 IMAGE_NAME 定义
     if [ -f "include/image.mk" ]; then
         cp include/image.mk include/image.mk.bak
         sed -i "s/openwrt-/$vendor_prefix-/g" include/image.mk
         sed -i "s/immortalwrt-/$vendor_prefix-/g" include/image.mk
         sed -i "s/lede-/$vendor_prefix-/g" include/image.mk
-        sed -i "s/OpenWrt-/$vendor_prefix-/g" include/image.mk
-        sed -i "s/ImmortalWrt-/$vendor_prefix-/g" include/image.mk
-        sed -i "s/LEDE-/$vendor_prefix-/g" include/image.mk
-        log "    ✅ 修改 include/image.mk 中的前缀"
     fi
     
-    # 7. 修改设备定义文件
-    local image_mk="target/linux/$TARGET/image/$actual_subtarget.mk"
-    if [ -f "$image_mk" ]; then
-        cp "$image_mk" "$image_mk.bak"
-        sed -i "s/openwrt-/$vendor_prefix-/g" "$image_mk"
-        sed -i "s/immortalwrt-/$vendor_prefix-/g" "$image_mk"
-        sed -i "s/lede-/$vendor_prefix-/g" "$image_mk"
-        sed -i "s/OpenWrt/$vendor_prefix/g" "$image_mk"
-        sed -i "s/ImmortalWrt/$vendor_prefix/g" "$image_mk"
-        sed -i "s/LEDE/$vendor_prefix/g" "$image_mk"
-        log "    ✅ 修改 $image_mk"
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ -f "package/base-files/files/etc/openwrt_release" ]; then
+        sed -i 's/DISTRIB_ID=.*/DISTRIB_ID="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
     fi
     
-    # 8. 修改 generic.mk
-    if [ -f "target/linux/$TARGET/image/Makefile" ]; then
-        cp "target/linux/$TARGET/image/Makefile" "target/linux/$TARGET/image/Makefile.bak"
-        sed -i "s/openwrt-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
-        sed -i "s/immortalwrt-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
-        sed -i "s/lede-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
-        log "    ✅ 修改 target/linux/$TARGET/image/Makefile"
-    fi
-    
-    # 9. LEDE 源码特殊处理
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "  🔧 LEDE 源码特殊处理..."
-        if [ -f "package/base-files/files/etc/openwrt_release" ]; then
-            sed -i 's/DISTRIB_ID=.*/DISTRIB_ID="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
-            sed -i 's/DISTRIB_RELEASE=.*/DISTRIB_RELEASE="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
-        fi
-        log "    ✅ LEDE 特殊配置已应用"
-    fi
-    
-    # 10. 如果是 AC42U 但使用 ACRH17 配置，在编译后修改固件名称
+    # ============================================
+    # AC42U 固件重命名脚本
+    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $is_ac42u -eq 1 ]; then
-        log "  🔧 AC42U 固件名称处理：将在编译后重命名固件..."
+        log "  🔧 创建 AC42U 固件重命名脚本..."
         
-        # 创建编译后重命名脚本
         local rename_script="$BUILD_DIR/rename_firmware.sh"
         cat > "$rename_script" << EOF
 #!/bin/bash
-# 编译后重命名固件脚本
 TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$actual_subtarget"
 if [ -d "\$TARGET_DIR" ]; then
     cd "\$TARGET_DIR"
-    # 将 acrh17 重命名为 ac42u
-    for f in *acrh17*.bin *acrh17*.img 2>/dev/null; do
+    for f in *acrh17*.bin *acrh17*.img *acrh17*.trx 2>/dev/null; do
         if [ -f "\$f" ]; then
             newname=\$(echo "\$f" | sed 's/acrh17/ac42u/g')
             mv "\$f" "\$newname"
             echo "  ✅ 重命名: \$f -> \$newname"
         fi
     done
-    # 更新 sha256sums 文件
     if [ -f "sha256sums" ]; then
         sed -i 's/acrh17/ac42u/g' sha256sums
     fi
 fi
 EOF
         chmod +x "$rename_script"
-        log "    ✅ 已创建固件重命名脚本: $rename_script"
-        
-        # 保存脚本路径到环境变量
         echo "RENAME_FIRMWARE_SCRIPT=$rename_script" >> $GITHUB_ENV 2>/dev/null || true
+        log "    ✅ 已创建固件重命名脚本"
     fi
     
-    # 11. 更新配置
     make defconfig > /dev/null 2>&1 || true
-    
-    log "✅ 固件名称前缀修正完成"
-    if [ $is_ac42u -eq 1 ]; then
-        log "  📌 实际编译设备: asus_rt-acrh17"
-        log "  📌 固件将重命名为: ${vendor_prefix}-${TARGET}-${actual_subtarget}-asus_rt-ac42u-squashfs-sysupgrade.bin"
-    else
-        log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
-    fi
     
     log "✅ 配置生成完成"
 }
@@ -5540,7 +5318,6 @@ EOF
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     
-    # 设置 VERSION_DIST 环境变量，确保编译时使用正确的名称
     local vendor_dist=""
     case "$SOURCE_REPO_TYPE" in
         "immortalwrt")
@@ -5584,9 +5361,6 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    # ============================================
-    # 全局动态目录创建函数
-    # ============================================
     ensure_root_dirs() {
         local target="$1"
         local build_dir="$2"
@@ -5625,12 +5399,8 @@ EOF
         done
     }
     
-    # ============================================
-    # 全局分步编译流程
-    # ============================================
     log "🔧 使用分步编译流程..."
     
-    # 步骤0: 清理并准备环境
     log "  📦 步骤0: 清理并准备环境..."
     rm -rf tmp/info 2>/dev/null || true
     mkdir -p tmp/info
@@ -5641,7 +5411,6 @@ EOF
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     log "  ✅ 环境清理完成"
     
-    # 步骤1: 编译工具链
     log "  📦 步骤1: 编译工具链..."
     set +e
     make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log
@@ -5653,7 +5422,6 @@ EOF
     fi
     log "  ✅ 步骤1完成"
     
-    # 步骤2: 编译内核和模块（带补丁失败重试）
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     
@@ -5677,11 +5445,9 @@ EOF
         
         log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
         
-        # 检查是否是补丁失败
         if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    🔧 检测到补丁失败，正在修复..."
             
-            # 提取失败的补丁文件
             local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
             
             if [ -z "$failed_patches" ]; then
@@ -5689,44 +5455,19 @@ EOF
             fi
             
             for patch_name in $failed_patches; do
-                log "      🗑️ 删除失败补丁: $patch_name"
                 find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
-                    log "        删除: $patch_file"
                     rm -f "$patch_file"
                 done
             done
             
-            # 如果没有提取到具体补丁名，删除常见的ath79问题补丁
-            if [ -z "$failed_patches" ] && [ "$TARGET" = "ath79" ]; then
-                log "      🗑️ 删除 ath79 已知问题补丁: 910-unaligned_access_hacks.patch"
-                find target/linux/ath79 -name "910-unaligned_access_hacks.patch" -type f 2>/dev/null | while read patch_file; do
-                    log "        删除: $patch_file"
-                    rm -f "$patch_file"
-                done
-            fi
-            
-            # 彻底清理内核构建目录
-            log "    🔧 清理内核构建目录..."
             rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
             rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-            
-            # 清理 quilt 状态目录
             find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
-            find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
         fi
         
-        # 检查其他常见错误
         if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    ❌ 磁盘空间不足，无法继续"
             break
-        fi
-        
-        if grep -q "swconfig\|SWITCH_LINK_FLAG" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
-            log "    🔧 禁用 swconfig..."
-            find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-            sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
-            echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-            make defconfig > /dev/null 2>&1 || true
         fi
         
         kernel_retry=$((kernel_retry + 1))
@@ -5741,20 +5482,11 @@ EOF
     
     log "  ✅ 步骤2完成"
     
-    # 步骤3: 编译所有软件包
     log "  📦 步骤3: 编译所有软件包..."
     set +e
     make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
     STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
-    
-    if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
-        log "    🔧 禁用 swconfig..."
-        find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-        sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
-        echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-        make defconfig > /dev/null 2>&1 || true
-    fi
     
     local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
     if [ $info_count -eq 0 ]; then
@@ -5762,7 +5494,6 @@ EOF
     fi
     log "  ✅ 步骤3完成"
     
-    # 步骤4: 安装软件包
     log "  📦 步骤4: 安装软件包..."
     set +e
     make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log
@@ -5774,7 +5505,6 @@ EOF
     fi
     log "  ✅ 步骤4完成"
     
-    # 步骤5: 生成固件
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     set +e
@@ -5787,13 +5517,12 @@ EOF
     fi
     log "  ✅ 步骤5完成"
     
-    # 合并所有日志
     cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
     
     log "  ✅ 分步编译完成"
     
     # ============================================
-    # 如果是 AC42U，执行固件重命名
+    # AC42U 固件重命名
     # ============================================
     if [ -n "$RENAME_FIRMWARE_SCRIPT" ] && [ -f "$RENAME_FIRMWARE_SCRIPT" ]; then
         log "🔧 执行 AC42U 固件重命名脚本..."
@@ -5804,33 +5533,23 @@ EOF
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
     
-    # ============================================
-    # 固件验证和哈希值计算
-    # ============================================
     log "🔍 验证固件并计算哈希值..."
     
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local valid_firmware=0
-    local firmware_files=()
     local hash_file="$target_dir/firmware-sha256sums.txt"
     
     > "$hash_file" 2>/dev/null || true
     
     if [ -d "$target_dir" ]; then
-        # 首先删除不需要的文件（.itb、.manifest 等）
-        log "  🗑️ 清理不需要的文件..."
         find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) 2>/dev/null | while read file; do
-            log "    删除: $(basename "$file")"
             rm -f "$file"
         done
         
-        # 删除 packages 子目录（不需要上传）
         if [ -d "$target_dir/packages" ]; then
-            log "    删除 packages 目录"
             rm -rf "$target_dir/packages"
         fi
         
-        # 然后验证固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             local fname=$(basename "$file")
@@ -5847,7 +5566,6 @@ EOF
                 if [ $is_flashable -eq 1 ]; then
                     log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
                     valid_firmware=$((valid_firmware + 1))
-                    firmware_files+=("$fname")
                     
                     local fhash=$(sha256sum "$file" | awk '{print $1}')
                     echo "$fhash  $fname" >> "$hash_file"
@@ -5859,7 +5577,7 @@ EOF
                 log "  ❌ $fname 大小: ${size_mb}MB - 无效(小于5MB)"
                 rm -f "$file"
             fi
-        done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
+        done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.trx" \) 2>/dev/null)
     fi
     
     if [ $valid_firmware -gt 0 ]; then
