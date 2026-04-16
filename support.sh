@@ -28,6 +28,7 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic bcm47189"
 DEVICES["asus_rt-ac42u"]="ipq40xx generic bcm47189"
+DEVICES["asus_rt-acrh17"]="ipq40xx generic bcm47189"
 DEVICES["cmcc_rax3000m"]="mediatek filogic mt7981"
 DEVICES["cmcc_rax3000m-nand"]="mediatek filogic mt7981"
 DEVICES["netgear_wndr3800"]="ath79 generic ar7161"
@@ -189,6 +190,10 @@ get_device_platform() {
             ;;
         ac42u|rt-ac42u)
             mapped_name="asus_rt-ac42u"
+            log "🔧 设备名映射: $device_name -> $mapped_name"
+            ;;
+        asus_rt-acrh17)
+            mapped_name="asus_rt-acrh17"
             log "🔧 设备名映射: $device_name -> $mapped_name"
             ;;
     esac
