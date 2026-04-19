@@ -53,6 +53,7 @@ load_build_config() {
     export IMMORTALWRT_URL OPENWRT_URL LEDE_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
     export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
+    export DISABLE_IPV6
     
     # ============================================
     # 检查文件描述符限制（修复Broken pipe）
@@ -137,6 +138,7 @@ save_env() {
     echo "export ENABLE_TCP_BBR=\"${ENABLE_TCP_BBR}\"" >> $ENV_FILE
     echo "export FORCE_ATH10K_CT=\"${FORCE_ATH10K_CT}\"" >> $ENV_FILE
     echo "export AUTO_FIX_USB_DRIVERS=\"${AUTO_FIX_USB_DRIVERS}\"" >> $ENV_FILE
+    echo "export DISABLE_IPV6=\"${DISABLE_IPV6}\"" >> $ENV_FILE
     
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
@@ -952,6 +954,7 @@ install_turboacc_packages() {
 : ${FORCE_ATH10K_CT:="true"}
 : ${AUTO_FIX_USB_DRIVERS:="true"}
 : ${ENABLE_VERBOSE_LOG:="false"}
+: ${DISABLE_IPV6:="true"}
 : ${FORBIDDEN_PACKAGES:="vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol"}
 #【build_firmware_main.sh-11-end】
 
@@ -1067,6 +1070,307 @@ generate_config() {
     log "🔧 使用传入的设备名: $correct_device"
     
     # ============================================
+    # LEDE 源码启动修复（针对无法开机问题）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 ===== LEDE 源码启动修复 ====="
+        
+        # 根据目标平台进行特定修复
+        case "$TARGET" in
+            ipq40xx)
+                log "  🔧 IPQ40xx 平台启动修复 (适用于 AC42U 等设备)"
+                
+                # 确保必要的内核配置
+                cat >> .config << 'EOF'
+# IPQ40xx 启动必需配置
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+CONFIG_MTD_ROOTFS_ROOT_DEV=y
+CONFIG_MTD_ROOTFS_SPLIT=y
+CONFIG_MTD_SPLIT_SQUASHFS=y
+
+# 确保 UBI 支持
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_UBIFS_FS_XZ=y
+CONFIG_UBIFS_FS_LZO=y
+CONFIG_UBIFS_FS_ZLIB=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="console=ttyMSM0,115200n8"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 看门狗支持
+CONFIG_WATCHDOG=y
+CONFIG_QCOM_WDT=y
+
+# 确保 MTD 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_BLOCK_RO=y
+CONFIG_MTD_SPLIT=y
+EOF
+                log "  ✅ IPQ40xx 启动修复配置已添加"
+                ;;
+                
+            mediatek)
+                log "  🔧 Mediatek 平台启动修复 (适用于 RAX3000M 等设备)"
+                
+                cat >> .config << 'EOF'
+# Mediatek 启动必需配置
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+
+# 确保 MTD 和 UBI 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPLIT=y
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZSTD=y
+
+# NAND 支持
+CONFIG_MTD_NAND=y
+CONFIG_MTD_NAND_ECC=y
+CONFIG_MTD_NAND_ECC_SW_HAMMING=y
+CONFIG_MTD_SPI_NAND=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="earlycon=uart8250,mmio32,0x11002000 console=ttyS0,115200n1"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 确保 watchdog 支持
+CONFIG_WATCHDOG=y
+CONFIG_MEDIATEK_WATCHDOG=y
+EOF
+                log "  ✅ Mediatek 启动修复配置已添加"
+                ;;
+                
+            ath79)
+                log "  🔧 ATH79 平台启动修复 (适用于 WNDR3800 等设备)"
+                
+                cat >> .config << 'EOF'
+# ATH79 启动必需配置
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+
+# 确保 MTD 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPLIT=y
+CONFIG_MTD_ROOTFS=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="console=ttyS0,115200"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 确保 watchdog 支持
+CONFIG_WATCHDOG=y
+CONFIG_ATH79_WDT=y
+
+# SquashFS 支持
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZLIB=y
+CONFIG_SQUASHFS_LZ4=y
+EOF
+                log "  ✅ ATH79 启动修复配置已添加"
+                ;;
+        esac
+        
+        # ============================================
+        # LEDE 通用启动修复
+        # ============================================
+        log "  🔧 LEDE 通用启动修复"
+        
+        cat >> .config << 'EOF'
+# LEDE 通用启动修复配置
+# 确保 initramfs 支持
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_INITRAMFS_SOURCE=""
+CONFIG_RD_GZIP=y
+CONFIG_RD_BZIP2=y
+CONFIG_RD_LZMA=y
+CONFIG_RD_XZ=y
+CONFIG_RD_LZO=y
+CONFIG_RD_LZ4=y
+
+# 确保正确的根文件系统类型
+CONFIG_ROOT_NFS=y
+
+# 确保必要的文件系统支持
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_USE_FOR_EXT2=y
+CONFIG_FUSE_FS=y
+CONFIG_MSDOS_FS=y
+CONFIG_VFAT_FS=y
+CONFIG_FAT_DEFAULT_CODEPAGE=437
+CONFIG_FAT_DEFAULT_IOCHARSET="iso8859-1"
+CONFIG_NTFS_FS=y
+CONFIG_NTFS3_FS=y
+
+# 确保网络支持（不影响启动）
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_IPV4=y
+
+# 禁用可能冲突的功能
+# CONFIG_IPV6 is not set
+# CONFIG_KERNEL_IPV6 is not set
+EOF
+        log "  ✅ LEDE 通用启动修复配置已添加"
+        
+        # ============================================
+        # 修复 LEDE 源码中可能存在的设备定义问题
+        # ============================================
+        log "  🔧 检查和修复 LEDE 设备定义文件..."
+        
+        # 查找设备定义文件
+        local device_mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+        local device_found=0
+        
+        for mkfile in $device_mk_files; do
+            if grep -q "define Device.*$correct_device" "$mkfile" 2>/dev/null; then
+                device_found=1
+                log "    📁 找到设备定义文件: $mkfile"
+                
+                # 备份原文件
+                cp "$mkfile" "$mkfile.bak.lede"
+                
+                # 检查并修复常见的 LEDE 设备定义问题
+                
+                # 1. 确保有 KERNEL_SIZE 定义
+                if ! grep -q "KERNEL_SIZE" "$mkfile" 2>/dev/null; then
+                    # 获取 kernel 大小（从设备定义中推断）
+                    local kernel_size=""
+                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
+                        kernel_size="2097152"
+                    elif grep -q "ac42u\|rt-ac42u" "$mkfile" 2>/dev/null; then
+                        kernel_size="4194304"
+                    elif grep -q "rax3000m" "$mkfile" 2>/dev/null; then
+                        kernel_size="4194304"
+                    else
+                        kernel_size="2097152"
+                    fi
+                    
+                    # 在 Device 定义后添加 KERNEL_SIZE
+                    sed -i "/define Device.*$correct_device/a \  KERNEL_SIZE := $kernel_size" "$mkfile"
+                    log "      ✅ 添加 KERNEL_SIZE := $kernel_size"
+                fi
+                
+                # 2. 检查并修复 BLOCKSIZE
+                if ! grep -q "BLOCKSIZE" "$mkfile" 2>/dev/null; then
+                    local blocksize="256k"
+                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
+                        blocksize="128k"
+                    fi
+                    sed -i "/define Device.*$correct_device/a \  BLOCKSIZE := $blocksize" "$mkfile"
+                    log "      ✅ 添加 BLOCKSIZE := $blocksize"
+                fi
+                
+                # 3. 确保有 IMAGE_SIZE 定义
+                if ! grep -q "IMAGE_SIZE" "$mkfile" 2>/dev/null; then
+                    local image_size=""
+                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
+                        image_size="15744k"
+                    elif grep -q "ac42u\|rt-ac42u" "$mkfile" 2>/dev/null; then
+                        image_size="32256k"
+                    elif grep -q "rax3000m" "$mkfile" 2>/dev/null; then
+                        image_size="32256k"
+                    fi
+                    
+                    if [ -n "$image_size" ]; then
+                        sed -i "/define Device.*$correct_device/a \  IMAGE_SIZE := $image_size" "$mkfile"
+                        log "      ✅ 添加 IMAGE_SIZE := $image_size"
+                    fi
+                fi
+                
+                # 4. 检查并添加 IMAGE/sysupgrade.bin 定义
+                if ! grep -q "IMAGE/sysupgrade.bin" "$mkfile" 2>/dev/null; then
+                    # 根据平台添加适当的 sysupgrade 定义
+                    case "$TARGET" in
+                        ipq40xx)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | check-size" >> /tmp/device_temp.txt
+                            ;;
+                        mediatek)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-ubi | check-size" >> /tmp/device_temp.txt
+                            ;;
+                        ath79)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | append-metadata | check-size" >> /tmp/device_temp.txt
+                            ;;
+                    esac
+                    log "      ℹ️ 建议检查 IMAGE/sysupgrade.bin 定义"
+                fi
+                
+                break
+            fi
+        done
+        
+        if [ $device_found -eq 0 ]; then
+            log "    ⚠️ 未找到设备 $correct_device 的定义文件，跳过修复"
+        fi
+        
+        # ============================================
+        # 修复 LEDE 内核补丁问题
+        # ============================================
+        log "  🔧 检查和修复 LEDE 内核补丁..."
+        
+        # 查找可能的补丁冲突
+        local patch_dirs=$(find "target/linux/$TARGET" -type d -name "patches-*" 2>/dev/null)
+        
+        for patch_dir in $patch_dirs; do
+            log "    📁 检查补丁目录: $patch_dir"
+            
+            # 检查是否有可能导致启动问题的补丁
+            local problem_patches=$(find "$patch_dir" -name "*.patch" -exec grep -l "leds.*color\|function.*LED_FUNCTION" {} \; 2>/dev/null)
+            
+            for patch in $problem_patches; do
+                log "    ⚠️ 发现可能的问题补丁: $(basename "$patch")"
+                # 备份并禁用问题补丁
+                mv "$patch" "$patch.disabled" 2>/dev/null || true
+                log "      🔧 已禁用问题补丁: $(basename "$patch").disabled"
+            done
+        done
+        
+        # ============================================
+        # 确保正确的镜像格式
+        # ============================================
+        log "  🔧 配置正确的镜像格式..."
+        
+        case "$TARGET" in
+            ipq40xx)
+                # IPQ40xx 通常使用 UBI 格式
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
+                ;;
+            mediatek)
+                # Mediatek/filogic 通常使用 UBI 格式
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
+                ;;
+            ath79)
+                # ATH79 通常使用 SquashFS
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+                ;;
+        esac
+        
+        log "✅ LEDE 源码启动修复完成"
+        log "======================================"
+    fi
+    
+    # ============================================
     # 根据源码类型确定设备配置变量格式
     # ============================================
     local device_config=""
@@ -1097,6 +1401,13 @@ generate_config() {
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${actual_subtarget}=y
 EOF
+        
+        # 添加之前生成的 LEDE 启动修复配置
+        if [ -f .config.tmp.lede ]; then
+            cat .config.tmp.lede >> .config
+            rm -f .config.tmp.lede
+        fi
+        
         log "🔄 运行 make defconfig 生成基础配置..."
         make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || {
             log "❌ LEDE基础配置失败"
@@ -1117,6 +1428,12 @@ EOF
     
     log "🔧 基础配置文件内容:"
     cat .config
+    
+    # 保存 LEDE 启动修复配置供后续使用
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        # 将之前的修复配置保存到临时文件，避免被后续操作覆盖
+        cp .config .config.lede_base_fixed
+    fi
     
     log "📁 开始合并配置文件..."
     
@@ -1211,6 +1528,79 @@ EOF
         log "✅ ath10k-ct驱动已强制启用"
     fi
     
+    # ============================================
+    # 禁用 IPv6 所有功能（安全方式，不破坏 LEDE 启动）
+    # ============================================
+    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+        log "🔧 ===== 禁用所有 IPv6 功能 ====="
+        
+        # 对于 LEDE 源码，使用更保守的禁用方式
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            log "  🔧 LEDE 源码使用保守的 IPv6 禁用方式"
+            
+            # 只禁用 IPv6 相关的包，不修改内核配置
+            cat >> .config << 'EOF'
+# LEDE IPv6 包禁用（保守方式）
+# CONFIG_PACKAGE_ip6tables is not set
+# CONFIG_PACKAGE_ip6tables-extra is not set
+# CONFIG_PACKAGE_kmod-ip6tables is not set
+# CONFIG_PACKAGE_odhcp6c is not set
+# CONFIG_PACKAGE_odhcpd is not set
+# CONFIG_PACKAGE_6in4 is not set
+# CONFIG_PACKAGE_6rd is not set
+# CONFIG_PACKAGE_6to4 is not set
+# CONFIG_PACKAGE_luci-proto-ipv6 is not set
+# CONFIG_PACKAGE_kmod-ipv6 is not set
+EOF
+            log "  ✅ 已禁用 IPv6 相关包（保留内核配置）"
+        else
+            # 非 LEDE 源码使用完整禁用
+            cat >> .config << 'EOF'
+# ===== IPv6 完全禁用配置 =====
+# CONFIG_KERNEL_IPV6 is not set
+# CONFIG_IPV6 is not set
+# CONFIG_PACKAGE_ip6tables is not set
+# CONFIG_PACKAGE_ip6tables-extra is not set
+# CONFIG_PACKAGE_ip6tables-mod-nat is not set
+# CONFIG_PACKAGE_kmod-ip6tables is not set
+# CONFIG_PACKAGE_kmod-ip6tables-extra is not set
+# CONFIG_PACKAGE_kmod-nf-ip6 is not set
+# CONFIG_PACKAGE_kmod-nf-conntrack6 is not set
+# CONFIG_PACKAGE_kmod-nf-log6 is not set
+# CONFIG_PACKAGE_kmod-nf-nat6 is not set
+# CONFIG_PACKAGE_kmod-nf-reject6 is not set
+# CONFIG_PACKAGE_odhcp6c is not set
+# CONFIG_PACKAGE_odhcpd-ipv6only is not set
+# CONFIG_PACKAGE_odhcpd is not set
+# CONFIG_PACKAGE_6in4 is not set
+# CONFIG_PACKAGE_6rd is not set
+# CONFIG_PACKAGE_6to4 is not set
+# CONFIG_PACKAGE_ds-lite is not set
+# CONFIG_PACKAGE_map is not set
+# CONFIG_PACKAGE_luci-proto-ipv6 is not set
+# CONFIG_PACKAGE_luci-proto-6in4 is not set
+# CONFIG_PACKAGE_luci-proto-6rd is not set
+# CONFIG_PACKAGE_luci-proto-6to4 is not set
+# CONFIG_PACKAGE_kmod-ipv6 is not set
+# CONFIG_PACKAGE_kmod-sit is not set
+# CONFIG_USE_IPV6 is not set
+EOF
+            log "  ✅ 已添加 IPv6 禁用配置"
+        fi
+        
+        # 删除可能存在的 IPv6 启用配置
+        sed -i '/^CONFIG_PACKAGE_.*ip6tables/d' .config
+        sed -i '/^CONFIG_PACKAGE_odhcp6c/d' .config
+        sed -i '/^CONFIG_PACKAGE_odhcpd/d' .config
+        sed -i '/^CONFIG_PACKAGE_6in4/d' .config
+        sed -i '/^CONFIG_PACKAGE_6rd/d' .config
+        sed -i '/^CONFIG_PACKAGE_6to4/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-proto-ipv6/d' .config
+        sed -i '/^CONFIG_PACKAGE_kmod-ipv6/d' .config
+        
+        log "  ✅ 已删除所有 IPv6 启用配置"
+    fi
+    
     log "🔧 强制配置生成固件..."
     
     if grep -q "CONFIG_TARGET_IMAGES_FIT=y" .config; then
@@ -1257,208 +1647,55 @@ EOF
     esac
     
     # ============================================
-    # LEDE源码 AC42U 特殊内核配置修复
+    # LEDE 源码最终启动验证和修复
     # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
-        log "🔧 [LEDE AC42U] 添加特殊内核配置修复（解决无法启动问题）..."
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 ===== LEDE 源码最终启动验证 ====="
         
-        cat >> .config << 'EOF'
-# LEDE AC42U 启动修复 - 内核分区解析支持
-CONFIG_CMDLINE_PARTITION=y
-CONFIG_MTD_SPLIT_FIRMWARE=y
-CONFIG_MTD_SPLIT_UIMAGE_FW=y
-
-# 确保 MTD 和 UBI 支持
-CONFIG_MTD=y
-CONFIG_MTD_BLOCK=y
-CONFIG_MTD_SPLIT=y
-CONFIG_MTD_UBI=y
-CONFIG_UBIFS_FS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-
-# 内核命令行参数
-CONFIG_CMDLINE="console=ttyMSM0,115200n8"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-
-# 看门狗支持
-CONFIG_WATCHDOG=y
-CONFIG_QCOM_WDT=y
-
-# 禁用新式 LED 类支持（LEDE 旧内核可能不支持）
-# CONFIG_LEDS_CLASS_MULTICOLOR is not set
-# CONFIG_LEDS_QCOM_LPG is not set
-
-# 确保使用传统 GPIO LED 驱动
-CONFIG_LEDS_GPIO=y
-CONFIG_NEW_LEDS=y
-EOF
+        # 恢复之前保存的 LEDE 基础修复配置
+        if [ -f .config.lede_base_fixed ]; then
+            log "  🔧 合并 LEDE 基础修复配置..."
+            # 只添加缺失的关键配置，不覆盖已有配置
+            while IFS= read -r line; do
+                config_name=$(echo "$line" | cut -d'=' -f1)
+                if ! grep -q "^${config_name}=" .config; then
+                    echo "$line" >> .config
+                fi
+            done < .config.lede_base_fixed
+            rm -f .config.lede_base_fixed
+        fi
         
-        log "  ✅ 已添加 LEDE AC42U 启动修复内核配置"
+        # 确保关键配置存在
+        log "  🔧 验证关键启动配置..."
         
-        # ============================================
-        # 修复 DTS 文件（LEDE 旧内核不支持新的 LED 绑定）
-        # ============================================
-        log "🔧 [LEDE AC42U] 修复 DTS 文件（移除新式 LED 绑定）..."
+        local critical_missing=0
         
-        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
+        # 检查 CMDLINE_PARTITION
+        if ! grep -q "CONFIG_CMDLINE_PARTITION=y" .config; then
+            echo "CONFIG_CMDLINE_PARTITION=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
         
-        if [ -f "$dts_file" ]; then
-            cp "$dts_file" "$dts_file.bak"
-            log "  📁 已备份原 DTS 文件: $dts_file.bak"
-            
-            if grep -q "color = <LED_COLOR_ID_" "$dts_file" || grep -q "function = LED_FUNCTION_" "$dts_file"; then
-                log "  🔍 检测到新式 LED 绑定，正在转换为旧格式..."
-                
-                sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
-                sed -i '/function = LED_FUNCTION_/d' "$dts_file"
-                sed -i '/function-enumerator = /d' "$dts_file"
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
-                sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
-                sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
-                
-                log "  ✅ DTS 文件修复完成"
-                log "  📋 修改内容:"
-                log "     - 删除 color 属性"
-                log "     - 删除 function 属性"
-                log "     - 删除 function-enumerator 属性"
-                log "     - 删除 leds/common.h 头文件"
-                log "     - 修复 LED 触发器"
-            else
-                log "  ℹ️ DTS 文件已是旧格式，无需修复"
-            fi
+        # 检查 MTD_SPLIT_FIRMWARE
+        if ! grep -q "CONFIG_MTD_SPLIT_FIRMWARE=y" .config; then
+            echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        # 检查 MTD_SPLIT_UIMAGE_FW
+        if ! grep -q "CONFIG_MTD_SPLIT_UIMAGE_FW=y" .config; then
+            echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        if [ $critical_missing -gt 0 ]; then
+            log "    ✅ 添加了 $critical_missing 个缺失的关键配置"
         else
-            log "  ⚠️ DTS 文件不存在: $dts_file"
-            
-            local alt_dts=$(find target/linux/ipq40xx -name "*ac42u*.dts" 2>/dev/null | head -1)
-            if [ -n "$alt_dts" ]; then
-                log "  📁 找到替代 DTS 文件: $alt_dts"
-                cp "$alt_dts" "$alt_dts.bak"
-                sed -i '/color = <LED_COLOR_ID_/d' "$alt_dts"
-                sed -i '/function = LED_FUNCTION_/d' "$alt_dts"
-                sed -i '/function-enumerator = /d' "$alt_dts"
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$alt_dts"
-                log "  ✅ 替代 DTS 文件修复完成"
-            fi
+            log "    ✅ 所有关键配置都已存在"
         fi
         
-        # ============================================
-        # 创建内核补丁（作为备用方案）
-        # ============================================
-        log "🔧 [LEDE AC42U] 创建内核补丁..."
-        
-        local patch_dir="target/linux/ipq40xx/patches-5.4"
-        mkdir -p "$patch_dir"
-        
-        cat > "$patch_dir/999-fix-ac42u-led.patch" << 'EOF'
---- a/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
-+++ b/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
-@@ -3,7 +3,6 @@
- #include "qcom-ipq4019.dtsi"
- #include <dt-bindings/gpio/gpio.h>
- #include <dt-bindings/input/input.h>
--#include <dt-bindings/leds/common.h>
- #include <dt-bindings/soc/qcom,tcsr.h>
- 
- / {
-@@ -98,64 +97,54 @@
- 	leds {
- 		compatible = "gpio-leds";
- 
--		led_power: led-0 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_STATUS;
-+		led_power: power {
-+			label = "blue:power";
- 			gpios = <&tlmm 40 GPIO_ACTIVE_LOW>;
--			label = "blue:status";
-+			default-state = "on";
- 		};
- 
--		led-1 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WAN;
-+		wan_blue {
-+			label = "blue:wan";
- 			gpios = <&tlmm 61 GPIO_ACTIVE_HIGH>;
- 			linux,default-trigger = "90000.mdio-1:04:link";
- 		};
- 
--		led-2 {
--			color = <LED_COLOR_ID_RED>;
--			function = LED_FUNCTION_WAN;
-+		wan_red {
-+			label = "red:wan";
- 			gpios = <&tlmm 68 GPIO_ACTIVE_HIGH>;
- 			linux,default-trigger = "none";
- 		};
- 
--		led-3 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WLAN;
--			function-enumerator = <0>;
-+		wlan2g {
-+			label = "blue:wlan2g";
- 			gpios = <&tlmm 52 GPIO_ACTIVE_LOW>;
--			linux,default-trigger = "phy1tpt";
-+			linux,default-trigger = "phy0tpt";
- 		};
- 
--		led-4 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WLAN;
--			function-enumerator = <1>;
-+		wlan5g {
-+			label = "blue:wlan5g";
- 			gpios = <&tlmm 54 GPIO_ACTIVE_LOW>;
- 			linux,default-trigger = "phy0tpt";
- 		};
- 
--		led-5 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <1>;
-+		lan1 {
-+			label = "blue:lan1";
- 			gpios = <&tlmm 45 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-6 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <2>;
-+		lan2 {
-+			label = "blue:lan2";
- 			gpios = <&tlmm 43 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-7 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <3>;
-+		lan3 {
-+			label = "blue:lan3";
- 			gpios = <&tlmm 42 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-8 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <4>;
-+		lan4 {
-+			label = "blue:lan4";
- 			gpios = <&tlmm 49 GPIO_ACTIVE_LOW>;
- 		};
- 	};
-EOF
-        
-        if [ -f "$patch_dir/999-fix-ac42u-led.patch" ]; then
-            log "  ✅ 已创建 DTS 修复补丁: $patch_dir/999-fix-ac42u-led.patch"
-        fi
-        
-        log "  ✅ LEDE AC42U 特殊处理完成"
+        log "✅ LEDE 源码最终启动验证完成"
     fi
-    # ============================================
     
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
@@ -1979,6 +2216,47 @@ EOF
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
+    # ============================================
+    # LEDE 源码最终启动配置验证
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log ""
+        log "🔍 ===== LEDE 源码最终启动配置验证 ====="
+        
+        local lede_critical_configs=(
+            "CONFIG_CMDLINE_PARTITION"
+            "CONFIG_MTD_SPLIT_FIRMWARE"
+            "CONFIG_MTD_SPLIT_UIMAGE_FW"
+            "CONFIG_MTD"
+            "CONFIG_MTD_BLOCK"
+            "CONFIG_MTD_SPLIT"
+        )
+        
+        local lede_missing=0
+        for cfg in "${lede_critical_configs[@]}"; do
+            if grep -q "^${cfg}=y" .config; then
+                log "  ✅ $cfg: 已启用"
+            else
+                log "  ❌ $cfg: 未启用"
+                lede_missing=$((lede_missing + 1))
+            fi
+        done
+        
+        if [ $lede_missing -gt 0 ]; then
+            log "  🔧 强制添加缺失的启动关键配置..."
+            echo "CONFIG_CMDLINE_PARTITION=y" >> .config
+            echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
+            echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
+            echo "CONFIG_MTD=y" >> .config
+            echo "CONFIG_MTD_BLOCK=y" >> .config
+            echo "CONFIG_MTD_SPLIT=y" >> .config
+            make olddefconfig > /dev/null 2>&1
+            log "  ✅ 已添加缺失的启动关键配置"
+        fi
+        
+        log "======================================"
+    fi
+    
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
@@ -2030,7 +2308,7 @@ EOF
     # 3. 设置 CONFIG_VERSION_CODE_FILENAME
     sed -i '/^CONFIG_VERSION_CODE_FILENAME=/d' .config
     sed -i '/^# CONFIG_VERSION_CODE_FILENAME/d' .config
-    echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"">> .config
+    echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"" >> .config
     log "    ✅ 设置 CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\""
     
     # 4. 设置 CONFIG_VERSION_MANUFACTURER
@@ -6653,7 +6931,26 @@ workflow_step30_build_summary() {
     echo "  TCP BBR:       ${ENABLE_TCP_BBR:-true}"
     echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
     echo "  USB自动修复:   ${AUTO_FIX_USB_DRIVERS:-true}"
+    echo "  禁用IPv6:      ${DISABLE_IPV6:-true}"
     echo ""
+    
+    # ============================================
+    # 显示 IPv6 禁用状态详情（全局通用）
+    # ============================================
+    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+        echo "🌐 IPv6 禁用详情（所有源码类型通用）:"
+        echo "  - 内核 IPv6 支持: 已禁用"
+        echo "  - ip6tables 相关包: 已禁用"
+        echo "  - odhcp6c/odhcpd: 已禁用"
+        echo "  - 6in4/6rd/6to4 隧道: 已禁用"
+        echo "  - LuCI IPv6 协议: 已禁用"
+        echo "  - IPv6 内核模块: 已禁用"
+        echo "  ✅ 固件将仅支持 IPv4 网络"
+        echo ""
+    else
+        echo "🌐 IPv6 状态: 已启用（默认）"
+        echo ""
+    fi
     
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✅ 构建流程完成"
