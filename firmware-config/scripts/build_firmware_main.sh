@@ -132,21 +132,13 @@ save_env() {
     echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
-    echo "export SOURCE_REPO_TYPE=\"${SOURCE_REPO_TYPE}\"" >> $ENV_FILE
     
-    # 保存配置开关状态（所有开关都可以通过配置文件切换）
+    # 保存配置开关状态
     echo "export ENABLE_TURBOACC=\"${ENABLE_TURBOACC}\"" >> $ENV_FILE
     echo "export ENABLE_TCP_BBR=\"${ENABLE_TCP_BBR}\"" >> $ENV_FILE
-    echo "export USE_GENERIC_WIRELESS=\"${USE_GENERIC_WIRELESS}\"" >> $ENV_FILE
+    echo "export FORCE_ATH10K_CT=\"${FORCE_ATH10K_CT}\"" >> $ENV_FILE
     echo "export AUTO_FIX_USB_DRIVERS=\"${AUTO_FIX_USB_DRIVERS}\"" >> $ENV_FILE
-    echo "export ENABLE_VERBOSE_LOG=\"${ENABLE_VERBOSE_LOG}\"" >> $ENV_FILE
     echo "export DISABLE_IPV6=\"${DISABLE_IPV6}\"" >> $ENV_FILE
-    echo "export ENABLE_DYNAMIC_KERNEL_DETECTION=\"${ENABLE_DYNAMIC_KERNEL_DETECTION}\"" >> $ENV_FILE
-    echo "export ENABLE_DYNAMIC_PLATFORM_DRIVERS=\"${ENABLE_DYNAMIC_PLATFORM_DRIVERS}\"" >> $ENV_FILE
-    echo "export ENABLE_DYNAMIC_DEVICE_MAPPING=\"${ENABLE_DYNAMIC_DEVICE_MAPPING}\"" >> $ENV_FILE
-    echo "export SKIP_EXISTING_SOURCE=\"${SKIP_EXISTING_SOURCE}\"" >> $ENV_FILE
-    echo "export SAVE_LOGS_ON_ERROR=\"${SAVE_LOGS_ON_ERROR}\"" >> $ENV_FILE
-    echo "export FORBIDDEN_PACKAGES=\"${FORBIDDEN_PACKAGES}\"" >> $ENV_FILE
     
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
@@ -156,11 +148,6 @@ save_env() {
         echo "DEVICE=${DEVICE}" >> $GITHUB_ENV
         echo "CONFIG_MODE=${CONFIG_MODE}" >> $GITHUB_ENV
         echo "COMPILER_DIR=${COMPILER_DIR}" >> $GITHUB_ENV
-        echo "SOURCE_REPO_TYPE=${SOURCE_REPO_TYPE}" >> $GITHUB_ENV
-        echo "ENABLE_TURBOACC=${ENABLE_TURBOACC}" >> $GITHUB_ENV
-        echo "ENABLE_TCP_BBR=${ENABLE_TCP_BBR}" >> $GITHUB_ENV
-        echo "USE_GENERIC_WIRELESS=${USE_GENERIC_WIRELESS}" >> $GITHUB_ENV
-        echo "DISABLE_IPV6=${DISABLE_IPV6}" >> $GITHUB_ENV
     fi
     
     chmod +x $ENV_FILE
@@ -961,19 +948,13 @@ install_turboacc_packages() {
 #【build_firmware_main.sh-11】
 #------------------------------------------------------------------------------
 # 功能开关配置
-#   所有开关都可以通过 build-config.conf 配置文件灵活切换
 #------------------------------------------------------------------------------
 : ${ENABLE_TURBOACC:="true"}
 : ${ENABLE_TCP_BBR:="true"}
-: ${USE_GENERIC_WIRELESS:="true"}
+: ${FORCE_ATH10K_CT:="true"}
 : ${AUTO_FIX_USB_DRIVERS:="true"}
 : ${ENABLE_VERBOSE_LOG:="false"}
 : ${DISABLE_IPV6:="true"}
-: ${ENABLE_DYNAMIC_KERNEL_DETECTION:="true"}
-: ${ENABLE_DYNAMIC_PLATFORM_DRIVERS:="true"}
-: ${ENABLE_DYNAMIC_DEVICE_MAPPING:="true"}
-: ${SKIP_EXISTING_SOURCE:="true"}
-: ${SAVE_LOGS_ON_ERROR:="true"}
 : ${FORBIDDEN_PACKAGES:="vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol"}
 #【build_firmware_main.sh-11-end】
 
@@ -1237,6 +1218,10 @@ CONFIG_NTFS3_FS=y
 CONFIG_NET=y
 CONFIG_INET=y
 CONFIG_IPV4=y
+
+# 禁用可能冲突的功能
+# CONFIG_IPV6 is not set
+# CONFIG_KERNEL_IPV6 is not set
 EOF
         log "  ✅ LEDE 通用启动修复配置已添加"
         
@@ -1305,6 +1290,26 @@ EOF
                     fi
                 fi
                 
+                # 4. 检查并添加 IMAGE/sysupgrade.bin 定义
+                if ! grep -q "IMAGE/sysupgrade.bin" "$mkfile" 2>/dev/null; then
+                    # 根据平台添加适当的 sysupgrade 定义
+                    case "$TARGET" in
+                        ipq40xx)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | check-size" >> /tmp/device_temp.txt
+                            ;;
+                        mediatek)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-ubi | check-size" >> /tmp/device_temp.txt
+                            ;;
+                        ath79)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | append-metadata | check-size" >> /tmp/device_temp.txt
+                            ;;
+                    esac
+                    log "      ℹ️ 建议检查 IMAGE/sysupgrade.bin 定义"
+                fi
+                
                 break
             fi
         done
@@ -1361,9 +1366,6 @@ EOF
                 ;;
         esac
         
-        # 保存 LEDE 基础配置供后续使用
-        cp .config .config.lede_base_fixed
-        
         log "✅ LEDE 源码启动修复完成"
         log "======================================"
     fi
@@ -1400,25 +1402,22 @@ CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${actual_subtarget}=y
 EOF
         
-        # 合并之前保存的 LEDE 基础修复配置
-        if [ -f .config.lede_base_fixed ]; then
-            cat .config.lede_base_fixed >> .config
-            rm -f .config.lede_base_fixed
+        # 添加之前生成的 LEDE 启动修复配置
+        if [ -f .config.tmp.lede ]; then
+            cat .config.tmp.lede >> .config
+            rm -f .config.tmp.lede
         fi
         
         log "🔄 运行 make defconfig 生成基础配置..."
         make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || {
             log "❌ LEDE基础配置失败"
-            tail -50 /tmp/build-logs/defconfig_lede_base.log
             handle_error "LEDE基础配置失败"
         }
         
         log "🔧 添加设备配置: ${device_config}"
         echo "${device_config}" >> .config
         
-        make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || {
-            log "⚠️ olddefconfig 有警告，但继续"
-        }
+        make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || true
     else
         cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
@@ -1429,6 +1428,12 @@ EOF
     
     log "🔧 基础配置文件内容:"
     cat .config
+    
+    # 保存 LEDE 启动修复配置供后续使用
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        # 将之前的修复配置保存到临时文件，避免被后续操作覆盖
+        cp .config .config.lede_base_fixed
+    fi
     
     log "📁 开始合并配置文件..."
     
@@ -1512,43 +1517,19 @@ EOF
         log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
-    # ============================================
-    # 无线驱动配置（通用版 vs CT版）
-    # ============================================
-    if [ "${USE_GENERIC_WIRELESS:-true}" = "true" ]; then
-        log "📶 使用普通版无线驱动"
-        
-        # 启用普通版 ath10k 驱动
-        echo "CONFIG_PACKAGE_kmod-ath10k=y" >> .config
-        
-        # 禁用 ct 版驱动
-        sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct=y/d' .config
-        sed -i '/CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers=y/d' .config
-        echo "# CONFIG_PACKAGE_kmod-ath10k-ct is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-ath10k-ct-smallbuffers is not set" >> .config
-        
-        log "  ✅ 已启用普通版 ath10k 驱动"
-        log "  ✅ 已禁用 ath10k-ct 驱动"
-    else
-        log "📶 使用 ath10k-ct 版无线驱动"
-        
-        # 禁用普通版驱动
+    if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
         sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
         sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
         echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
         echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
-        
-        # 启用 ct 版驱动
         echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-        
-        log "  ✅ 已启用 ath10k-ct 驱动"
-        log "  ✅ 已禁用普通版 ath10k 驱动"
+        log "✅ ath10k-ct驱动已强制启用"
     fi
     
     # ============================================
-    # 禁用 IPv6 所有功能
+    # 禁用 IPv6 所有功能（安全方式，不破坏 LEDE 启动）
     # ============================================
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
         log "🔧 ===== 禁用所有 IPv6 功能 ====="
@@ -1664,6 +1645,57 @@ EOF
             log "  ✅ ATH79平台配置"
             ;;
     esac
+    
+    # ============================================
+    # LEDE 源码最终启动验证和修复
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 ===== LEDE 源码最终启动验证 ====="
+        
+        # 恢复之前保存的 LEDE 基础修复配置
+        if [ -f .config.lede_base_fixed ]; then
+            log "  🔧 合并 LEDE 基础修复配置..."
+            # 只添加缺失的关键配置，不覆盖已有配置
+            while IFS= read -r line; do
+                config_name=$(echo "$line" | cut -d'=' -f1)
+                if ! grep -q "^${config_name}=" .config; then
+                    echo "$line" >> .config
+                fi
+            done < .config.lede_base_fixed
+            rm -f .config.lede_base_fixed
+        fi
+        
+        # 确保关键配置存在
+        log "  🔧 验证关键启动配置..."
+        
+        local critical_missing=0
+        
+        # 检查 CMDLINE_PARTITION
+        if ! grep -q "CONFIG_CMDLINE_PARTITION=y" .config; then
+            echo "CONFIG_CMDLINE_PARTITION=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        # 检查 MTD_SPLIT_FIRMWARE
+        if ! grep -q "CONFIG_MTD_SPLIT_FIRMWARE=y" .config; then
+            echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        # 检查 MTD_SPLIT_UIMAGE_FW
+        if ! grep -q "CONFIG_MTD_SPLIT_UIMAGE_FW=y" .config; then
+            echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        if [ $critical_missing -gt 0 ]; then
+            log "    ✅ 添加了 $critical_missing 个缺失的关键配置"
+        else
+            log "    ✅ 所有关键配置都已存在"
+        fi
+        
+        log "✅ LEDE 源码最终启动验证完成"
+    fi
     
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
@@ -1952,9 +1984,9 @@ EOF
             log "  ✅ 已添加: $driver"
         done
         if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1 || true
+            make olddefconfig > /dev/null 2>&1
         else
-            make defconfig > /dev/null 2>&1 || true
+            make defconfig > /dev/null 2>&1
         fi
     fi
     
@@ -2149,9 +2181,9 @@ EOF
         sort .config | uniq > .config.tmp
         mv .config.tmp .config
         if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1 || true
+            make olddefconfig > /dev/null 2>&1
         else
-            make defconfig > /dev/null 2>&1 || true
+            make defconfig > /dev/null 2>&1
         fi
     fi
     
@@ -2185,7 +2217,7 @@ EOF
     fi
     
     # ============================================
-    # LEDE 源码最终启动配置验证（安全方式）
+    # LEDE 源码最终启动配置验证
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log ""
@@ -2201,33 +2233,25 @@ EOF
         )
         
         local lede_missing=0
-        local missing_list=""
         for cfg in "${lede_critical_configs[@]}"; do
             if grep -q "^${cfg}=y" .config; then
                 log "  ✅ $cfg: 已启用"
             else
                 log "  ❌ $cfg: 未启用"
                 lede_missing=$((lede_missing + 1))
-                missing_list="$missing_list $cfg"
             fi
         done
         
         if [ $lede_missing -gt 0 ]; then
-            log "  🔧 检测到缺失的启动关键配置: $missing_list"
-            log "  🔧 尝试直接添加配置（不使用 olddefconfig）..."
-            
-            for cfg in $missing_list; do
-                echo "${cfg}=y" >> .config
-            done
-            
-            # 去重
-            sort .config | uniq > .config.tmp
-            mv .config.tmp .config
-            
-            log "  ✅ 已直接添加缺失的启动关键配置"
-            log "  ⚠️ 注意：这些配置可能与 LEDE 默认配置冲突，但已强制添加"
-        else
-            log "  🎉 所有启动关键配置都已存在"
+            log "  🔧 强制添加缺失的启动关键配置..."
+            echo "CONFIG_CMDLINE_PARTITION=y" >> .config
+            echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
+            echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
+            echo "CONFIG_MTD=y" >> .config
+            echo "CONFIG_MTD_BLOCK=y" >> .config
+            echo "CONFIG_MTD_SPLIT=y" >> .config
+            make olddefconfig > /dev/null 2>&1
+            log "  ✅ 已添加缺失的启动关键配置"
         fi
         
         log "======================================"
@@ -6903,41 +6927,24 @@ workflow_step30_build_summary() {
     
     echo ""
     echo "⚙️ 功能开关状态:"
-    echo "  TurboACC:           ${ENABLE_TURBOACC:-true}"
-    echo "  TCP BBR:            ${ENABLE_TCP_BBR:-true}"
-    echo "  普通版无线驱动:     ${USE_GENERIC_WIRELESS:-true}"
-    echo "  USB自动修复:        ${AUTO_FIX_USB_DRIVERS:-true}"
-    echo "  禁用IPv6:           ${DISABLE_IPV6:-true}"
-    echo "  动态内核检测:       ${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}"
-    echo "  动态平台驱动:       ${ENABLE_DYNAMIC_PLATFORM_DRIVERS:-true}"
-    echo "  动态设备映射:       ${ENABLE_DYNAMIC_DEVICE_MAPPING:-true}"
-    echo "  跳过已存在源码:     ${SKIP_EXISTING_SOURCE:-true}"
-    echo "  失败时保存日志:     ${SAVE_LOGS_ON_ERROR:-true}"
+    echo "  TurboACC:      ${ENABLE_TURBOACC:-true}"
+    echo "  TCP BBR:       ${ENABLE_TCP_BBR:-true}"
+    echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
+    echo "  USB自动修复:   ${AUTO_FIX_USB_DRIVERS:-true}"
+    echo "  禁用IPv6:      ${DISABLE_IPV6:-true}"
     echo ""
     
     # ============================================
-    # 显示无线驱动详情
-    # ============================================
-    echo "📶 无线驱动配置:"
-    if [ "${USE_GENERIC_WIRELESS:-true}" = "true" ]; then
-        echo "  - 使用普通版 ath10k 驱动"
-        echo "  - 适用场景：大多数设备"
-    else
-        echo "  - 使用 ath10k-ct 版驱动"
-        echo "  - 适用场景：解决某些设备的无线兼容性问题"
-    fi
-    echo ""
-    
-    # ============================================
-    # 显示 IPv6 禁用状态详情
+    # 显示 IPv6 禁用状态详情（全局通用）
     # ============================================
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        echo "🌐 IPv6 禁用详情:"
+        echo "🌐 IPv6 禁用详情（所有源码类型通用）:"
         echo "  - 内核 IPv6 支持: 已禁用"
         echo "  - ip6tables 相关包: 已禁用"
         echo "  - odhcp6c/odhcpd: 已禁用"
         echo "  - 6in4/6rd/6to4 隧道: 已禁用"
         echo "  - LuCI IPv6 协议: 已禁用"
+        echo "  - IPv6 内核模块: 已禁用"
         echo "  ✅ 固件将仅支持 IPv4 网络"
         echo ""
     else
