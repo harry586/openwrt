@@ -10,6 +10,7 @@
 
 
 
+
 ## 📁 项目结构
 
 ```
@@ -32,7 +33,6 @@
 │   │   ├── sh/
 │   │   │   ├── OverlayBackup.sh
 │   │   │   ├── basic.sh
-│   │   │   ├── cpulimit.sh
 │   │   │   ├── dhcp.sh
 │   │   │   ├── disk.sh
 │   │   │   ├── ext4.sh
@@ -40,8 +40,7 @@
 │   │   │   ├── samba.sh
 │   │   │   ├── smartdns.sh
 │   │   │   ├── sqm.sh
-│   │   │   ├── vsftpd.sh
-│   │   │   └── wechatpush.sh
+│   │   │   └── vsftpd.sh
 │   │   ├── luci-app-opkg-other_1.0_all.ipk
 │   │   └── readme.md
 │   └── scripts/
@@ -51,9 +50,9 @@
 ├── build-config.conf
 └── support.sh
 
-7 directories, 29 files
+7 directories, 27 files
 ```
 
 注意，自定义文件名是英文的，方便复制、运行
 
-> 最后更新时间: 2026-04-13 10:06:44
+> 最后更新时间: 2026-04-20 10:06:51
