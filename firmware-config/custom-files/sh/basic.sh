@@ -46,15 +46,15 @@ EOF
     echo "主机名配置已集成到固件"
 fi
 
-# ==================== 2. 设置默认IP地址为192.168.10.1 ====================
-echo "设置默认LAN IP地址为: 192.168.10.1"
+# ==================== 2. 设置默认IP地址为192.168.10.1，禁用IPv6 ====================
+echo "设置默认LAN IP地址为: 192.168.10.1，全面禁用IPv6"
 LAN_CONFIG="config interface 'lan'
 	option type 'bridge'
 	option ifname 'eth0'
 	option proto 'static'
 	option ipaddr '192.168.10.1'
 	option netmask '255.255.255.0'
-	option ip6assign '60'
+	option ip6assign ''
 	option dns '127.0.0.1'
 
 config dhcp 'lan'
@@ -63,11 +63,9 @@ config dhcp 'lan'
 	option limit '150'
 	option leasetime '12h'
 	option dhcpv4 'server'
-	option dhcpv6 'server'
-	option ra 'server'
-	option ra_slaac '1'
-	list ra_flags 'managed-config'
-	list ra_flags 'other-config'"
+	option dhcpv6 'disabled'
+	option ra 'disabled'
+	option ndp 'disabled'"
 
 if [ "$RUNTIME_MODE" = "true" ]; then
     # 运行时：修改网络配置
@@ -78,34 +76,49 @@ if [ "$RUNTIME_MODE" = "true" ]; then
         # 修改IP地址
         uci set network.lan.ipaddr='192.168.10.1'
         uci set network.lan.netmask='255.255.255.0'
+        uci set network.lan.ip6assign=''
         
         # 设置LAN DNS为127.0.0.1
         uci delete network.lan.dns 2>/dev/null
-        uci set network.lan.dns='127.0.0.1'
+        uci add_list network.lan.dns='127.0.0.1'
         
         uci commit network
         
-        # 设置WAN DNS为127.0.0.1（如果WAN接口存在）
+        # 设置WAN为静态地址
         if uci get network.wan >/dev/null 2>&1; then
-            # 首先禁用自动获取DNS
-            uci set network.wan.peerdns='0'
-            # 然后设置自定义DNS
+            uci set network.wan.proto='static'
+            uci set network.wan.ipaddr='192.168.1.11'
+            uci set network.wan.netmask='255.255.255.0'
+            uci set network.wan.gateway='192.168.1.1'
+            # 清空DNS设置
             uci delete network.wan.dns 2>/dev/null
-            uci set network.wan.dns='127.0.0.1'
+            uci add_list network.wan.dns=''
+            # 禁用IPv6相关
+            uci set network.wan.ip6assign=''
+            uci set network.wan6.proto='none' 2>/dev/null || uci delete network.wan6 2>/dev/null
             uci commit network
-            echo "WAN DNS已设置为: 127.0.0.1，并禁用自动获取DNS"
+            echo "WAN已设置为静态IP: 192.168.1.11/24，网关: 192.168.1.1，DNS为空"
         fi
         
-        # 修改DHCP配置
+        # 修改DHCP配置，禁用IPv6相关服务
         if uci get dhcp.lan >/dev/null 2>&1; then
             uci set dhcp.lan.start='100'
             uci set dhcp.lan.limit='150'
             uci set dhcp.lan.leasetime='12h'
+            uci set dhcp.lan.dhcpv4='server'
+            uci set dhcp.lan.dhcpv6='disabled'
+            uci set dhcp.lan.ra='disabled'
+            uci set dhcp.lan.ndp='disabled'
             uci commit dhcp
         fi
         
+        # 全局禁用IPv6
+        uci set network.globals.ula_prefix=''
+        uci commit network
+        
         echo "LAN IP地址已设置为: 192.168.10.1"
         echo "LAN DNS已设置为: 127.0.0.1"
+        echo "IPv6已全面禁用"
         echo "注意：需要重启网络或重启系统才能生效"
         echo "重启网络命令: /etc/init.d/network restart"
     else
@@ -117,7 +130,7 @@ else
     echo "$LAN_CONFIG" > "${INSTALL_DIR}etc/config/network-lan"
     echo "LAN IP配置已集成到固件"
     
-    # 创建默认的完整network配置
+    # 创建默认的完整network配置（禁用IPv6）
     cat > "${INSTALL_DIR}etc/config/network" << 'EOF'
 config interface 'loopback'
 	option ifname 'lo'
@@ -126,7 +139,7 @@ config interface 'loopback'
 	option netmask '255.0.0.0'
 
 config globals 'globals'
-	option ula_prefix 'fd00:ab:cd::/48'
+	option ula_prefix ''
 
 config interface 'lan'
 	option type 'bridge'
@@ -134,20 +147,22 @@ config interface 'lan'
 	option proto 'static'
 	option ipaddr '192.168.10.1'
 	option netmask '255.255.255.0'
-	option ip6assign '60'
-	option dns '127.0.0.1'
+	option ip6assign ''
+	list dns '127.0.0.1'
 
 config interface 'wan'
 	option ifname 'eth1'
-	option proto 'dhcp'
-	option peerdns '0'  # 禁用自动获取DNS
-	option dns '127.0.0.1'  # 设置自定义DNS
+	option proto 'static'
+	option ipaddr '192.168.1.11'
+	option netmask '255.255.255.0'
+	option gateway '192.168.1.1'
+	option ip6assign ''
+	list dns ''
 
 config interface 'wan6'
-	option ifname 'eth1'
-	option proto 'dhcpv6'
+	option proto 'none'
 EOF
-    echo "DNS配置已集成到固件：LAN和WAN均使用127.0.0.1，且WAN禁用自动获取DNS"
+    echo "网络配置已集成到固件：WAN静态IP 192.168.1.11，全面禁用IPv6"
 fi
 
 # ==================== 3. 设置自定义计划任务（追加方式） ====================
@@ -269,7 +284,51 @@ else
     echo "静态路由配置片段已创建，请手动合并到network配置"
 fi
 
-# ==================== 6. 创建一键启用脚本（完整版） ====================
+# ==================== 6. 禁用IPv6相关服务 ====================
+echo "全面禁用IPv6..."
+
+if [ "$RUNTIME_MODE" = "true" ]; then
+    # 禁用IPv6防火墙规则
+    if [ -f /etc/config/firewall ]; then
+        # 禁用IPv6防火墙
+        uci set firewall.@defaults[0].disable_ipv6='1' 2>/dev/null
+        uci commit firewall
+    fi
+    
+    # 禁用IPv6系统参数
+    echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true
+    echo 1 > /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null || true
+    
+    # 创建sysctl配置永久禁用IPv6
+    cat > /etc/sysctl.d/99-disable-ipv6.conf << 'EOF'
+# 禁用IPv6
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+    
+    sysctl -p /etc/sysctl.d/99-disable-ipv6.conf 2>/dev/null || true
+    echo "IPv6已全面禁用（包括防火墙和内核参数）"
+else
+    # 编译时：创建禁用IPv6配置文件
+    mkdir -p "${INSTALL_DIR}etc/sysctl.d"
+    cat > "${INSTALL_DIR}etc/sysctl.d/99-disable-ipv6.conf" << 'EOF'
+# 禁用IPv6
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+    
+    # 创建防火墙配置禁用IPv6
+    mkdir -p "${INSTALL_DIR}etc/config"
+    cat > "${INSTALL_DIR}etc/config/firewall-ipv6-disable" << 'EOF'
+config defaults
+	option disable_ipv6 '1'
+EOF
+    echo "IPv6禁用配置已集成到固件"
+fi
+
+# ==================== 7. 创建一键启用脚本（完整版） ====================
 echo "创建一键启用脚本..."
 
 create_enable_script() {
@@ -288,16 +347,17 @@ if [ -f /etc/config/system ]; then
     echo "✓ 主机名已设置为: Neptune"
 fi
 
-# 2. 设置LAN IP地址为192.168.10.1
+# 2. 设置LAN IP地址为192.168.10.1并禁用IPv6
 if uci get network.lan >/dev/null 2>&1; then
     current_ip=$(uci get network.lan.ipaddr 2>/dev/null)
     if [ "$current_ip" != "192.168.10.1" ]; then
         uci set network.lan.ipaddr='192.168.10.1'
         uci set network.lan.netmask='255.255.255.0'
+        uci set network.lan.ip6assign=''
         
         # 设置LAN DNS为127.0.0.1
         uci delete network.lan.dns 2>/dev/null
-        uci set network.lan.dns='127.0.0.1'
+        uci add_list network.lan.dns='127.0.0.1'
         
         uci commit network
         echo "✓ LAN IP地址已设置为: 192.168.10.1/24"
@@ -307,25 +367,56 @@ if uci get network.lan >/dev/null 2>&1; then
         echo "✓ LAN IP地址已经是192.168.10.1"
     fi
     
-    # 设置WAN DNS为127.0.0.1并禁用自动获取
+    # 设置WAN为静态地址
     if uci get network.wan >/dev/null 2>&1; then
-        # 禁用自动获取DNS
-        uci set network.wan.peerdns='0'
-        # 设置自定义DNS
+        uci set network.wan.proto='static'
+        uci set network.wan.ipaddr='192.168.1.11'
+        uci set network.wan.netmask='255.255.255.0'
+        uci set network.wan.gateway='192.168.1.1'
+        uci set network.wan.ip6assign=''
+        # 清空DNS设置
         uci delete network.wan.dns 2>/dev/null
-        uci set network.wan.dns='127.0.0.1'
+        uci add_list network.wan.dns=''
+        # 禁用WAN6
+        uci set network.wan6.proto='none' 2>/dev/null || uci delete network.wan6 2>/dev/null
         uci commit network
-        echo "✓ WAN DNS已设置为: 127.0.0.1，且禁用自动获取DNS"
+        echo "✓ WAN已设置为静态IP: 192.168.1.11/24，网关: 192.168.1.1，DNS为空"
     fi
     
-    # 配置DHCP
+    # 配置DHCP，禁用IPv6服务
     if uci get dhcp.lan >/dev/null 2>&1; then
         uci set dhcp.lan.start='100'
         uci set dhcp.lan.limit='150'
         uci set dhcp.lan.leasetime='12h'
+        uci set dhcp.lan.dhcpv4='server'
+        uci set dhcp.lan.dhcpv6='disabled'
+        uci set dhcp.lan.ra='disabled'
+        uci set dhcp.lan.ndp='disabled'
         uci commit dhcp
-        echo "✓ DHCP服务已配置（100-250）"
+        echo "✓ DHCP服务已配置（100-250），IPv6服务已禁用"
     fi
+    
+    # 全局禁用IPv6
+    uci set network.globals.ula_prefix=''
+    uci commit network
+    
+    # 禁用IPv6防火墙
+    if [ -f /etc/config/firewall ]; then
+        uci set firewall.@defaults[0].disable_ipv6='1' 2>/dev/null
+        uci commit firewall
+        echo "✓ 防火墙IPv6已禁用"
+    fi
+    
+    # 通过sysctl永久禁用IPv6
+    cat > /etc/sysctl.d/99-disable-ipv6.conf << 'SYSCTL'
+# 禁用IPv6
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+SYSCTL
+    
+    sysctl -p /etc/sysctl.d/99-disable-ipv6.conf 2>/dev/null || true
+    echo "✓ IPv6内核参数已禁用"
 fi
 
 # 3. 追加自定义计划任务（避免重复）
@@ -379,8 +470,11 @@ echo "【配置摘要】:"
 echo "  ✓ 主机名: Neptune"
 echo "  ✓ LAN IP地址: 192.168.10.1/24"
 echo "  ✓ LAN DNS: 127.0.0.1（指向路由器自身）"
-echo "  ✓ WAN DNS: 127.0.0.1（指向路由器自身）"
-echo "  ✓ 自动获取DNS: 已禁用"
+echo "  ✓ WAN类型: 静态IP"
+echo "  ✓ WAN IP: 192.168.1.11/24"
+echo "  ✓ WAN 网关: 192.168.1.1"
+echo "  ✓ WAN DNS: 无（留空）"
+echo "  ✓ IPv6: 已全面禁用"
 echo "  ✓ DHCP范围: 192.168.10.100-250"
 echo "  ✓ 计划任务: 已追加自定义任务"
 echo "  ✓ 升级保留: /overlay（追加方式）"
@@ -392,10 +486,18 @@ echo "  重启网络命令: /etc/init.d/network restart"
 echo "  重启系统命令: reboot"
 echo "  访问地址: http://192.168.10.1"
 echo ""
-echo "【DNS配置说明】:"
-echo "  DNS设置为127.0.0.1表示使用路由器自身的DNS服务"
-echo "  需要确保已安装并配置dnsmasq或DNS相关服务"
-echo "  WAN口已禁用自动获取DNS，使用自定义DNS设置"
+echo "【IPv6禁用说明】:"
+echo "  IPv6已在以下层面全面禁用："
+echo "  • 网络接口（LAN/WAN ip6assign留空）"
+echo "  • DHCP服务（RA/DHCPv6/NDP已禁用）"
+echo "  • 防火墙（disable_ipv6=1）"
+echo "  • 内核参数（sysctl配置）"
+echo ""
+echo "【WAN配置说明】:"
+echo "  WAN口已设置为静态IP: 192.168.1.11"
+echo "  子网掩码: 255.255.255.0"
+echo "  网关: 192.168.1.1"
+echo "  DNS: 留空（不使用DNS服务器）"
 echo "================================"
 EOF
     chmod +x "$dest"
@@ -414,7 +516,7 @@ else
     echo "一键启用脚本已集成到固件"
 fi
 
-# ==================== 7. 创建无线配置说明 ====================
+# ==================== 8. 创建无线配置说明 ====================
 echo ""
 echo "=========================================="
 echo "无线配置说明"
@@ -441,7 +543,7 @@ echo "  wifi reload"
 echo ""
 echo "注意：首次配置需要访问 http://192.168.10.1"
 
-# ==================== 8. 总结信息 ====================
+# ==================== 9. 总结信息 ====================
 echo ""
 echo "=========================================="
 echo "基础系统配置设置完成（完整版）"
@@ -454,17 +556,20 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     echo "  ✓ 主机名: Neptune"
     echo "  ✓ LAN IP地址: 192.168.10.1/24"
     echo "  ✓ LAN DNS: 127.0.0.1"
-    echo "  ✓ WAN DNS: 127.0.0.1"
-    echo "  ✓ 自动获取DNS: 已禁用"
-    echo "  ✓ DHCP服务: 已配置（100-250）"
+    echo "  ✓ WAN类型: 静态IP"
+    echo "  ✓ WAN IP: 192.168.1.11/24"
+    echo "  ✓ WAN 网关: 192.168.1.1"
+    echo "  ✓ WAN DNS: 无（留空）"
+    echo "  ✓ IPv6: 已全面禁用"
+    echo "  ✓ DHCP服务: 已配置（100-250），IPv6服务已禁用"
     echo "  ✓ 计划任务: 已追加（不覆盖原有任务）"
     echo "  ✓ 升级配置: 保留/overlay（追加方式）"
     echo "  ✓ 静态路由: 192.168.7.0/24 → 192.168.5.100（去重）"
     echo ""
     echo "【注意事项】:"
     echo "  1. IP地址更改需要重启网络或系统才能生效"
-    echo "  2. DNS设置为127.0.0.1需要路由器上有DNS服务"
-    echo "  3. WAN口已禁用自动获取DNS，使用自定义设置"
+    echo "  2. WAN口已设为静态IP，请确保与上级网络兼容"
+    echo "  3. IPv6已在所有层面完全禁用"
     echo "  4. 无线配置因硬件差异需要手动配置"
     echo "  5. 静态路由需要确保网关192.168.5.100可达"
     echo "  6. 重启后访问地址: http://192.168.10.1"
@@ -482,9 +587,10 @@ else
     echo "  ✓ 主机名配置"
     echo "  ✓ LAN IP地址配置（192.168.10.1）"
     echo "  ✓ LAN DNS配置（127.0.0.1）"
-    echo "  ✓ WAN DNS配置（127.0.0.1）"
-    echo "  ✓ WAN禁用自动获取DNS配置"
-    echo "  ✓ DHCP服务配置"
+    echo "  ✓ WAN静态IP配置（192.168.1.11/24，网关192.168.1.1）"
+    echo "  ✓ WAN DNS留空配置"
+    echo "  ✓ 全面禁用IPv6配置"
+    echo "  ✓ DHCP服务配置（IPv6服务已禁用）"
     echo "  ✓ 自定义计划任务（需手动追加）"
     echo "  ✓ 升级保留配置"
     echo "  ✓ 静态路由配置片段"
@@ -492,11 +598,12 @@ else
     echo ""
     echo "【固件特性】:"
     echo "  刷入此固件后，系统将:"
-    echo "  1. 默认IP地址: 192.168.10.1"
-    echo "  2. 主机名自动设置为Neptune"
-    echo "  3. DHCP服务自动开启（100-250）"
-    echo "  4. DNS指向路由器自身（127.0.0.1）"
-    echo "  5. WAN口禁用自动获取DNS，使用自定义设置"
+    echo "  1. 默认LAN IP地址: 192.168.10.1"
+    echo "  2. WAN口静态IP: 192.168.1.11/24"
+    echo "  3. WAN口网关: 192.168.1.1"
+    echo "  4. 主机名自动设置为Neptune"
+    echo "  5. DHCP服务自动开启（100-250）"
+    echo "  6. IPv6全面禁用"
     echo ""
     echo "【首次访问】:"
     echo "  刷机后访问: http://192.168.10.1"
