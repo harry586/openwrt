@@ -5876,6 +5876,64 @@ workflow_step25_build_firmware() {
     
     cd $BUILD_DIR
     
+    # ============================================
+    # 编译前主动删除已知有问题的补丁
+    # ============================================
+    log "🔧 ===== 编译前主动删除已知有问题的补丁 ====="
+    
+    # 加载环境变量获取平台信息
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+    fi
+    log "  📌 当前平台: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+    
+    # 已知有问题的补丁列表（与5.15内核不兼容的mediatek补丁）
+    local known_bad_patches=(
+        "714-v6.0-net-ethernet-mtk_eth_soc-move-ppe-table-hash-offset-.patch"
+        "715-v6.0-net-ethernet-mtk_eth_soc-add-the-capability-to-offlo.patch"
+        "716-v6.0-net-ethernet-mtk_eth_soc-add-flow-offloading-suppor.patch"
+        "717-v6.0-net-ethernet-mtk_eth_soc-add-support-for-hardware-f.patch"
+        "720-v6.1-net-ethernet-mtk_eth_soc-enable-threaded-NAPI.patch"
+        "721-v6.1-net-ethernet-mtk_eth_soc-add-mac-mirror-support.patch"
+    )
+    
+    # 对于非mediatek平台，删除所有mediatek相关补丁
+    if [ "$TARGET" != "mediatek" ]; then
+        log "  🔧 非mediatek平台，删除所有mediatek相关补丁..."
+        for pattern in "${known_bad_patches[@]}"; do
+            find target/linux -name "$pattern" -type f 2>/dev/null | while read patch_file; do
+                log "    🗑️ 删除: $patch_file"
+                rm -f "$patch_file"
+            done
+        done
+        # 额外搜索包含mtk_eth_soc的补丁
+        find target/linux -name "*mtk_eth_soc*.patch" -type f 2>/dev/null | while read patch_file; do
+            log "    🗑️ 删除: $patch_file"
+            rm -f "$patch_file"
+        done
+    else
+        log "  🔧 mediatek平台，检查并删除已知不兼容的补丁..."
+        for pattern in "${known_bad_patches[@]}"; do
+            find target/linux -name "$pattern" -type f 2>/dev/null | while read patch_file; do
+                log "    ⚠️ 删除不兼容补丁: $patch_file"
+                rm -f "$patch_file"
+            done
+        done
+    fi
+    
+    # 清理可能残留的.rej文件
+    log "  🧹 清理残留的.rej文件..."
+    find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
+    find build_dir -name "*.orig" -type f -delete 2>/dev/null || true
+    
+    # 清理quilt状态
+    log "  🧹 清理quilt状态目录..."
+    find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
+    find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
+    
+    log "✅ 补丁预清理完成"
+    echo ""
+    
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
@@ -6094,12 +6152,44 @@ EOF
         if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    🔧 检测到补丁失败，正在修复..."
             
-            # 提取失败的补丁文件
+            # 方法1: 提取失败的补丁文件
             local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
             
             if [ -z "$failed_patches" ]; then
                 failed_patches=$(grep "Patch failed!" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([^/]+\.patch).*/\1/' | sort -u)
             fi
+            
+            # 方法2: 从日志中提取完整的补丁路径
+            if [ -z "$failed_patches" ]; then
+                log "    🔍 尝试从日志提取完整补丁路径..."
+                local patch_path=$(grep -oE "/[^[:space:]]+\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | head -1)
+                if [ -n "$patch_path" ] && [ -f "$patch_path" ]; then
+                    log "      🗑️ 删除失败补丁: $patch_path"
+                    rm -f "$patch_path"
+                fi
+            fi
+            
+            # 方法3: 直接搜索所有可能包含失败补丁的目录
+            log "    🔍 搜索并删除可能与mtk_eth_soc相关的补丁..."
+            find target/linux -name "*mtk_eth_soc*.patch" -type f 2>/dev/null | while read patch_file; do
+                log "      🗑️ 删除: $patch_file"
+                rm -f "$patch_file"
+            done
+            
+            # 删除已知有问题的补丁模式
+            local bad_patterns=(
+                "714-v6.0-net-ethernet-mtk_eth_soc-move-ppe-table-hash-offset-"
+                "715-v6.0-net-ethernet-mtk_eth_soc-add-the-capability"
+                "716-v6.0-net-ethernet-mtk_eth_soc-add-flow-offloading"
+                "717-v6.0-net-ethernet-mtk_eth_soc-add-support-for-hardware"
+            )
+            
+            for pattern in "${bad_patterns[@]}"; do
+                find target/linux -name "*${pattern}*.patch" -type f 2>/dev/null | while read patch_file; do
+                    log "      🗑️ 删除已知问题补丁: $(basename "$patch_file")"
+                    rm -f "$patch_file"
+                done
+            done
             
             for patch_name in $failed_patches; do
                 log "      🗑️ 删除失败补丁: $patch_name"
@@ -6126,6 +6216,9 @@ EOF
             # 清理 quilt 状态目录
             find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
             find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
+            
+            # 清理.rej文件
+            find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
         fi
         
         # 检查其他常见错误
