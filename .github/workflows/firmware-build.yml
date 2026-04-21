@@ -62,7 +62,7 @@ on:
       
       # 新增：自定义禁用插件
       forbidden_packages:
-        description: "🚫 自定义禁用插件 - 格式：用空格分隔，默认禁用 vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
+        description: "🚫 自定义禁用插件 - 格式：用空格分隔"
         required: false
         type: string
         default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
@@ -87,6 +87,10 @@ env:
   SOURCE_REPO: "${{ github.event.inputs.source_repo }}"
   FORBIDDEN_PACKAGES: "${{ github.event.inputs.forbidden_packages }}"
   DISABLE_IPV6: "${{ github.event.inputs.disable_ipv6 }}"
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-22.04
 #【firmware-build.yml-00-end】
 
     steps:
