@@ -952,6 +952,7 @@ install_turboacc_packages() {
 : ${FORCE_ATH10K_CT:="true"}
 : ${AUTO_FIX_USB_DRIVERS:="true"}
 : ${ENABLE_VERBOSE_LOG:="false"}
+: ${DISABLE_IPV6:="true"}
 : ${FORBIDDEN_PACKAGES:="vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol"}
 #【build_firmware_main.sh-11-end】
 
@@ -1030,6 +1031,363 @@ generate_forbidden_packages_list() {
     
     printf '%s\n' "${full_list[@]}" | sort -u
 }
+
+# 全局禁用IPv6功能函数
+disable_ipv6_globally() {
+    local build_dir="$1"
+    
+    log "🔧 ===== 全局禁用IPv6功能 ====="
+    
+    cd "$build_dir" || return 1
+    
+    # 1. 删除wan6接口配置文件
+    log "  🗑️ 删除wan6接口配置..."
+    
+    # 删除package中的wan6定义
+    if [ -f "package/base-files/files/etc/config/network" ]; then
+        sed -i '/config interface.*wan6/,/^$/d' package/base-files/files/etc/config/network 2>/dev/null || true
+        log "    ✅ 已从base-files中删除wan6配置"
+    fi
+    
+    if [ -f "package/base-files/files/etc/board.d/99-default_network" ]; then
+        sed -i '/wan6/d' package/base-files/files/etc/board.d/99-default_network 2>/dev/null || true
+        log "    ✅ 已从默认网络配置中删除wan6"
+    fi
+    
+    # 删除luci中的wan6相关文件
+    find package -type f -name "*wan6*" 2>/dev/null | while read file; do
+        rm -f "$file"
+        log "    🗑️ 删除: $file"
+    done
+    
+    # 2. 禁用内核IPv6模块
+    log "  🔧 禁用内核IPv6模块..."
+    
+    # 删除IPv6内核模块包
+    local ipv6_kmods=(
+        "kmod-ipv6"
+        "kmod-ip6tables"
+        "kmod-nf-ipt6"
+        "kmod-nf-conntrack6"
+        "kmod-nf-nat6"
+        "kmod-nf-reject6"
+        "kmod-nf-log6"
+        "kmod-iptunnel6"
+        "kmod-sit"
+        "kmod-ip6-vti"
+        "kmod-ip6-tunnel"
+        "kmod-nf-flow"
+        "kmod-nf-dup-netdev"
+    )
+    
+    for kmod in "${ipv6_kmods[@]}"; do
+        echo "# CONFIG_PACKAGE_${kmod} is not set" >> .config 2>/dev/null || true
+        log "    ✅ 禁用: $kmod"
+    done
+    
+    # 3. 禁用IPv6相关软件包
+    log "  🔧 禁用IPv6相关软件包..."
+    
+    local ipv6_packages=(
+        "ip6tables"
+        "ip6tables-extra"
+        "ip6tables-mod-nat"
+        "ip6tables-mod-filter"
+        "ip6tables-mod-extra"
+        "odhcp6c"
+        "odhcpd"
+        "odhcpd-ipv6only"
+        "6in4"
+        "6rd"
+        "6to4"
+        "ds-lite"
+        "map"
+        "464xlat"
+        "aiccu"
+        "gw6c"
+        "ndppd"
+        "radvd"
+        "wide-dhcpv6"
+        "luci-proto-ipv6"
+        "luci-proto-6in4"
+        "luci-proto-6x4"
+        "luci-proto-6rd"
+        "luci-proto-6to4"
+        "luci-proto-dslite"
+        "luci-proto-map"
+        "luci-proto-ppp"
+        "luci-proto-3g"
+        "luci-proto-bonding"
+        "luci-proto-external-protocol"
+        "luci-proto-gre"
+        "luci-proto-hnet"
+        "luci-proto-ipip"
+        "luci-proto-l2tp"
+        "luci-proto-modemmanager"
+        "luci-proto-ncm"
+        "luci-proto-openconnect"
+        "luci-proto-pppossh"
+        "luci-proto-qmi"
+        "luci-proto-relay"
+        "luci-proto-sstp"
+        "luci-proto-vpnc"
+        "luci-proto-vti"
+        "luci-proto-wireguard"
+        "luci-app-odhcp6c"
+    )
+    
+    for pkg in "${ipv6_packages[@]}"; do
+        echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config 2>/dev/null || true
+        log "    ✅ 禁用: $pkg"
+    done
+    
+    # 4. 设置内核IPv6禁用参数
+    log "  🔧 设置内核IPv6禁用参数..."
+    
+    # 创建sysctl配置文件
+    mkdir -p files/etc/sysctl.d
+    cat > files/etc/sysctl.d/99-disable-ipv6.conf << 'EOF'
+# 全局禁用IPv6 - 解决IPv6风暴问题
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+
+# 禁用IPv6自动配置
+net.ipv6.conf.all.autoconf = 0
+net.ipv6.conf.default.autoconf = 0
+net.ipv6.conf.all.accept_ra = 0
+net.ipv6.conf.default.accept_ra = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+
+# 禁用IPv6转发
+net.ipv6.conf.all.forwarding = 0
+net.ipv6.conf.default.forwarding = 0
+EOF
+    log "    ✅ 创建sysctl配置文件: files/etc/sysctl.d/99-disable-ipv6.conf"
+    
+    # 5. 修改network配置，移除IPv6相关设置
+    log "  🔧 修改网络配置文件..."
+    
+    mkdir -p files/etc/config
+    if [ -f "package/base-files/files/etc/config/network" ]; then
+        cp package/base-files/files/etc/config/network files/etc/config/network 2>/dev/null || true
+    fi
+    
+    # 创建禁用IPv6的网络配置补丁
+    cat > files/etc/config/network.ipv6.disable << 'EOF'
+# 移除IPv6相关配置
+# 删除所有option ip6assign
+# 删除所有option ip6ifaceid
+# 删除所有option ip6class
+# 删除所有option ip6weight
+# 删除所有option ip6table
+EOF
+    
+    # 6. 修改firewall配置
+    log "  🔧 修改防火墙配置..."
+    
+    mkdir -p files/etc/config
+    if [ -f "package/network/config/firewall/files/firewall.config" ]; then
+        cp package/network/config/firewall/files/firewall.config files/etc/config/firewall 2>/dev/null || true
+        # 删除IPv6相关规则
+        sed -i '/ip6tables/d' files/etc/config/firewall 2>/dev/null || true
+        sed -i '/IPv6/d' files/etc/config/firewall 2>/dev/null || true
+        sed -i '/::/d' files/etc/config/firewall 2>/dev/null || true
+        log "    ✅ 已从防火墙配置中删除IPv6规则"
+    fi
+    
+    # 7. 修改dhcp配置
+    log "  🔧 修改DHCP配置..."
+    
+    mkdir -p files/etc/config
+    if [ -f "package/network/services/dnsmasq/files/dhcp.conf" ]; then
+        cp package/network/services/dnsmasq/files/dhcp.conf files/etc/config/dhcp 2>/dev/null || true
+        # 删除IPv6相关配置
+        sed -i '/dhcpv6/d' files/etc/config/dhcp 2>/dev/null || true
+        sed -i '/ra_management/d' files/etc/config/dhcp 2>/dev/null || true
+        sed -i '/ndp/d' files/etc/config/dhcp 2>/dev/null || true
+        log "    ✅ 已从DHCP配置中删除IPv6选项"
+    fi
+    
+    # 8. 添加启动脚本确保IPv6被禁用
+    log "  🔧 创建启动脚本确保IPv6禁用..."
+    
+    mkdir -p files/etc/init.d
+    cat > files/etc/init.d/disable-ipv6 << 'EOF'
+#!/bin/sh /etc/rc.common
+
+START=10
+STOP=90
+
+NAME="disable-ipv6"
+
+boot() {
+    start
+}
+
+start() {
+    echo "🔧 禁用IPv6..."
+    
+    # 禁用所有接口的IPv6
+    echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true
+    echo 1 > /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null || true
+    echo 1 > /proc/sys/net/ipv6/conf/lo/disable_ipv6 2>/dev/null || true
+    
+    # 遍历所有网络接口
+    for iface in /proc/sys/net/ipv6/conf/*; do
+        if [ -f "$iface/disable_ipv6" ]; then
+            echo 1 > "$iface/disable_ipv6" 2>/dev/null || true
+        fi
+        if [ -f "$iface/autoconf" ]; then
+            echo 0 > "$iface/autoconf" 2>/dev/null || true
+        fi
+        if [ -f "$iface/accept_ra" ]; then
+            echo 0 > "$iface/accept_ra" 2>/dev/null || true
+        fi
+        if [ -f "$iface/accept_redirects" ]; then
+            echo 0 > "$iface/accept_redirects" 2>/dev/null || true
+        fi
+        if [ -f "$iface/forwarding" ]; then
+            echo 0 > "$iface/forwarding" 2>/dev/null || true
+        fi
+    done
+    
+    # 卸载IPv6内核模块
+    rmmod ip6tables 2>/dev/null || true
+    rmmod ip6table_filter 2>/dev/null || true
+    rmmod ip6table_mangle 2>/dev/null || true
+    rmmod ip6table_nat 2>/dev/null || true
+    rmmod ip6table_raw 2>/dev/null || true
+    rmmod nf_conntrack_ipv6 2>/dev/null || true
+    rmmod nf_defrag_ipv6 2>/dev/null || true
+    rmmod nf_nat_ipv6 2>/dev/null || true
+    rmmod nf_reject_ipv6 2>/dev/null || true
+    rmmod nf_log_ipv6 2>/dev/null || true
+    rmmod ipv6 2>/dev/null || true
+    
+    echo "✅ IPv6已全局禁用"
+}
+
+stop() {
+    echo "🔄 恢复IPv6（不推荐）..."
+    echo 0 > /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true
+    echo 0 > /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null || true
+}
+
+restart() {
+    stop
+    start
+}
+EOF
+    chmod +x files/etc/init.d/disable-ipv6
+    log "    ✅ 创建启动脚本: files/etc/init.d/disable-ipv6"
+    
+    # 启用启动脚本
+    mkdir -p files/etc/rc.d
+    ln -sf ../init.d/disable-ipv6 files/etc/rc.d/S10disable-ipv6 2>/dev/null || true
+    
+    # 9. 创建uci-defaults脚本确保首次启动时禁用IPv6
+    log "  🔧 创建uci-defaults脚本..."
+    
+    mkdir -p files/etc/uci-defaults
+    cat > files/etc/uci-defaults/99-disable-ipv6 << 'EOF'
+#!/bin/sh
+
+# 禁用IPv6 - uci-defaults脚本
+uci -q delete network.wan6
+uci -q delete network.globals.ula_prefix
+
+# 删除所有IPv6相关的网络接口
+uci -q show network | grep -E "\.ip6assign|\.ip6ifaceid|\.ip6class|\.ip6weight|\.ip6table" | cut -d'=' -f1 | while read option; do
+    uci -q delete "$option"
+done
+
+# 删除防火墙中的IPv6规则
+uci -q show firewall | grep -E "ip6tables|::|IPv6" | cut -d'=' -f1 | while read rule; do
+    uci -q delete "$rule"
+done
+
+# 删除DHCP中的IPv6配置
+uci -q show dhcp | grep -E "dhcpv6|ra_management|ndp" | cut -d'=' -f1 | while read option; do
+    uci -q delete "$option"
+done
+
+uci commit network
+uci commit firewall
+uci commit dhcp
+
+echo "✅ IPv6配置已从UCI中删除"
+exit 0
+EOF
+    chmod +x files/etc/uci-defaults/99-disable-ipv6
+    log "    ✅ 创建uci-defaults脚本: files/etc/uci-defaults/99-disable-ipv6"
+    
+    # 10. 在.config中添加IPv6禁用配置
+    log "  🔧 在.config中添加IPv6禁用配置..."
+    
+    cat >> .config << 'EOF'
+# ===== IPv6全局禁用配置 =====
+# 禁用IPv6支持
+# CONFIG_IPV6 is not set
+# CONFIG_KERNEL_IPV6 is not set
+
+# 禁用IPv6相关内核选项
+# CONFIG_KERNEL_IPV6_MULTIPLE_TABLES is not set
+# CONFIG_KERNEL_IPV6_SUBTREES is not set
+# CONFIG_KERNEL_IPV6_MROUTE is not set
+# CONFIG_KERNEL_IPV6_PIMSM_V2 is not set
+# CONFIG_KERNEL_IPV6_SEG6_LWTUNNEL is not set
+# CONFIG_KERNEL_IPV6_SIT is not set
+# CONFIG_KERNEL_IPV6_TUNNEL is not set
+# CONFIG_KERNEL_IPV6_VTI is not set
+
+# 禁用IPv6相关包
+# CONFIG_PACKAGE_ip6tables is not set
+# CONFIG_PACKAGE_odhcp6c is not set
+# CONFIG_PACKAGE_odhcpd is not set
+# CONFIG_PACKAGE_6in4 is not set
+# CONFIG_PACKAGE_6rd is not set
+# CONFIG_PACKAGE_6to4 is not set
+
+# 确保不编译IPv6模块
+# CONFIG_PACKAGE_kmod-ipv6 is not set
+# CONFIG_PACKAGE_kmod-ip6tables is not set
+# CONFIG_PACKAGE_kmod-nf-ipt6 is not set
+# CONFIG_PACKAGE_kmod-nf-conntrack6 is not set
+# CONFIG_PACKAGE_kmod-nf-nat6 is not set
+# CONFIG_PACKAGE_kmod-nf-reject6 is not set
+# CONFIG_PACKAGE_kmod-nf-log6 is not set
+# CONFIG_PACKAGE_kmod-iptunnel6 is not set
+# CONFIG_PACKAGE_kmod-sit is not set
+# CONFIG_PACKAGE_kmod-ip6-tunnel is not set
+# CONFIG_PACKAGE_kmod-ip6-vti is not set
+# ===== IPv6禁用配置结束 =====
+EOF
+    
+    log "    ✅ 已在.config中添加IPv6禁用配置"
+    
+    # 11. 删除源码中的IPv6相关文件
+    log "  🗑️ 删除源码中的IPv6相关文件..."
+    
+    find package -type f -name "*ipv6*" 2>/dev/null | while read file; do
+        rm -f "$file"
+        log "    🗑️ 删除: $file"
+    done
+    
+    find package -type d -name "*ipv6*" 2>/dev/null | while read dir; do
+        rm -rf "$dir"
+        log "    🗑️ 删除目录: $dir"
+    done
+    
+    find target/linux -type f -name "*ipv6*" 2>/dev/null | while read file; do
+        rm -f "$file"
+        log "    🗑️ 删除: $file"
+    done
+    
+    log "✅ ===== IPv6全局禁用完成 ====="
+    return 0
+}
 #【build_firmware_main.sh-12-end】
 
 #【build_firmware_main.sh-13】
@@ -1053,6 +1411,7 @@ generate_config() {
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
     log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "IPv6状态: $([ "${DISABLE_IPV6:-true}" = "true" ] && echo "已禁用" || echo "已启用")"
     
     if [ -z "$DEVICE" ]; then
         log "❌ 错误: DEVICE变量为空！"
@@ -1209,6 +1568,17 @@ EOF
         echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
         echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
         log "✅ ath10k-ct驱动已强制启用"
+    fi
+    
+    # ============================================
+    # IPv6全局禁用处理
+    # ============================================
+    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+        log "🔧 ===== 执行IPv6全局禁用 ====="
+        disable_ipv6_globally "$BUILD_DIR"
+        log "✅ IPv6全局禁用配置已应用"
+    else
+        log "ℹ️ IPv6保持启用状态"
     fi
     
     log "🔧 强制配置生成固件..."
@@ -2030,7 +2400,7 @@ EOF
     # 3. 设置 CONFIG_VERSION_CODE_FILENAME
     sed -i '/^CONFIG_VERSION_CODE_FILENAME=/d' .config
     sed -i '/^# CONFIG_VERSION_CODE_FILENAME/d' .config
-    echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"">> .config
+    echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"" >> .config
     log "    ✅ 设置 CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\""
     
     # 4. 设置 CONFIG_VERSION_MANUFACTURER
@@ -2101,6 +2471,35 @@ EOF
     
     log "✅ 固件名称前缀修正完成"
     log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
+    
+    # ============================================
+    # IPv6最终验证
+    # ============================================
+    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+        log "🔍 ===== IPv6禁用最终验证 ====="
+        
+        local ipv6_check=0
+        if grep -q "^CONFIG_PACKAGE_ip6tables=y" .config || grep -q "^CONFIG_PACKAGE_odhcp6c=y" .config; then
+            ipv6_check=$((ipv6_check + 1))
+            log "  ⚠️ 仍检测到IPv6相关包被启用"
+            echo "# CONFIG_PACKAGE_ip6tables is not set" >> .config
+            echo "# CONFIG_PACKAGE_odhcp6c is not set" >> .config
+            echo "# CONFIG_PACKAGE_odhcpd is not set" >> .config
+        fi
+        
+        if grep -q "^CONFIG_KERNEL_IPV6=y" .config; then
+            ipv6_check=$((ipv6_check + 1))
+            log "  ⚠️ 仍检测到内核IPv6被启用，强制禁用"
+            sed -i 's/^CONFIG_KERNEL_IPV6=y/# CONFIG_KERNEL_IPV6 is not set/' .config
+        fi
+        
+        if [ $ipv6_check -eq 0 ]; then
+            log "  ✅ IPv6已完全禁用"
+        else
+            log "  ✅ IPv6禁用配置已更新"
+            make defconfig > /dev/null 2>&1 || true
+        fi
+    fi
     
     log "✅ 配置生成完成"
 }
