@@ -67,6 +67,13 @@ on:
         type: string
         default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
       
+      # 新增：IPv6禁用开关
+      disable_ipv6:
+        description: "🌐 禁用IPv6（解决IPv6风暴问题）"
+        required: false
+        type: boolean
+        default: true
+      
       enable_parallel:
         description: "⚡ 启用智能并行优化"
         required: false
@@ -79,10 +86,7 @@ env:
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
   SOURCE_REPO: "${{ github.event.inputs.source_repo }}"
   FORBIDDEN_PACKAGES: "${{ github.event.inputs.forbidden_packages }}"
-
-jobs:
-  build-firmware:
-    runs-on: ubuntu-22.04
+  DISABLE_IPV6: "${{ github.event.inputs.disable_ipv6 }}"
 #【firmware-build.yml-00-end】
 
     steps:
