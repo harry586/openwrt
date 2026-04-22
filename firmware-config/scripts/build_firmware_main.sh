@@ -5877,103 +5877,41 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 编译前主动删除所有已知有问题的补丁
+    # 修复 gpio-button-hotplug 模块（21.02版本兼容性问题）
     # ============================================
-    log "🔧 ===== 编译前主动删除所有已知有问题的补丁 ====="
+    log "🔧 ===== 修复 gpio-button-hotplug 模块 ====="
     
-    # 加载环境变量获取平台信息
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
     fi
-    log "  📌 当前平台: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+    log "  📌 当前平台: TARGET=$TARGET"
     log "  📌 源码分支: $SELECTED_BRANCH"
     
-    # 根据内核版本确定 backport 目录
-    local kernel_ver=""
-    if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
-        kernel_ver="5.15"
-    elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
-        kernel_ver="5.4"
-    else
-        kernel_ver="5.15"
-    fi
-    log "  📌 内核版本: $kernel_ver"
-    
-    # 删除 backport 目录中所有编号 >=700 的补丁（这些是backport补丁，容易失败）
-    log "  🗑️ 删除 backport-$kernel_ver 中所有编号 >=700 的补丁..."
-    if [ -d "target/linux/generic/backport-$kernel_ver" ]; then
-        find "target/linux/generic/backport-$kernel_ver" -name "[7-9][0-9][0-9]-*.patch" -type f 2>/dev/null | while read patch_file; do
-            log "    🗑️ 删除: $(basename "$patch_file")"
-            rm -f "$patch_file"
-        done
-    fi
-    
-    # 删除 hack 目录中所有编号 >=700 的补丁
-    log "  🗑️ 删除 hack-$kernel_ver 中所有编号 >=700 的补丁..."
-    if [ -d "target/linux/generic/hack-$kernel_ver" ]; then
-        find "target/linux/generic/hack-$kernel_ver" -name "[7-9][0-9][0-9]-*.patch" -type f 2>/dev/null | while read patch_file; do
-            log "    🗑️ 删除: $(basename "$patch_file")"
-            rm -f "$patch_file"
-        done
+    # 只对21.02版本修复
+    if [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
+        log "  🔧 21.02版本，修复 gpio-button-hotplug 模块..."
+        
+        local gpio_src="package/kernel/gpio-button-hotplug/src/gpio-button-hotplug.c"
+        if [ -f "$gpio_src" ]; then
+            # 备份原文件
+            cp "$gpio_src" "$gpio_src.bak"
+            
+            # 检查是否已经修复过
+            if ! grep -q "kobject_uevent_env" "$gpio_src"; then
+                log "    📝 修复 broadcast_uevent 函数调用..."
+                # 将 broadcast_uevent 替换为 kobject_uevent_env
+                sed -i 's/broadcast_uevent(/kobject_uevent_env(button-hotplug, KOBJ_CHANGE, envp/g' "$gpio_src" 2>/dev/null || true
+                sed -i 's/broadcast_uevent(/kobject_uevent_env(\&pdev->dev.kobj, KOBJ_CHANGE, NULL/g' "$gpio_src" 2>/dev/null || true
+                log "    ✅ 已修复 broadcast_uevent"
+            else
+                log "    ✅ 已经修复过，跳过"
+            fi
+        else
+            log "    ⚠️ gpio-button-hotplug.c 不存在: $gpio_src"
+        fi
     fi
     
-    # 删除所有与 qca8k 相关的补丁（LED支持补丁）
-    log "  🗑️ 删除所有 qca8k 相关补丁..."
-    find target/linux -name "*qca8k*.patch" -type f 2>/dev/null | while read patch_file; do
-        log "    🗑️ 删除: $(basename "$patch_file")"
-        rm -f "$patch_file"
-    done
-    
-    # 删除所有与 sfp 相关的补丁（Realtek SFP补丁）
-    log "  🗑️ 删除所有 sfp 相关补丁..."
-    find target/linux -name "*sfp*.patch" -type f 2>/dev/null | while read patch_file; do
-        log "    🗑️ 删除: $(basename "$patch_file")"
-        rm -f "$patch_file"
-    done
-    
-    # 删除所有与 mtk_ppe 相关的补丁
-    log "  🗑️ 删除所有 mtk_ppe 相关补丁..."
-    find target/linux -name "*mtk_ppe*.patch" -type f 2>/dev/null | while read patch_file; do
-        log "    🗑️ 删除: $(basename "$patch_file")"
-        rm -f "$patch_file"
-    done
-    
-    # 删除所有与 mtk_eth_soc 相关的补丁
-    log "  🗑️ 删除所有 mtk_eth_soc 相关补丁..."
-    find target/linux -name "*mtk_eth_soc*.patch" -type f 2>/dev/null | while read patch_file; do
-        log "    🗑️ 删除: $(basename "$patch_file")"
-        rm -f "$patch_file"
-    done
-    
-    # 对于非mediatek平台，删除所有mediatek相关补丁
-    if [ "$TARGET" != "mediatek" ]; then
-        log "  🔧 非mediatek平台，删除所有mediatek相关补丁..."
-        find target/linux -name "*mediatek*.patch" -type f 2>/dev/null | while read patch_file; do
-            log "    🗑️ 删除: $(basename "$patch_file")"
-            rm -f "$patch_file"
-        done
-        find target/linux -name "*mtk*.patch" -type f 2>/dev/null | while read patch_file; do
-            log "    🗑️ 删除: $(basename "$patch_file")"
-            rm -f "$patch_file"
-        done
-    fi
-    
-    # 清理可能残留的.rej文件
-    log "  🧹 清理残留的.rej文件..."
-    find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
-    find build_dir -name "*.orig" -type f -delete 2>/dev/null || true
-    
-    # 清理quilt状态
-    log "  🧹 清理quilt状态目录..."
-    find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
-    find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
-    
-    # 清理内核构建目录（确保补丁重新应用）
-    log "  🧹 清理内核构建目录..."
-    rm -rf build_dir/target-*/linux-* 2>/dev/null || true
-    rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-    
-    log "✅ 补丁预清理完成"
+    log "✅ 模块修复完成"
     echo ""
     
     ulimit -n 65536 2>/dev/null || true
@@ -6053,7 +5991,6 @@ EOF
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     
-    # 设置 VERSION_DIST 环境变量，确保编译时使用正确的名称
     local vendor_dist=""
     case "$SOURCE_REPO_TYPE" in
         "immortalwrt")
@@ -6097,9 +6034,6 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    # ============================================
-    # 全局动态目录创建函数
-    # ============================================
     ensure_root_dirs() {
         local target="$1"
         local build_dir="$2"
@@ -6138,12 +6072,8 @@ EOF
         done
     }
     
-    # ============================================
-    # 全局分步编译流程
-    # ============================================
     log "🔧 使用分步编译流程..."
     
-    # 步骤0: 清理并准备环境
     log "  📦 步骤0: 清理并准备环境..."
     rm -rf tmp/info 2>/dev/null || true
     mkdir -p tmp/info
@@ -6154,7 +6084,6 @@ EOF
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     log "  ✅ 环境清理完成"
     
-    # 步骤1: 编译工具链
     log "  📦 步骤1: 编译工具链..."
     set +e
     make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log
@@ -6166,12 +6095,11 @@ EOF
     fi
     log "  ✅ 步骤1完成"
     
-    # 步骤2: 编译内核和模块（带补丁失败重试）
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     
     local kernel_retry=1
-    local max_kernel_retries=3
+    local max_kernel_retries=2
     local kernel_success=0
     
     while [ $kernel_retry -le $max_kernel_retries ] && [ $kernel_success -eq 0 ]; do
@@ -6190,62 +6118,17 @@ EOF
         
         log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
         
-        # 检查是否是补丁失败
-        if grep -q "Patch failed\|Hunk FAILED\|No file to patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
-            log "    🔧 检测到补丁失败，正在修复..."
-            
-            # 方法1: 从 "Patch failed!  Please fix" 行提取补丁路径
-            local patch_path=$(grep "Patch failed!" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | head -1)
-            
-            if [ -n "$patch_path" ] && [ -f "$patch_path" ]; then
-                log "      🗑️ 删除失败补丁: $(basename "$patch_path")"
-                rm -f "$patch_path"
+        if grep -q "broadcast_uevent" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
+            log "    🔧 检测到 broadcast_uevent 错误，修复源代码..."
+            local gpio_src="package/kernel/gpio-button-hotplug/src/gpio-button-hotplug.c"
+            if [ -f "$gpio_src" ]; then
+                sed -i 's/broadcast_uevent(/kobject_uevent_env(\&pdev->dev.kobj, KOBJ_CHANGE, NULL/g' "$gpio_src" 2>/dev/null || true
+                log "    ✅ 已修复 broadcast_uevent"
             fi
-            
-            # 方法2: 从 "No file to patch" 所在区块提取补丁路径
-            if [ -z "$patch_path" ]; then
-                patch_path=$(grep -B10 "No file to patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | head -1)
-                if [ -n "$patch_path" ] && [ -f "$patch_path" ]; then
-                    log "      🗑️ 删除失败补丁: $(basename "$patch_path")"
-                    rm -f "$patch_path"
-                fi
-            fi
-            
-            # 方法3: 删除所有编号 >=700 的补丁
-            log "    🔍 删除所有编号 >=700 的补丁..."
-            find target/linux -name "[7-9][0-9][0-9]-*.patch" -type f 2>/dev/null | while read bad_patch; do
-                log "      🗑️ 删除: $(basename "$bad_patch")"
-                rm -f "$bad_patch"
-            done
-            
-            # 方法4: 删除所有 qca8k 相关补丁
-            log "    🔍 删除所有 qca8k 相关补丁..."
-            find target/linux -name "*qca8k*.patch" -type f 2>/dev/null | while read bad_patch; do
-                log "      🗑️ 删除: $(basename "$bad_patch")"
-                rm -f "$bad_patch"
-            done
-            
-            # 方法5: 删除所有 sfp 相关补丁
-            log "    🔍 删除所有 sfp 相关补丁..."
-            find target/linux -name "*sfp*.patch" -type f 2>/dev/null | while read bad_patch; do
-                log "      🗑️ 删除: $(basename "$bad_patch")"
-                rm -f "$bad_patch"
-            done
-            
-            # 彻底清理内核构建目录
-            log "    🔧 清理内核构建目录..."
-            rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
+            rm -rf build_dir/target-*/linux-*/gpio-button-hotplug 2>/dev/null || true
             rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-            
-            # 清理 quilt 状态目录
-            find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
-            find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
-            
-            # 清理.rej文件
-            find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
         fi
         
-        # 检查其他常见错误
         if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    ❌ 磁盘空间不足，无法继续"
             break
@@ -6271,7 +6154,6 @@ EOF
     
     log "  ✅ 步骤2完成"
     
-    # 步骤3: 编译所有软件包
     log "  📦 步骤3: 编译所有软件包..."
     set +e
     make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
@@ -6292,7 +6174,6 @@ EOF
     fi
     log "  ✅ 步骤3完成"
     
-    # 步骤4: 安装软件包
     log "  📦 步骤4: 安装软件包..."
     set +e
     make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log
@@ -6304,7 +6185,6 @@ EOF
     fi
     log "  ✅ 步骤4完成"
     
-    # 步骤5: 生成固件
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     set +e
@@ -6317,7 +6197,6 @@ EOF
     fi
     log "  ✅ 步骤5完成"
     
-    # 合并所有日志
     cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
     
     log "  ✅ 分步编译完成"
@@ -6325,9 +6204,6 @@ EOF
     kill $protect_pid 2>/dev/null || true
     log "🔧 双固件保护已停止"
     
-    # ============================================
-    # 固件验证和哈希值计算
-    # ============================================
     log "🔍 验证固件并计算哈希值..."
     
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
@@ -6338,20 +6214,17 @@ EOF
     > "$hash_file" 2>/dev/null || true
     
     if [ -d "$target_dir" ]; then
-        # 首先删除不需要的文件（.itb、.manifest 等）
         log "  🗑️ 清理不需要的文件..."
         find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) 2>/dev/null | while read file; do
             log "    删除: $(basename "$file")"
             rm -f "$file"
         done
         
-        # 删除 packages 子目录（不需要上传）
         if [ -d "$target_dir/packages" ]; then
             log "    删除 packages 目录"
             rm -rf "$target_dir/packages"
         fi
         
-        # 然后验证固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             local fname=$(basename "$file")
