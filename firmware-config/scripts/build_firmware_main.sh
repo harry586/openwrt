@@ -5877,148 +5877,36 @@ workflow_step25_build_firmware() {
         kernel_ver="5.15"
     elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
         kernel_ver="5.4"
-    elif [[ "$SELECTED_BRANCH" == *"22.03"* ]]; then
-        kernel_ver="5.10"
-    elif [[ "$SELECTED_BRANCH" == *"19.07"* ]]; then
-        kernel_ver="4.14"
     else
         kernel_ver="5.15"
     fi
     log "  📌 内核版本: $kernel_ver"
     
     # ============================================
-    # 定义不兼容的版本模式
+    # 23.05版本：彻底删除所有补丁目录
     # ============================================
-    local incompatible_versions=()
-    if [[ "$kernel_ver" == "5.15" ]]; then
-        incompatible_versions=("v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
-    elif [[ "$kernel_ver" == "5.10" ]]; then
-        incompatible_versions=("v5.11" "v5.12" "v5.13" "v5.14" "v5.15" "v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
-    elif [[ "$kernel_ver" == "5.4" ]]; then
-        incompatible_versions=("v5.5" "v5.6" "v5.7" "v5.8" "v5.9" "v5.10" "v5.11" "v5.12" "v5.13" "v5.14" "v5.15" "v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
-    elif [[ "$kernel_ver" == "4.14" ]]; then
-        incompatible_versions=("v4.15" "v4.16" "v4.17" "v4.18" "v4.19" "v4.20" "v5.0" "v5.1" "v5.2" "v5.3" "v5.4" "v5.5" "v5.6" "v5.7" "v5.8" "v5.9" "v5.10" "v5.11" "v5.12" "v5.13" "v5.14" "v5.15" "v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
+    if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
+        log "  🗑️ 23.05版本：彻底删除所有补丁目录..."
+        
+        # 删除通用补丁目录
+        rm -rf target/linux/generic/backport-${kernel_ver} 2>/dev/null || true
+        rm -rf target/linux/generic/pending-${kernel_ver} 2>/dev/null || true
+        rm -rf target/linux/generic/hack-${kernel_ver} 2>/dev/null || true
+        log "    ✅ 已删除通用补丁目录"
+        
+        # 删除平台专用补丁目录
+        find target/linux -maxdepth 2 -type d -name "patches-${kernel_ver}" 2>/dev/null | while read dir; do
+            rm -rf "$dir" 2>/dev/null || true
+            log "    ✅ 已删除: $dir"
+        done
+        
+        # 删除 pending 和 backport 的通用目录（不带版本号）
+        rm -rf target/linux/generic/backport 2>/dev/null || true
+        rm -rf target/linux/generic/pending 2>/dev/null || true
+        rm -rf target/linux/generic/hack 2>/dev/null || true
+        
+        log "  ✅ 补丁目录清理完成"
     fi
-    
-    # ============================================
-    # 清理函数：删除目录中的不兼容补丁（修复语法）
-    # ============================================
-    clean_patches_in_dir() {
-        local dir="$1"
-        if [ ! -d "$dir" ]; then
-            return 0
-        fi
-        
-        local dir_deleted=0
-        
-        # 1. 删除版本不兼容的补丁
-        for ver in "${incompatible_versions[@]}"; do
-            # 使用 find 替代直接通配符，避免语法错误
-            find "$dir" -maxdepth 1 -name "*${ver}*.patch" -type f 2>/dev/null | while read patch_file; do
-                if [ -f "$patch_file" ]; then
-                    rm -f "$patch_file"
-                    dir_deleted=$((dir_deleted + 1))
-                fi
-            done
-        done
-        
-        # 2. 删除已知问题补丁
-        local bad_patterns=(
-            "mtk_ecc"
-            "sdhci-msm"
-            "mvneta"
-            "mvpp2"
-            "at803x"
-            "qca8k"
-            "b53"
-            "flow-offload"
-            "ppe-table"
-        )
-        for pattern in "${bad_patterns[@]}"; do
-            find "$dir" -maxdepth 1 -name "*${pattern}*.patch" -type f 2>/dev/null | while read patch_file; do
-                if [ -f "$patch_file" ]; then
-                    rm -f "$patch_file"
-                    dir_deleted=$((dir_deleted + 1))
-                fi
-            done
-        done
-        
-        return 0
-    }
-    
-    # ============================================
-    # 清理通用补丁目录
-    # ============================================
-    log "  🗑️ 清理通用补丁目录..."
-    local generic_dirs=(
-        "target/linux/generic/backport-${kernel_ver}"
-        "target/linux/generic/pending-${kernel_ver}"
-        "target/linux/generic/hack-${kernel_ver}"
-    )
-    
-    local total_deleted=0
-    for dir in "${generic_dirs[@]}"; do
-        if [ -d "$dir" ]; then
-            log "    📁 清理: $dir"
-            
-            # 删除版本不兼容的补丁
-            for ver in "${incompatible_versions[@]}"; do
-                find "$dir" -maxdepth 1 -name "*${ver}*.patch" -type f -delete 2>/dev/null || true
-            done
-            
-            # 删除已知问题补丁
-            local bad_patterns=(
-                "*mtk_ecc*.patch"
-                "*sdhci-msm*.patch"
-                "*mvneta*.patch"
-                "*mvpp2*.patch"
-                "*at803x*.patch"
-                "*qca8k*.patch"
-                "*b53*.patch"
-                "*flow-offload*.patch"
-                "*ppe-table*.patch"
-            )
-            for pattern in "${bad_patterns[@]}"; do
-                find "$dir" -maxdepth 1 -name "$pattern" -type f -delete 2>/dev/null || true
-            done
-            
-            # 对于非mediatek平台，删除所有mediatek相关补丁
-            if [ "$TARGET" != "mediatek" ]; then
-                find "$dir" -maxdepth 1 -name "*mtk*.patch" -type f -delete 2>/dev/null || true
-                find "$dir" -maxdepth 1 -name "*mediatek*.patch" -type f -delete 2>/dev/null || true
-            fi
-        fi
-    done
-    
-    # ============================================
-    # 清理平台专用补丁目录
-    # ============================================
-    log "  🗑️ 清理平台专用补丁目录..."
-    
-    local platform_dirs=$(find target/linux -maxdepth 2 -type d -name "patches-${kernel_ver}" 2>/dev/null)
-    
-    for dir in $platform_dirs; do
-        if [[ "$dir" == *"/generic/"* ]]; then
-            continue
-        fi
-        
-        local platform=$(echo "$dir" | sed -E 's|target/linux/([^/]+)/.*|\1|')
-        
-        if [ "$platform" != "$TARGET" ]; then
-            local patch_count=$(find "$dir" -maxdepth 1 -name "*.patch" -type f 2>/dev/null | wc -l)
-            if [ $patch_count -gt 0 ]; then
-                find "$dir" -maxdepth 1 -name "*.patch" -type f -delete 2>/dev/null || true
-                log "    📁 $dir (非当前平台): 删除补丁"
-            fi
-        else
-            log "    📁 $dir (当前平台): 清理不兼容补丁"
-            for ver in "${incompatible_versions[@]}"; do
-                find "$dir" -maxdepth 1 -name "*${ver}*.patch" -type f -delete 2>/dev/null || true
-            done
-        fi
-    done
-    
-    log "  ✅ 补丁清理完成"
     
     # ============================================
     # 修复 ath79 平台的 phy-ar7100-usb 问题
@@ -6034,7 +5922,7 @@ workflow_step25_build_firmware() {
             
             if grep -q "gpio_export_with_name" "$phy_src" 2>/dev/null; then
                 sed -i 's/gpio_export_with_name/gpiod_export/g' "$phy_src"
-                log "    ✅ 已修复 gpio_export_with_name"
+                log "    ✅ 已修复 gpio_export_with_name -> gpiod_export"
             fi
         fi
     fi
@@ -6050,10 +5938,10 @@ workflow_step25_build_firmware() {
             cp "$gpio_src" "${gpio_src}.orig"
         fi
         
-        if ! grep -q "kobject_uevent" "$gpio_src" 2>/dev/null || grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
+        if grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
             sed -i 's/broadcast_uevent(&button->dev, KOBJ_CHANGE);/kobject_uevent(\&button->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
             sed -i 's/broadcast_uevent(&b->dev, KOBJ_CHANGE);/kobject_uevent(\&b->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
-            log "    ✅ 已修复 broadcast_uevent"
+            log "    ✅ 已修复 broadcast_uevent -> kobject_uevent"
         fi
     fi
     
@@ -6258,61 +6146,17 @@ EOF
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     
-    local kernel_retry=1
-    local max_kernel_retries=2
-    local kernel_success=0
+    set +e
+    make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2.log
+    STEP2_EXIT_CODE=${PIPESTATUS[0]}
+    set -e
     
-    while [ $kernel_retry -le $max_kernel_retries ] && [ $kernel_success -eq 0 ]; do
-        log "    尝试 $kernel_retry/$max_kernel_retries..."
-        
-        set +e
-        make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2_attempt${kernel_retry}.log
-        STEP2_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
-        
-        if [ $STEP2_EXIT_CODE -eq 0 ]; then
-            kernel_success=1
-            log "    ✅ 内核编译成功"
-            break
-        fi
-        
-        log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
-        
-        if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
-            log "    ❌ 磁盘空间不足，无法继续"
-            break
-        fi
-        
-        if grep -q "swconfig\|SWITCH_LINK_FLAG" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
-            log "    🔧 禁用 swconfig..."
-            find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-            sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
-            echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-            make defconfig > /dev/null 2>&1 || true
-        fi
-        
-        # 如果补丁仍然失败，执行深度清理
-        if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
-            log "    🔧 检测到补丁失败，执行深度清理..."
-            rm -rf target/linux/generic/pending-* 2>/dev/null || true
-            rm -rf target/linux/generic/backport-* 2>/dev/null || true
-            rm -rf target/linux/generic/hack-* 2>/dev/null || true
-            rm -rf build_dir/target-*/linux-* 2>/dev/null || true
-            rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-            find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
-            find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
-        fi
-        
-        kernel_retry=$((kernel_retry + 1))
-    done
-    
-    if [ $kernel_success -eq 0 ]; then
-        log "  ❌ 内核编译失败，已重试 $max_kernel_retries 次"
+    if [ $STEP2_EXIT_CODE -ne 0 ]; then
+        log "  ❌ 内核编译失败"
         kill $protect_pid 2>/dev/null || true
         rm -rf "$protect_dir" 2>/dev/null || true
         exit 1
     fi
-    
     log "  ✅ 步骤2完成"
     
     log "  📦 步骤3: 编译所有软件包..."
@@ -6321,12 +6165,8 @@ EOF
     STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
-    if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
-        log "    🔧 禁用 swconfig..."
-        find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-        sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
-        echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-        make defconfig > /dev/null 2>&1 || true
+    if [ $STEP3_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 软件包编译有警告，继续..."
     fi
     
     local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
@@ -6358,7 +6198,7 @@ EOF
     fi
     log "  ✅ 步骤5完成"
     
-    cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
+    cat build_step*.log > build.log 2>/dev/null || true
     
     log "  ✅ 分步编译完成"
     
@@ -6375,16 +6215,8 @@ EOF
     > "$hash_file" 2>/dev/null || true
     
     if [ -d "$target_dir" ]; then
-        log "  🗑️ 清理不需要的文件..."
-        find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) 2>/dev/null | while read file; do
-            log "    删除: $(basename "$file")"
-            rm -f "$file"
-        done
-        
-        if [ -d "$target_dir/packages" ]; then
-            log "    删除 packages 目录"
-            rm -rf "$target_dir/packages"
-        fi
+        find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) -delete 2>/dev/null || true
+        rm -rf "$target_dir/packages" 2>/dev/null || true
         
         while IFS= read -r file; do
             [ -z "$file" ] && continue
@@ -6411,7 +6243,6 @@ EOF
                     log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
                 fi
             else
-                log "  ❌ $fname 大小: ${size_mb}MB - 无效(小于5MB)"
                 rm -f "$file"
             fi
         done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
@@ -6420,15 +6251,11 @@ EOF
     if [ $valid_firmware -gt 0 ]; then
         echo "VALID_FIRMWARE_COUNT=$valid_firmware" >> $GITHUB_ENV 2>/dev/null || true
         echo "FIRMWARE_HASH_FILE=$hash_file" >> $GITHUB_ENV 2>/dev/null || true
-    fi
-    
-    if [ $valid_firmware -eq 0 ]; then
+        log "✅ 找到 $valid_firmware 个有效可刷机固件"
+    else
         log "❌ 错误：没有找到任何有效可刷机固件"
         rm -rf "$protect_dir" 2>/dev/null || true
         exit 1
-    else
-        log "✅ 找到 $valid_firmware 个有效可刷机固件"
-        log "📄 哈希值文件: $hash_file"
     fi
     
     rm -rf "$protect_dir" 2>/dev/null || true
