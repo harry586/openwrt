@@ -5907,14 +5907,7 @@ workflow_step25_build_firmware() {
         if grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
             log "    📝 检测到 broadcast_uevent，需要修复..."
             
-            # 方法1: 查看原始调用格式
-            local original_call=$(grep "broadcast_uevent" "$gpio_src" | head -1)
-            log "    原始调用: $original_call"
-            
-            # 根据原始格式选择正确的替换
             # 常见格式: broadcast_uevent(&button->dev, KOBJ_CHANGE);
-            # 替换为: kobject_uevent(&button->dev.kobj, KOBJ_CHANGE);
-            
             sed -i 's/broadcast_uevent(\&button->dev, KOBJ_CHANGE);/kobject_uevent(\&button->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
             sed -i 's/broadcast_uevent(\&b->dev, KOBJ_CHANGE);/kobject_uevent(\&b->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
             sed -i 's/broadcast_uevent(dev, KOBJ_CHANGE);/kobject_uevent(\&((struct device *)dev)->kobj, KOBJ_CHANGE);/g' "$gpio_src"
@@ -5922,19 +5915,12 @@ workflow_step25_build_firmware() {
             
             # 验证修复
             if grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
-                log "    ⚠️ 仍有 broadcast_uevent 未修复，显示上下文:"
-                grep -n "broadcast_uevent" "$gpio_src" | head -5 | while read line; do
-                    log "      $line"
-                done
-                
-                # 如果还有，尝试更激进的方式：直接注释掉或使用宏
-                log "    🔧 使用更激进的方式..."
-                sed -i 's/broadcast_uevent(/kobject_uevent(\&dev->kobj, /g' "$gpio_src"
+                log "    ⚠️ 仍有 broadcast_uevent 未修复"
             else
                 log "    ✅ 已完全修复 broadcast_uevent"
             fi
         else
-            log "    ✅ 无需修复（已使用正确的 API）"
+            log "    ✅ 无需修复"
         fi
     fi
     
@@ -5952,7 +5938,6 @@ workflow_step25_build_firmware() {
         fi
         
         # 删除有语法错误的 DTS 文件
-        log "    🗑️ 删除有问题的 DTS 文件..."
         find target/linux/ath79 -name "ar9344_alfa-network_n5q.dts" -delete 2>/dev/null || true
         find target/linux/ath79 -name "*alfa-network*.dts" -delete 2>/dev/null || true
     fi
@@ -5963,18 +5948,16 @@ workflow_step25_build_firmware() {
     if [ "$TARGET" = "ipq40xx" ]; then
         log "  🔧 修复 ipq40xx 平台问题..."
         
-        # 删除缺少头文件的 DTS 文件
-        log "    🗑️ 删除有问题的 DTS 文件..."
-        find target/linux/ipq40xx -name "qcom-ipq4018-ap120c-ac.dts" -delete 2>/dev/null || true
-        find target/linux/ipq40xx -name "*ap120c*.dts" -delete 2>/dev/null || true
-        
-        # 修复 DTS 中的头文件引用（如果存在）
+        # 修复 DTS 中的头文件引用
         local dts_files=$(find target/linux/ipq40xx -name "*.dts" -exec grep -l "dt-bindings/soc/qcom,tcsr.h" {} \; 2>/dev/null)
         for dts in $dts_files; do
             log "    📝 修复 DTS: $(basename "$dts")"
-            # 注释掉有问题的头文件引用
             sed -i 's|#include <dt-bindings/soc/qcom,tcsr.h>|/* #include <dt-bindings/soc/qcom,tcsr.h> */|g' "$dts"
         done
+        
+        # 删除无法修复的 DTS 文件
+        find target/linux/ipq40xx -name "qcom-ipq4018-ap120c-ac.dts" -delete 2>/dev/null || true
+        find target/linux/ipq40xx -name "*ap120c*.dts" -delete 2>/dev/null || true
     fi
     
     # ============================================
@@ -5983,8 +5966,6 @@ workflow_step25_build_firmware() {
     if [ "$TARGET" = "mediatek" ]; then
         log "  🔧 修复 mediatek 平台问题..."
         
-        # 删除有语法错误的 DTS 文件
-        log "    🗑️ 删除有问题的 DTS 文件..."
         find target/linux/mediatek -name "mt7981b-cudy-m3000-v1.dts" -delete 2>/dev/null || true
         find target/linux/mediatek -name "*cudy*.dts" -delete 2>/dev/null || true
         find target/linux/mediatek -name "*creatlentem*.dts" -delete 2>/dev/null || true
@@ -6013,11 +5994,10 @@ workflow_step25_build_firmware() {
     echo ""
     
     # ============================================
-    # 编译流程
+    # 编译流程（保留分步编译）
     # ============================================
     ulimit -n 65536 2>/dev/null || true
-    local current_limit=$(ulimit -n)
-    log "  ✅ 当前文件描述符限制: $current_limit"
+    log "  ✅ 当前文件描述符限制: $(ulimit -n)"
     
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
@@ -6026,7 +6006,6 @@ workflow_step25_build_firmware() {
     echo "🔧 系统信息:"
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
-    echo "  源码类型: $SOURCE_REPO_TYPE"
     
     local vendor_dist=""
     case "$SOURCE_REPO_TYPE" in
@@ -6036,49 +6015,77 @@ workflow_step25_build_firmware() {
         *) vendor_dist="ImmortalWrt" ;;
     esac
     export VERSION_DIST="$vendor_dist"
-    export CONFIG_VERSION_DIST="$vendor_dist"
-    log "  📌 编译时 VERSION_DIST 环境变量: $VERSION_DIST"
     
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
-        "openwrt"|"lede")
-            make_args="V=s FORCE_UNSAFE_CONFIGURE=1"
-            ;;
-        "immortalwrt")
-            make_args="V=s"
-            ;;
+        "openwrt"|"lede") make_args="V=s FORCE_UNSAFE_CONFIGURE=1" ;;
+        "immortalwrt") make_args="V=s" ;;
     esac
     
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
             MAKE_JOBS=4
-        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
-            MAKE_JOBS=2
         else
-            MAKE_JOBS=1
+            MAKE_JOBS=2
         fi
         log "🚀 使用 $MAKE_JOBS 个并行任务"
     else
         MAKE_JOBS=1
-        log "⚠️ 使用单线程编译"
     fi
     
     # ============================================
-    # 直接编译
+    # 分步编译（关键：工具链已经在步骤09编译好了）
     # ============================================
-    log "🔧 开始编译固件..."
+    log "🔧 开始分步编译..."
     
+    # 步骤2: 编译内核和模块
+    log "  📦 步骤2: 编译内核和模块..."
     set +e
-    make -j$MAKE_JOBS $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build.log
-    BUILD_EXIT_CODE=${PIPESTATUS[0]}
+    make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2.log
+    STEP2_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
-    if [ $BUILD_EXIT_CODE -ne 0 ]; then
-        log "❌ 编译失败，退出码: $BUILD_EXIT_CODE"
+    if [ $STEP2_EXIT_CODE -ne 0 ]; then
+        log "  ❌ 内核编译失败"
         exit 1
     fi
+    log "  ✅ 步骤2完成"
     
-    log "✅ 编译完成"
+    # 步骤3: 编译所有软件包
+    log "  📦 步骤3: 编译所有软件包..."
+    set +e
+    make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
+    STEP3_EXIT_CODE=${PIPESTATUS[0]}
+    set -e
+    
+    if [ $STEP3_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 软件包编译有警告，继续..."
+    fi
+    
+    make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
+    log "  ✅ 步骤3完成"
+    
+    # 步骤4: 安装软件包
+    log "  📦 步骤4: 安装软件包..."
+    set +e
+    make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log
+    set -e
+    log "  ✅ 步骤4完成"
+    
+    # 步骤5: 生成固件
+    log "  📦 步骤5: 生成固件..."
+    set +e
+    make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5.log
+    STEP5_EXIT_CODE=${PIPESTATUS[0]}
+    set -e
+    
+    if [ $STEP5_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 固件生成有警告，继续..."
+    fi
+    log "  ✅ 步骤5完成"
+    
+    cat build_step*.log > build.log 2>/dev/null || true
+    log "✅ 分步编译完成"
     
     # ============================================
     # 验证固件
@@ -6107,9 +6114,6 @@ workflow_step25_build_firmware() {
                     valid_firmware=$((valid_firmware + 1))
                     local fhash=$(sha256sum "$file" | awk '{print $1}')
                     echo "$fhash  $fname" >> "$hash_file"
-                    log "      SHA256: $fhash"
-                else
-                    rm -f "$file"
                 fi
             fi
         done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
