@@ -5173,6 +5173,11 @@ workflow_step15_generate_config() {
         
         # 计算每个设备的匹配权重
         for device in "${all_devices[@]}"; do
+            # 【关键修复】排除 _common、_common_nand、_common_emmc 等通用模板
+            if [[ "$device" == *_common* ]]; then
+                continue
+            fi
+            
             local weight=0
             local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
             local lower_device=$(echo "$device" | tr '[:upper:]' '[:lower:]')
@@ -5240,10 +5245,11 @@ workflow_step15_generate_config() {
     
     # 遍历所有mk文件查找匹配
     for mkfile in "${mk_files[@]}"; do
-        # 先尝试精确匹配
-        if grep -q "define Device.*$DEVICE" "$mkfile" 2>/dev/null; then
+        # 先尝试精确匹配（排除_common）
+        local exact_match=$(grep -E "define Device/${DEVICE}$" "$mkfile" 2>/dev/null | head -1)
+        if [ -n "$exact_match" ]; then
             device_file="$mkfile"
-            mk_device_name=$(grep -m1 "define Device.*$DEVICE" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
+            mk_device_name="$DEVICE"
             log "✅ 找到精确设备定义: $mk_device_name (在 $device_file)"
             break
         fi
@@ -5287,21 +5293,6 @@ workflow_step15_generate_config() {
         
         log "🔧 未找到精确匹配，使用权重最高的设备: $mk_device_name"
         log "📁 定义文件: $device_file"
-        
-        # 显示其他可能的选择供参考
-        if [ ${#sorted_matches[@]} -gt 1 ]; then
-            echo ""
-            log "💡 其他可能的设备:"
-            local other_count=0
-            for match in "${sorted_matches[@]}"; do
-                if [ $other_count -ge 1 ] && [ $other_count -lt 5 ]; then
-                    local other_dev=$(echo "$match" | cut -d':' -f2)
-                    echo "      - $other_dev"
-                fi
-                other_count=$((other_count + 1))
-            done
-            echo ""
-        fi
     fi
     
     if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
@@ -5312,7 +5303,7 @@ workflow_step15_generate_config() {
         for mkfile in "${mk_files[@]}"; do
             if [[ "$mkfile" == *"image/"*".mk" ]]; then
                 echo "📁 $(basename "$mkfile"):"
-                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\///' | sed 's/ .*//' | while read dev; do
+                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\///' | sed 's/ .*//' | grep -v "_common" | while read dev; do
                     echo "    - $dev"
                 done
             fi
@@ -5321,7 +5312,7 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 使用搜索到的正确设备名（像旧版本一样）
+    # 使用搜索到的正确设备名
     local correct_device="$mk_device_name"
     log "🔧 使用搜索到的正确设备名: $correct_device (原输入: $DEVICE)"
     
@@ -5624,22 +5615,36 @@ workflow_step23_pre_build_check() {
     fi
     
     # ============================================
+    # 【关键修复】排除 _common 后缀
+    # ============================================
+    local clean_device="$DEVICE"
+    # 如果 DEVICE 错误地包含了 _common，清理它
+    if [[ "$clean_device" == *_common* ]]; then
+        clean_device=$(echo "$clean_device" | sed 's/_common.*$//')
+        log "⚠️ 检测到 DEVICE 包含 _common，清理为: $clean_device"
+        export DEVICE="$clean_device"
+        sed -i "s/^export DEVICE=.*/export DEVICE=\"$clean_device\"/" "$BUILD_DIR/build_env.sh" 2>/dev/null || true
+    fi
+    
+    # ============================================
     # 根据源码类型确定设备配置格式
     # ============================================
     local expected_config=""
     local search_pattern=""
     
-    expected_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${DEVICE}=y"
-    search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${DEVICE}"
-    log "🔧 标准格式，期望配置: $expected_config"
+    expected_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${clean_device}=y"
+    search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${clean_device}"
+    log "🔧 期望配置: $expected_config"
     
     # 检查设备配置是否存在
     local config_exists=0
     if grep -q "^${expected_config}$" .config 2>/dev/null; then
         config_exists=1
+        log "✅ 设备配置存在: $expected_config"
     elif grep -q "^${search_pattern}=y" .config 2>/dev/null; then
         config_exists=1
         expected_config=$(grep "^${search_pattern}=y" .config | head -1)
+        log "✅ 设备配置存在: $expected_config"
     elif grep -q "^# ${search_pattern} is not set" .config 2>/dev/null; then
         config_exists=1
         log "⚠️ 设备配置被禁用，正在启用..."
@@ -5651,6 +5656,7 @@ workflow_step23_pre_build_check() {
     if [ $config_exists -eq 0 ]; then
         log "⚠️ 设备配置丢失，重新添加: ${search_pattern}=y"
         
+        # 删除所有旧的设备配置
         sed -i "/^CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         sed -i "/^# CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         
@@ -5664,8 +5670,6 @@ workflow_step23_pre_build_check() {
         }
         
         log "✅ 设备配置已恢复"
-    else
-        log "✅ 设备配置存在: $expected_config"
     fi
     
     echo "🔍 检查当前环境..."
@@ -5699,11 +5703,11 @@ workflow_step23_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        # 直接使用 DEVICE 变量的值检查
+        # 使用清理后的设备名检查
         local device_for_check="$DEVICE"
-        local check_pattern=""
-        
-        check_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${device_for_check}"
+        # 再次确保没有 _common 后缀
+        device_for_check=$(echo "$device_for_check" | sed 's/_common.*$//')
+        local check_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${device_for_check}"
         
         if grep -q "^${check_pattern}=y" .config; then
             echo "   ✅ 设备配置正确: $(grep "^${check_pattern}=y" .config | head -1)"
@@ -5714,6 +5718,14 @@ workflow_step23_pre_build_check() {
             echo "   ✅ 已重新启用设备配置"
         else
             echo "   ❌ 设备配置可能不正确，未找到: ${check_pattern}"
+            # 尝试搜索类似配置
+            local similar=$(grep "CONFIG_TARGET_${TARGET}.*DEVICE_" .config 2>/dev/null | head -3)
+            if [ -n "$similar" ]; then
+                echo "   📋 当前配置中的设备配置:"
+                echo "$similar" | while read line; do
+                    echo "      $line"
+                done
+            fi
             error_count=$((error_count + 1))
         fi
     else
@@ -5735,23 +5747,8 @@ workflow_step23_pre_build_check() {
             echo "   ✅ 交叉编译工具链已生成: $(basename "$cross_gcc")"
             local gcc_version=$("$cross_gcc" --version 2>&1 | head -1)
             echo "     版本: $gcc_version"
-            
-            if [[ "$cross_gcc" == *"aarch64"* ]]; then
-                echo "     架构: ARM64 (aarch64)"
-            elif [[ "$cross_gcc" == *"arm"* ]]; then
-                echo "     架构: ARM"
-            elif [[ "$cross_gcc" == *"mips"* ]]; then
-                echo "     架构: MIPS"
-            fi
-            
-            echo "   ✅ 工具链状态: 已编译完成"
         else
             echo "   ⚠️ 未找到交叉编译工具链"
-            if [ -f "$BUILD_DIR/build_dir/target-*/.stamp_target_compile" ]; then
-                echo "     工具链正在编译中"
-            else
-                echo "     工具链尚未编译"
-            fi
         fi
     else
         echo "   ⚠️ staging_dir 目录不存在"
@@ -5763,15 +5760,6 @@ workflow_step23_pre_build_check() {
         local feeds_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
         feeds_count=$((feeds_count - 1))
         echo "   ✅ feeds目录存在, 包含 $feeds_count 个feed"
-        
-        for feed in packages luci; do
-            if [ -d "feeds/$feed" ]; then
-                echo "   ✅ $feed feed: 存在"
-            else
-                echo "   ❌ $feed feed: 不存在"
-                warning_count=$((warning_count + 1))
-            fi
-        done
     else
         echo "   ❌ feeds目录不存在"
         error_count=$((error_count + 1))
@@ -5788,9 +5776,6 @@ workflow_step23_pre_build_check() {
         error_count=$((error_count + 1))
     elif [ $available_gb -lt 10 ]; then
         echo "   ⚠️ 空间较低 (<10G)"
-        warning_count=$((warning_count + 1))
-    elif [ $available_gb -lt 20 ]; then
-        echo "   ⚠️ 空间一般 (<20G)"
         warning_count=$((warning_count + 1))
     else
         echo "   ✅ 空间充足"
@@ -5842,13 +5827,6 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
-    echo "7. ✅ CPU检查:"
-    local cpu_cores=$(nproc)
-    local cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)
-    echo "   📊 核心数: $cpu_cores"
-    echo "   📊 型号: $cpu_model"
-    echo ""
-    
     echo "========================================"
     if [ $error_count -gt 0 ]; then
         echo "❌❌❌ 检测到 $error_count 个错误，请修复后重试 ❌❌❌"
@@ -5877,15 +5855,21 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 简单粗暴但有效的解决方案：删除所有不兼容的补丁
+    # 编译前准备：加载环境变量
     # ============================================
-    log "🔧 ===== 清理不兼容补丁 ====="
+    log "🔧 ===== 编译前准备 ====="
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
     fi
     log "  📌 当前平台: TARGET=$TARGET"
     log "  📌 源码分支: $SELECTED_BRANCH"
+    
+    # 清理 DEVICE 中的 _common 后缀
+    if [[ "$DEVICE" == *_common* ]]; then
+        DEVICE=$(echo "$DEVICE" | sed 's/_common.*$//')
+        log "  📌 清理后设备名: $DEVICE"
+    fi
     
     # 根据版本确定内核版本
     local kernel_ver=""
@@ -5903,11 +5887,8 @@ workflow_step25_build_firmware() {
     log "  📌 内核版本: $kernel_ver"
     
     # ============================================
-    # 直接删除所有版本不兼容的补丁
+    # 定义不兼容的版本模式
     # ============================================
-    log "  🗑️ 删除版本不兼容的补丁..."
-    
-    # 定义不兼容的版本模式（补丁版本 > 内核版本）
     local incompatible_versions=()
     if [[ "$kernel_ver" == "5.15" ]]; then
         incompatible_versions=("v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
@@ -5919,119 +5900,123 @@ workflow_step25_build_firmware() {
         incompatible_versions=("v4.15" "v4.16" "v4.17" "v4.18" "v4.19" "v4.20" "v5.0" "v5.1" "v5.2" "v5.3" "v5.4" "v5.5" "v5.6" "v5.7" "v5.8" "v5.9" "v5.10" "v5.11" "v5.12" "v5.13" "v5.14" "v5.15" "v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
     fi
     
-    # 需要清理的目录
-    local clean_dirs=()
-    if [ -d "target/linux/generic/backport-${kernel_ver}" ]; then
-        clean_dirs+=("target/linux/generic/backport-${kernel_ver}")
-    fi
-    if [ -d "target/linux/generic/pending-${kernel_ver}" ]; then
-        clean_dirs+=("target/linux/generic/pending-${kernel_ver}")
-    fi
-    if [ -d "target/linux/generic/hack-${kernel_ver}" ]; then
-        clean_dirs+=("target/linux/generic/hack-${kernel_ver}")
-    fi
-    
-    # 如果上述目录不存在，尝试通配符匹配
-    if [ ${#clean_dirs[@]} -eq 0 ]; then
-        for dir in target/linux/generic/backport-* target/linux/generic/pending-* target/linux/generic/hack-*; do
-            if [ -d "$dir" ]; then
-                clean_dirs+=("$dir")
-            fi
+    # ============================================
+    # 清理函数：删除目录中的不兼容补丁
+    # ============================================
+    clean_patches_in_dir() {
+        local dir="$1"
+        if [ ! -d "$dir" ]; then
+            return 0
+        fi
+        
+        local dir_deleted=0
+        
+        # 1. 删除版本不兼容的补丁
+        for ver in "${incompatible_versions[@]}"; do
+            for patch_file in "$dir"/*${ver}*.patch 2>/dev/null; do
+                if [ -f "$patch_file" ]; then
+                    rm -f "$patch_file"
+                    dir_deleted=$((dir_deleted + 1))
+                fi
+            done
         done
-    fi
+        
+        # 2. 删除已知问题补丁
+        local bad_patterns=(
+            "*mtk_ecc*.patch"
+            "*sdhci-msm*.patch"
+            "*mvneta*.patch"
+            "*mvpp2*.patch"
+            "*at803x*.patch"
+            "*qca8k*.patch"
+            "*b53*.patch"
+            "*flow-offload*.patch"
+            "*ppe-table*.patch"
+        )
+        for pattern in "${bad_patterns[@]}"; do
+            for patch_file in "$dir"/$pattern 2>/dev/null; do
+                if [ -f "$patch_file" ]; then
+                    rm -f "$patch_file"
+                    dir_deleted=$((dir_deleted + 1))
+                fi
+            done
+        done
+        
+        return $dir_deleted
+    }
     
-    local deleted_count=0
-    
-    # 已知有问题的特定补丁模式
-    local known_bad_patterns=(
-        # MediaTek 相关补丁（会应用到错误平台或版本不兼容）
-        "*mtk_eth_soc*.patch"
-        "*mtk_ppe*.patch"
-        "*mt7530*.patch"
-        "*mt753x*.patch"
-        "*mediatek*.patch"
-        # Marvell 相关补丁（版本不兼容）
-        "*mvneta*.patch"
-        "*mvpp2*.patch"
-        "*marvell*.patch"
-        # Atheros AT803x 相关补丁（版本不兼容）
-        "*at803x*.patch"
-        # Qualcomm/Atheros 相关补丁（可能有问题）
-        "*qca8k*.patch"
-        "*ath10k*.patch"
-        # Realtek 相关补丁
-        "*rtl8*.patch"
-        "*rtl9*.patch"
-        # Broadcom 相关补丁
-        "*b53*.patch"
-        "*bcm*.patch"
-        # 其他已知问题补丁
-        "*flow-offload*.patch"
-        "*hardware-flow*.patch"
-        "*ppe-table*.patch"
+    # ============================================
+    # 清理通用补丁目录
+    # ============================================
+    log "  🗑️ 清理通用补丁目录..."
+    local generic_dirs=(
+        "target/linux/generic/backport-${kernel_ver}"
+        "target/linux/generic/pending-${kernel_ver}"
+        "target/linux/generic/hack-${kernel_ver}"
     )
     
-    for clean_dir in "${clean_dirs[@]}"; do
-        if [ -d "$clean_dir" ]; then
-            log "  📁 清理目录: $clean_dir"
-            
-            # 1. 删除版本不兼容的补丁
-            for ver in "${incompatible_versions[@]}"; do
-                find "$clean_dir" -maxdepth 1 -name "*${ver}*.patch" -type f 2>/dev/null | while read patch_file; do
-                    log "    🗑️ 删除版本不兼容补丁: $(basename "$patch_file")"
-                    rm -f "$patch_file"
-                    deleted_count=$((deleted_count + 1))
-                done
-            done
-            
-            # 2. 删除已知有问题的特定补丁
-            for pattern in "${known_bad_patterns[@]}"; do
-                find "$clean_dir" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | while read patch_file; do
-                    log "    🗑️ 删除已知问题补丁: $(basename "$patch_file")"
-                    rm -f "$patch_file"
-                    deleted_count=$((deleted_count + 1))
-                done
-            done
-            
-            # 3. 对于非 mediatek 平台，额外删除所有 MediaTek 补丁
-            if [ "$TARGET" != "mediatek" ]; then
-                find "$clean_dir" -maxdepth 1 -name "*mtk*.patch" -type f 2>/dev/null | while read patch_file; do
-                    log "    🗑️ 删除非mediatek平台的mtk补丁: $(basename "$patch_file")"
-                    rm -f "$patch_file"
-                    deleted_count=$((deleted_count + 1))
-                done
-            fi
-            
-            # 4. 对于非 mvebu 平台，额外删除所有 Marvell 补丁
-            if [ "$TARGET" != "mvebu" ]; then
-                find "$clean_dir" -maxdepth 1 -name "*mvneta*.patch" -type f 2>/dev/null | while read patch_file; do
-                    log "    🗑️ 删除非mvebu平台的mvneta补丁: $(basename "$patch_file")"
-                    rm -f "$patch_file"
-                    deleted_count=$((deleted_count + 1))
-                done
-                find "$clean_dir" -maxdepth 1 -name "*mvpp2*.patch" -type f 2>/dev/null | while read patch_file; do
-                    log "    🗑️ 删除非mvebu平台的mvpp2补丁: $(basename "$patch_file")"
-                    rm -f "$patch_file"
-                    deleted_count=$((deleted_count + 1))
-                done
-            fi
+    local total_deleted=0
+    for dir in "${generic_dirs[@]}"; do
+        if [ -d "$dir" ]; then
+            clean_patches_in_dir "$dir"
+            local deleted=$?
+            total_deleted=$((total_deleted + deleted))
+            log "    📁 $dir: 删除 $deleted 个补丁"
         fi
     done
     
-    log "  ✅ 共删除 $deleted_count 个不兼容补丁"
+    # ============================================
+    # 清理平台专用补丁目录
+    # ============================================
+    log "  🗑️ 清理平台专用补丁目录..."
     
-    # 清理可能残留的.rej文件
-    log "  🧹 清理残留的.rej文件..."
-    find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
-    find build_dir -name "*.orig" -type f -delete 2>/dev/null || true
+    local platform_dirs=$(find target/linux -maxdepth 2 -type d -name "patches-${kernel_ver}" 2>/dev/null)
     
-    # 清理quilt状态
-    log "  🧹 清理quilt状态目录..."
-    find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
-    find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
+    for dir in $platform_dirs; do
+        if [[ "$dir" == *"/generic/"* ]]; then
+            continue
+        fi
+        
+        local platform=$(echo "$dir" | sed -E 's|target/linux/([^/]+)/.*|\1|')
+        
+        if [ "$platform" != "$TARGET" ]; then
+            local patch_count=$(find "$dir" -maxdepth 1 -name "*.patch" -type f 2>/dev/null | wc -l)
+            if [ $patch_count -gt 0 ]; then
+                rm -f "$dir"/*.patch 2>/dev/null || true
+                log "    📁 $dir (非当前平台): 删除 $patch_count 个补丁"
+                total_deleted=$((total_deleted + patch_count))
+            fi
+        else
+            clean_patches_in_dir "$dir"
+            local deleted=$?
+            total_deleted=$((total_deleted + deleted))
+            log "    📁 $dir (当前平台): 删除 $deleted 个不兼容补丁"
+        fi
+    done
+    
+    log "  ✅ 共删除约 $total_deleted 个不兼容补丁"
     
     # ============================================
-    # 修复 gpio-button-hotplug 模块（适用于所有版本）
+    # 修复 ath79 平台的 phy-ar7100-usb 问题
+    # ============================================
+    if [ "$TARGET" = "ath79" ]; then
+        log "  🔧 修复 ath79 平台 phy-ar7100-usb 模块..."
+        
+        local phy_src="target/linux/ath79/files/drivers/phy/phy-ar7100-usb.c"
+        if [ -f "$phy_src" ]; then
+            if [ ! -f "${phy_src}.orig" ]; then
+                cp "$phy_src" "${phy_src}.orig"
+            fi
+            
+            if grep -q "gpio_export_with_name" "$phy_src" 2>/dev/null; then
+                sed -i 's/gpio_export_with_name/gpiod_export/g' "$phy_src"
+                log "    ✅ 已修复 gpio_export_with_name"
+            fi
+        fi
+    fi
+    
+    # ============================================
+    # 修复 gpio-button-hotplug 模块
     # ============================================
     log "  🔧 修复 gpio-button-hotplug 模块..."
     
@@ -6042,16 +6027,29 @@ workflow_step25_build_firmware() {
         fi
         
         if ! grep -q "kobject_uevent" "$gpio_src" 2>/dev/null || grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
-            log "    📝 修复 broadcast_uevent API 变更..."
             sed -i 's/broadcast_uevent(&button->dev, KOBJ_CHANGE);/kobject_uevent(\&button->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
             sed -i 's/broadcast_uevent(&b->dev, KOBJ_CHANGE);/kobject_uevent(\&b->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
-            log "    ✅ 已修复"
+            log "    ✅ 已修复 broadcast_uevent"
         fi
     fi
+    
+    # ============================================
+    # 清理残留文件
+    # ============================================
+    log "  🧹 清理残留文件..."
+    find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
+    find build_dir -name "*.orig" -type f -delete 2>/dev/null || true
+    find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
+    find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
+    rm -rf build_dir/target-*/linux-* 2>/dev/null || true
+    rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
     
     log "✅ 编译前准备完成"
     echo ""
     
+    # ============================================
+    # 编译流程
+    # ============================================
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
@@ -6269,20 +6267,14 @@ EOF
             make defconfig > /dev/null 2>&1 || true
         fi
         
-        # 如果补丁仍然失败，尝试更激进的清理
+        # 如果补丁仍然失败，执行深度清理
         if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    🔧 检测到补丁失败，执行深度清理..."
-            
-            # 删除所有 pending、backport、hack 目录
             rm -rf target/linux/generic/pending-* 2>/dev/null || true
             rm -rf target/linux/generic/backport-* 2>/dev/null || true
             rm -rf target/linux/generic/hack-* 2>/dev/null || true
-            
-            # 清理内核构建目录
             rm -rf build_dir/target-*/linux-* 2>/dev/null || true
             rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-            
-            # 清理 quilt 状态
             find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
             find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
         fi
