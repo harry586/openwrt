@@ -5877,9 +5877,9 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 通用智能补丁分析系统（适用于所有版本）
+    # 简单粗暴但有效的解决方案：删除所有不兼容的补丁
     # ============================================
-    log "🔧 ===== 通用智能补丁分析系统 ====="
+    log "🔧 ===== 清理不兼容补丁 ====="
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
@@ -5893,246 +5893,148 @@ workflow_step25_build_firmware() {
         kernel_ver="5.15"
     elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
         kernel_ver="5.4"
-    elif [[ "$SELECTED_BRANCH" == *"19.07"* ]]; then
-        kernel_ver="4.14"
     elif [[ "$SELECTED_BRANCH" == *"22.03"* ]]; then
         kernel_ver="5.10"
+    elif [[ "$SELECTED_BRANCH" == *"19.07"* ]]; then
+        kernel_ver="4.14"
     else
-        # 尝试自动检测
-        if [ -d "target/linux/generic/backport-5.15" ]; then
-            kernel_ver="5.15"
-        elif [ -d "target/linux/generic/backport-5.10" ]; then
-            kernel_ver="5.10"
-        elif [ -d "target/linux/generic/backport-5.4" ]; then
-            kernel_ver="5.4"
-        else
-            kernel_ver="5.15"
-        fi
+        kernel_ver="5.15"
     fi
     log "  📌 内核版本: $kernel_ver"
     
     # ============================================
-    # 平台识别规则库（完整版）
+    # 直接删除所有版本不兼容的补丁
     # ============================================
-    declare -A PLATFORM_RULES
-    PLATFORM_RULES["mediatek"]="mediatek|mtk_|mt7530|mt753x|mt762|mt798|mt76x|mt79|mt7915|mt7916|mt7615"
-    PLATFORM_RULES["ipq40xx"]="ipq40xx|ipq806x|ipq807x|qcom|ath10k|qca|qcom-ipq|ipq4019|ipq4029"
-    PLATFORM_RULES["ath79"]="ath79|ar71xx|ag71xx|ar93xx|qca95|qca9k|qca953x|qca956x|qca988x"
-    PLATFORM_RULES["ramips"]="ramips|rt2880|rt305x|rt3883|rt5350|mt7620|mt7621|mt76x8|rt3352"
-    PLATFORM_RULES["bcm47xx"]="bcm47xx|bcm53xx|brcm|bcm63xx|bcm27xx|bcm4908|bcm47|bcm535"
-    PLATFORM_RULES["lantiq"]="lantiq|xrx200|xway|danube|ar9|vr9|falcon|grx390|grx350"
-    PLATFORM_RULES["mvebu"]="mvebu|armada|kirkwood|orion|dove|marvell|mvneta|mvpp2|mv88e|mv78xx0"
-    PLATFORM_RULES["mpc85xx"]="mpc85xx|powerpc|pq3|p1020|p2020|p1010"
-    PLATFORM_RULES["x86"]="x86|i386|x86_64|amd64|intel|geode"
-    PLATFORM_RULES["rockchip"]="rockchip|rk3328|rk3399|rk3568|rk3588|rk3308|rk3288"
-    PLATFORM_RULES["sunxi"]="sunxi|allwinner|sun4i|sun5i|sun7i|sun8i|sun50i|h2+|h3|h5|h6"
-    PLATFORM_RULES["imx"]="imx|freescale|mx[0-9]|imx6|imx8|imx7"
-    PLATFORM_RULES["realtek"]="realtek|rtl8|rtl9|rtd|rtl83xx|rtl93xx|rtl838x|rtl839x"
-    PLATFORM_RULES["gemini"]="gemini|cortina|sl3516|cs3516"
-    PLATFORM_RULES["octeon"]="octeon|cavium|cn6xxx|cn7xxx"
-    PLATFORM_RULES["omap"]="omap|ti-am|am335x|am43xx|am57xx|beaglebone"
-    PLATFORM_RULES["tegra"]="tegra|nvidia|jetson|tegra124|tegra210"
-    PLATFORM_RULES["zynq"]="zynq|xilinx|zynqmp|ultrascale"
-    PLATFORM_RULES["bcm27xx"]="bcm27xx|raspberry|rpi|bcm283|bcm271|bcm270"
-    PLATFORM_RULES["layerscape"]="layerscape|ls1012|ls1021|ls1028|ls1043|ls1046|ls1088|ls2088"
-    PLATFORM_RULES["oxnas"]="oxnas|ox820|plxtech"
-    PLATFORM_RULES["pistachio"]="pistachio|imgtec"
-    PLATFORM_RULES["at91"]="at91|sama5|sama7|microchip|at91sam"
-    PLATFORM_RULES["stm32"]="stm32|stm32mp|stmicro"
-    PLATFORM_RULES["sifiveu"]="sifive|fu540|fu740|riscv"
-    PLATFORM_RULES["starfive"]="starfive|jh7100|jh7110|visionfive"
-    PLATFORM_RULES["qualcommax"]="qualcommax|ipq50xx|ipq60xx|ipq95xx"
-    PLATFORM_RULES["airoha"]="airoha|en7523|an8855"
+    log "  🗑️ 删除版本不兼容的补丁..."
     
-    # ============================================
-    # 函数：分析补丁归属平台
-    # ============================================
-    analyze_patch_platform() {
-        local patch_file="$1"
-        local patch_name=$(basename "$patch_file")
-        
-        # 首先从文件名判断
-        for platform in "${!PLATFORM_RULES[@]}"; do
-            local pattern="${PLATFORM_RULES[$platform]}"
-            if echo "$patch_name" | grep -qiE "$pattern"; then
-                echo "$platform"
-                return 0
-            fi
-        done
-        
-        # 然后从补丁内容分析
-        if [ -f "$patch_file" ]; then
-            # 提取补丁修改的文件路径
-            local modified_files=$(grep -E "^\+\+\+ |^--- " "$patch_file" 2>/dev/null | grep -oE "(a|b)/[^[:space:]]+" | sed 's|^[ab]/||' | sort -u)
-            
-            local max_score=0
-            local best_platform=""
-            
-            for platform in "${!PLATFORM_RULES[@]}"; do
-                local pattern="${PLATFORM_RULES[$platform]}"
-                local score=0
-                
-                while IFS= read -r file; do
-                    if echo "$file" | grep -qiE "$pattern"; then
-                        score=$((score + 10))
-                    fi
-                done <<< "$modified_files"
-                
-                # 文件名也加分
-                if echo "$patch_name" | grep -qiE "$pattern"; then
-                    score=$((score + 5))
-                fi
-                
-                if [ $score -gt $max_score ]; then
-                    max_score=$score
-                    best_platform="$platform"
-                fi
-            done
-            
-            if [ $max_score -gt 0 ]; then
-                echo "$best_platform"
-                return 0
-            fi
-        fi
-        
-        # 无法判断，返回 generic
-        echo "generic"
-        return 0
-    }
+    # 定义不兼容的版本模式（补丁版本 > 内核版本）
+    local incompatible_versions=()
+    if [[ "$kernel_ver" == "5.15" ]]; then
+        incompatible_versions=("v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
+    elif [[ "$kernel_ver" == "5.10" ]]; then
+        incompatible_versions=("v5.11" "v5.12" "v5.13" "v5.14" "v5.15" "v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
+    elif [[ "$kernel_ver" == "5.4" ]]; then
+        incompatible_versions=("v5.5" "v5.6" "v5.7" "v5.8" "v5.9" "v5.10" "v5.11" "v5.12" "v5.13" "v5.14" "v5.15" "v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
+    elif [[ "$kernel_ver" == "4.14" ]]; then
+        incompatible_versions=("v4.15" "v4.16" "v4.17" "v4.18" "v4.19" "v4.20" "v5.0" "v5.1" "v5.2" "v5.3" "v5.4" "v5.5" "v5.6" "v5.7" "v5.8" "v5.9" "v5.10" "v5.11" "v5.12" "v5.13" "v5.14" "v5.15" "v5.16" "v5.17" "v5.18" "v5.19" "v6.0" "v6.1" "v6.2" "v6.3" "v6.4" "v6.5" "v6.6" "v6.7" "v6.8" "v6.9" "v6.10" "v6.11" "v6.12")
+    fi
     
-    # ============================================
-    # 检查补丁版本兼容性
-    # ============================================
-    check_patch_compatibility() {
-        local patch_file="$1"
-        local patch_name=$(basename "$patch_file")
-        local kernel_ver="$2"
-        
-        # 提取补丁目标版本（支持多种格式）
-        local patch_ver=$(echo "$patch_name" | grep -oE "v[0-9]+\.[0-9]+" | head -1 | sed 's/v//')
-        
-        if [ -z "$patch_ver" ]; then
-            # 尝试匹配其他格式：5.15、5.4等
-            patch_ver=$(echo "$patch_name" | grep -oE "[0-9]+\.[0-9]+" | head -1)
-        fi
-        
-        if [ -z "$patch_ver" ]; then
-            # 无法判断版本，假设兼容
-            return 0
-        fi
-        
-        # 提取主版本号
-        local kernel_major=$(echo "$kernel_ver" | cut -d'.' -f1)
-        local kernel_minor=$(echo "$kernel_ver" | cut -d'.' -f2)
-        local patch_major=$(echo "$patch_ver" | cut -d'.' -f1)
-        local patch_minor=$(echo "$patch_ver" | cut -d'.' -f2)
-        
-        # 如果补丁版本比内核版本新太多（主版本差1以上，或次版本差3以上），可能不兼容
-        if [ "$patch_major" -gt "$kernel_major" ]; then
-            return 1
-        elif [ "$patch_major" -eq "$kernel_major" ] && [ "$patch_minor" -gt $((kernel_minor + 3)) ]; then
-            return 1
-        fi
-        
-        return 0
-    }
-    
-    # ============================================
-    # 智能隔离所有补丁（适用于所有版本）
-    # ============================================
-    isolate_all_patches() {
-        local generic_dir="$1"
-        
-        if [ ! -d "$generic_dir" ]; then
-            return 0
-        fi
-        
-        log "  📁 分析目录: $generic_dir"
-        
-        # 统计信息
-        local total_patches=0
-        local moved_patches=0
-        local skipped_patches=0
-        local kept_patches=0
-        
-        # 遍历所有补丁
-        find "$generic_dir" -maxdepth 1 -name "*.patch" -type f 2>/dev/null | while read patch_file; do
-            total_patches=$((total_patches + 1))
-            local patch_name=$(basename "$patch_file")
-            
-            # 分析补丁归属
-            local target_platform=$(analyze_patch_platform "$patch_file")
-            
-            if [ "$target_platform" != "generic" ] && [ "$target_platform" != "" ]; then
-                # 检查版本兼容性
-                if ! check_patch_compatibility "$patch_file" "$kernel_ver"; then
-                    # 版本不兼容，移动到 incompatible 目录（稍后可以跳过或修复）
-                    local incompatible_dir="${generic_dir}/incompatible"
-                    mkdir -p "$incompatible_dir"
-                    if [ ! -f "${incompatible_dir}/${patch_name}" ]; then
-                        mv "$patch_file" "$incompatible_dir/"
-                        skipped_patches=$((skipped_patches + 1))
-                        log "    ⚠️ $patch_name -> incompatible/ (版本不兼容: 目标v$(echo "$patch_name" | grep -oE "v[0-9]+\.[0-9]+" | head -1 | sed 's/v//'), 内核$kernel_ver)"
-                    fi
-                else
-                    # 移动到平台专用目录
-                    local platform_dir="${generic_dir}/${target_platform}"
-                    mkdir -p "$platform_dir"
-                    
-                    if [ ! -f "${platform_dir}/${patch_name}" ]; then
-                        mv "$patch_file" "$platform_dir/"
-                        moved_patches=$((moved_patches + 1))
-                        log "    📦 $patch_name -> $target_platform/"
-                    fi
-                fi
-            else
-                kept_patches=$((kept_patches + 1))
-            fi
-        done
-        
-        # 输出统计
-        log "    📊 统计: 共 $total_patches 个补丁, 移动 $moved_patches 个, 跳过 $skipped_patches 个, 保留 $kept_patches 个"
-    }
-    
-    # ============================================
-    # 执行智能补丁隔离（适用于所有版本）
-    # ============================================
-    log "  🔧 执行智能补丁隔离..."
-    
-    # 根据内核版本确定补丁目录
-    local generic_dirs=()
-    
+    # 需要清理的目录
+    local clean_dirs=()
     if [ -d "target/linux/generic/backport-${kernel_ver}" ]; then
-        generic_dirs+=("target/linux/generic/backport-${kernel_ver}")
+        clean_dirs+=("target/linux/generic/backport-${kernel_ver}")
     fi
     if [ -d "target/linux/generic/pending-${kernel_ver}" ]; then
-        generic_dirs+=("target/linux/generic/pending-${kernel_ver}")
+        clean_dirs+=("target/linux/generic/pending-${kernel_ver}")
     fi
     if [ -d "target/linux/generic/hack-${kernel_ver}" ]; then
-        generic_dirs+=("target/linux/generic/hack-${kernel_ver}")
+        clean_dirs+=("target/linux/generic/hack-${kernel_ver}")
     fi
     
-    # 如果上面的目录都不存在，尝试通配符匹配
-    if [ ${#generic_dirs[@]} -eq 0 ]; then
+    # 如果上述目录不存在，尝试通配符匹配
+    if [ ${#clean_dirs[@]} -eq 0 ]; then
         for dir in target/linux/generic/backport-* target/linux/generic/pending-* target/linux/generic/hack-*; do
             if [ -d "$dir" ]; then
-                generic_dirs+=("$dir")
+                clean_dirs+=("$dir")
             fi
         done
     fi
     
-    for generic_dir in "${generic_dirs[@]}"; do
-        isolate_all_patches "$generic_dir"
+    local deleted_count=0
+    
+    # 已知有问题的特定补丁模式
+    local known_bad_patterns=(
+        # MediaTek 相关补丁（会应用到错误平台或版本不兼容）
+        "*mtk_eth_soc*.patch"
+        "*mtk_ppe*.patch"
+        "*mt7530*.patch"
+        "*mt753x*.patch"
+        "*mediatek*.patch"
+        # Marvell 相关补丁（版本不兼容）
+        "*mvneta*.patch"
+        "*mvpp2*.patch"
+        "*marvell*.patch"
+        # Atheros AT803x 相关补丁（版本不兼容）
+        "*at803x*.patch"
+        # Qualcomm/Atheros 相关补丁（可能有问题）
+        "*qca8k*.patch"
+        "*ath10k*.patch"
+        # Realtek 相关补丁
+        "*rtl8*.patch"
+        "*rtl9*.patch"
+        # Broadcom 相关补丁
+        "*b53*.patch"
+        "*bcm*.patch"
+        # 其他已知问题补丁
+        "*flow-offload*.patch"
+        "*hardware-flow*.patch"
+        "*ppe-table*.patch"
+    )
+    
+    for clean_dir in "${clean_dirs[@]}"; do
+        if [ -d "$clean_dir" ]; then
+            log "  📁 清理目录: $clean_dir"
+            
+            # 1. 删除版本不兼容的补丁
+            for ver in "${incompatible_versions[@]}"; do
+                find "$clean_dir" -maxdepth 1 -name "*${ver}*.patch" -type f 2>/dev/null | while read patch_file; do
+                    log "    🗑️ 删除版本不兼容补丁: $(basename "$patch_file")"
+                    rm -f "$patch_file"
+                    deleted_count=$((deleted_count + 1))
+                done
+            done
+            
+            # 2. 删除已知有问题的特定补丁
+            for pattern in "${known_bad_patterns[@]}"; do
+                find "$clean_dir" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | while read patch_file; do
+                    log "    🗑️ 删除已知问题补丁: $(basename "$patch_file")"
+                    rm -f "$patch_file"
+                    deleted_count=$((deleted_count + 1))
+                done
+            done
+            
+            # 3. 对于非 mediatek 平台，额外删除所有 MediaTek 补丁
+            if [ "$TARGET" != "mediatek" ]; then
+                find "$clean_dir" -maxdepth 1 -name "*mtk*.patch" -type f 2>/dev/null | while read patch_file; do
+                    log "    🗑️ 删除非mediatek平台的mtk补丁: $(basename "$patch_file")"
+                    rm -f "$patch_file"
+                    deleted_count=$((deleted_count + 1))
+                done
+            fi
+            
+            # 4. 对于非 mvebu 平台，额外删除所有 Marvell 补丁
+            if [ "$TARGET" != "mvebu" ]; then
+                find "$clean_dir" -maxdepth 1 -name "*mvneta*.patch" -type f 2>/dev/null | while read patch_file; do
+                    log "    🗑️ 删除非mvebu平台的mvneta补丁: $(basename "$patch_file")"
+                    rm -f "$patch_file"
+                    deleted_count=$((deleted_count + 1))
+                done
+                find "$clean_dir" -maxdepth 1 -name "*mvpp2*.patch" -type f 2>/dev/null | while read patch_file; do
+                    log "    🗑️ 删除非mvebu平台的mvpp2补丁: $(basename "$patch_file")"
+                    rm -f "$patch_file"
+                    deleted_count=$((deleted_count + 1))
+                done
+            fi
+        fi
     done
     
-    log "  ✅ 智能补丁隔离完成"
+    log "  ✅ 共删除 $deleted_count 个不兼容补丁"
+    
+    # 清理可能残留的.rej文件
+    log "  🧹 清理残留的.rej文件..."
+    find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
+    find build_dir -name "*.orig" -type f -delete 2>/dev/null || true
+    
+    # 清理quilt状态
+    log "  🧹 清理quilt状态目录..."
+    find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
+    find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
     
     # ============================================
-    # 修复特定模块问题（适用于所有版本）
+    # 修复 gpio-button-hotplug 模块（适用于所有版本）
     # ============================================
-    log "  🔧 修复已知模块问题..."
+    log "  🔧 修复 gpio-button-hotplug 模块..."
     
-    # gpio-button-hotplug 模块修复（所有版本）
     local gpio_src="package/kernel/gpio-button-hotplug/src/gpio-button-hotplug.c"
     if [ -f "$gpio_src" ]; then
         if [ ! -f "${gpio_src}.orig" ]; then
@@ -6140,7 +6042,7 @@ workflow_step25_build_firmware() {
         fi
         
         if ! grep -q "kobject_uevent" "$gpio_src" 2>/dev/null || grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
-            log "    📝 修复 gpio-button-hotplug broadcast_uevent API 变更..."
+            log "    📝 修复 broadcast_uevent API 变更..."
             sed -i 's/broadcast_uevent(&button->dev, KOBJ_CHANGE);/kobject_uevent(\&button->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
             sed -i 's/broadcast_uevent(&b->dev, KOBJ_CHANGE);/kobject_uevent(\&b->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
             log "    ✅ 已修复"
@@ -6365,6 +6267,24 @@ EOF
             sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
             echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
             make defconfig > /dev/null 2>&1 || true
+        fi
+        
+        # 如果补丁仍然失败，尝试更激进的清理
+        if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
+            log "    🔧 检测到补丁失败，执行深度清理..."
+            
+            # 删除所有 pending、backport、hack 目录
+            rm -rf target/linux/generic/pending-* 2>/dev/null || true
+            rm -rf target/linux/generic/backport-* 2>/dev/null || true
+            rm -rf target/linux/generic/hack-* 2>/dev/null || true
+            
+            # 清理内核构建目录
+            rm -rf build_dir/target-*/linux-* 2>/dev/null || true
+            rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+            
+            # 清理 quilt 状态
+            find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
+            find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
         fi
         
         kernel_retry=$((kernel_retry + 1))
