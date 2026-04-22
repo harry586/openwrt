@@ -5901,7 +5901,7 @@ workflow_step25_build_firmware() {
     fi
     
     # ============================================
-    # 清理函数：删除目录中的不兼容补丁
+    # 清理函数：删除目录中的不兼容补丁（修复语法）
     # ============================================
     clean_patches_in_dir() {
         local dir="$1"
@@ -5913,7 +5913,8 @@ workflow_step25_build_firmware() {
         
         # 1. 删除版本不兼容的补丁
         for ver in "${incompatible_versions[@]}"; do
-            for patch_file in "$dir"/*${ver}*.patch 2>/dev/null; do
+            # 使用 find 替代直接通配符，避免语法错误
+            find "$dir" -maxdepth 1 -name "*${ver}*.patch" -type f 2>/dev/null | while read patch_file; do
                 if [ -f "$patch_file" ]; then
                     rm -f "$patch_file"
                     dir_deleted=$((dir_deleted + 1))
@@ -5923,18 +5924,18 @@ workflow_step25_build_firmware() {
         
         # 2. 删除已知问题补丁
         local bad_patterns=(
-            "*mtk_ecc*.patch"
-            "*sdhci-msm*.patch"
-            "*mvneta*.patch"
-            "*mvpp2*.patch"
-            "*at803x*.patch"
-            "*qca8k*.patch"
-            "*b53*.patch"
-            "*flow-offload*.patch"
-            "*ppe-table*.patch"
+            "mtk_ecc"
+            "sdhci-msm"
+            "mvneta"
+            "mvpp2"
+            "at803x"
+            "qca8k"
+            "b53"
+            "flow-offload"
+            "ppe-table"
         )
         for pattern in "${bad_patterns[@]}"; do
-            for patch_file in "$dir"/$pattern 2>/dev/null; do
+            find "$dir" -maxdepth 1 -name "*${pattern}*.patch" -type f 2>/dev/null | while read patch_file; do
                 if [ -f "$patch_file" ]; then
                     rm -f "$patch_file"
                     dir_deleted=$((dir_deleted + 1))
@@ -5942,7 +5943,7 @@ workflow_step25_build_firmware() {
             done
         done
         
-        return $dir_deleted
+        return 0
     }
     
     # ============================================
@@ -5958,10 +5959,34 @@ workflow_step25_build_firmware() {
     local total_deleted=0
     for dir in "${generic_dirs[@]}"; do
         if [ -d "$dir" ]; then
-            clean_patches_in_dir "$dir"
-            local deleted=$?
-            total_deleted=$((total_deleted + deleted))
-            log "    📁 $dir: 删除 $deleted 个补丁"
+            log "    📁 清理: $dir"
+            
+            # 删除版本不兼容的补丁
+            for ver in "${incompatible_versions[@]}"; do
+                find "$dir" -maxdepth 1 -name "*${ver}*.patch" -type f -delete 2>/dev/null || true
+            done
+            
+            # 删除已知问题补丁
+            local bad_patterns=(
+                "*mtk_ecc*.patch"
+                "*sdhci-msm*.patch"
+                "*mvneta*.patch"
+                "*mvpp2*.patch"
+                "*at803x*.patch"
+                "*qca8k*.patch"
+                "*b53*.patch"
+                "*flow-offload*.patch"
+                "*ppe-table*.patch"
+            )
+            for pattern in "${bad_patterns[@]}"; do
+                find "$dir" -maxdepth 1 -name "$pattern" -type f -delete 2>/dev/null || true
+            done
+            
+            # 对于非mediatek平台，删除所有mediatek相关补丁
+            if [ "$TARGET" != "mediatek" ]; then
+                find "$dir" -maxdepth 1 -name "*mtk*.patch" -type f -delete 2>/dev/null || true
+                find "$dir" -maxdepth 1 -name "*mediatek*.patch" -type f -delete 2>/dev/null || true
+            fi
         fi
     done
     
@@ -5982,19 +6007,18 @@ workflow_step25_build_firmware() {
         if [ "$platform" != "$TARGET" ]; then
             local patch_count=$(find "$dir" -maxdepth 1 -name "*.patch" -type f 2>/dev/null | wc -l)
             if [ $patch_count -gt 0 ]; then
-                rm -f "$dir"/*.patch 2>/dev/null || true
-                log "    📁 $dir (非当前平台): 删除 $patch_count 个补丁"
-                total_deleted=$((total_deleted + patch_count))
+                find "$dir" -maxdepth 1 -name "*.patch" -type f -delete 2>/dev/null || true
+                log "    📁 $dir (非当前平台): 删除补丁"
             fi
         else
-            clean_patches_in_dir "$dir"
-            local deleted=$?
-            total_deleted=$((total_deleted + deleted))
-            log "    📁 $dir (当前平台): 删除 $deleted 个不兼容补丁"
+            log "    📁 $dir (当前平台): 清理不兼容补丁"
+            for ver in "${incompatible_versions[@]}"; do
+                find "$dir" -maxdepth 1 -name "*${ver}*.patch" -type f -delete 2>/dev/null || true
+            done
         fi
     done
     
-    log "  ✅ 共删除约 $total_deleted 个不兼容补丁"
+    log "  ✅ 补丁清理完成"
     
     # ============================================
     # 修复 ath79 平台的 phy-ar7100-usb 问题
