@@ -6693,7 +6693,7 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 0. 固件生成状态检查（增强版）
+        # 0. 固件生成状态检查
         # ============================================
         echo "🔍 0. 固件生成状态检查:"
         echo "----------------------------------------"
@@ -6813,7 +6813,7 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 2. 补丁失败详细分析（增强版）
+        # 2. 补丁失败详细分析（深度增强版）
         # ============================================
         echo "🔍 2. 补丁失败详细分析:"
         echo "----------------------------------------"
@@ -6823,28 +6823,77 @@ quick_error_check() {
             echo ""
             
             # 提取失败补丁的完整路径
-            grep -B5 "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null | grep -E "Applying|Patch failed|Hunk FAILED" | head -30 | while read line; do
-                echo "   $line"
-            done
-            
-            echo ""
-            echo "🔧 失败的补丁文件列表:"
+            echo "🔧 失败补丁路径:"
             grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | sort -u | while read patch_file; do
                 echo "   📁 $patch_file"
+            done
+            echo ""
+            
+            # 分析补丁内容
+            echo "🔧 失败补丁内容分析:"
+            grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | sort -u | while read patch_file; do
                 if [ -f "$patch_file" ]; then
-                    echo "      文件存在，大小: $(ls -lh "$patch_file" | awk '{print $5}')"
-                else
-                    echo "      ⚠️ 文件不存在"
+                    echo "   📄 $(basename "$patch_file"):"
+                    echo "   ----------------------------------------"
+                    
+                    # 提取补丁头信息
+                    grep -E "^---|^\+\+\+|^@@|^diff" "$patch_file" 2>/dev/null | head -10 | sed 's/^/      /'
+                    
+                    # 统计补丁中的hunk数量
+                    local hunk_count=$(grep -c "^@@" "$patch_file" 2>/dev/null || echo "0")
+                    echo "      📊 补丁包含 $hunk_count 个hunk"
+                    
+                    # 分析失败的hunk
+                    echo ""
+                    echo "      失败的hunk详情:"
+                    grep -B2 "Hunk.*FAILED" "$latest_log" 2>/dev/null | grep -E "Hunk|patching" | head -20 | sed 's/^/      /'
+                    
+                    echo ""
                 fi
             done
             
+            # 分析.rej文件
             echo ""
-            echo "🔧 .rej 文件内容 (前20行):"
-            find build_dir -name "*.rej" -type f 2>/dev/null | head -3 | while read rej_file; do
-                echo "   📄 $rej_file"
-                head -20 "$rej_file" 2>/dev/null | sed 's/^/      /'
+            echo "🔧 .rej 文件分析 (显示失败的代码块):"
+            find build_dir -name "*.rej" -type f 2>/dev/null | while read rej_file; do
+                echo "   📄 $(basename "$rej_file"):"
+                echo "   ----------------------------------------"
+                
+                # 显示rej文件中的冲突块
+                awk '/^\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*/{flag=1} flag{print} /^---/{if(flag) exit}' "$rej_file" 2>/dev/null | head -30 | sed 's/^/      /'
+                
                 echo ""
             done
+            
+            # 检查是否有quilt系列文件
+            echo ""
+            echo "🔧 补丁系列文件检查:"
+            for series_file in $(find target/linux -name "series" 2>/dev/null | head -5); do
+                echo "   📁 $series_file:"
+                echo "   ----------------------------------------"
+                cat "$series_file" 2>/dev/null | head -20 | sed 's/^/      /'
+                echo ""
+            done
+            
+            # 检查内核版本和补丁匹配情况
+            echo ""
+            echo "🔧 内核版本与补丁兼容性检查:"
+            local kernel_ver=""
+            if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
+                kernel_ver="5.15"
+            elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
+                kernel_ver="5.4"
+            fi
+            echo "   当前内核版本: $kernel_ver"
+            
+            # 检查补丁文件名中的版本号
+            grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "v[0-9]+\.[0-9]+" | sort -u | while read patch_ver; do
+                echo "   补丁目标版本: $patch_ver"
+                if [[ "$kernel_ver" != *"${patch_ver#v}"* ]]; then
+                    echo "      ⚠️ 补丁版本与内核版本可能不匹配!"
+                fi
+            done
+            
         else
             echo "✅ 未检测到补丁失败"
         fi
@@ -6860,16 +6909,34 @@ quick_error_check() {
             echo "🔧 检测到编译错误，提取关键信息..."
             echo ""
             
-            # 提取 GCC 错误
-            grep -E "error:|undefined reference|implicit declaration" "$latest_log" 2>/dev/null | head -20 | sort -u | while read line; do
+            # 按模块分组显示错误
+            echo "📦 按模块分组的编译错误:"
+            grep -B5 "error:" "$latest_log" 2>/dev/null | grep -E "Entering directory|error:" | paste - - 2>/dev/null | while read line; do
                 echo "   $line"
-            done
-            
+            done | head -20
             echo ""
-            echo "🔧 失败的内核模块:"
-            grep -B10 "failed to build" "$latest_log" 2>/dev/null | grep -E "package/kernel/|ERROR:" | head -10 | while read line; do
+            
+            # 提取具体错误信息
+            echo "🔧 具体错误信息:"
+            grep -E "error:|undefined reference|implicit declaration" "$latest_log" 2>/dev/null | head -30 | sort -u | while read line; do
                 echo "   $line"
             done
+            echo ""
+            
+            # 检查缺失的头文件
+            echo "🔧 缺失的头文件:"
+            grep "No such file or directory" "$latest_log" 2>/dev/null | grep "\.h" | sort -u | head -10 | while read line; do
+                echo "   $line"
+            done
+            echo ""
+            
+            # 检查API变更问题
+            echo "🔧 可能的API变更问题:"
+            grep -E "implicit declaration|too many arguments|too few arguments" "$latest_log" 2>/dev/null | sort -u | head -10 | while read line; do
+                echo "   $line"
+            done
+            echo ""
+            
         else
             echo "✅ 未检测到明显的编译错误"
         fi
@@ -6897,6 +6964,19 @@ quick_error_check() {
         if [ -f ".config" ]; then
             local config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}')
             echo "✅ .config 存在 ($config_size)"
+            
+            # 检查关键配置
+            echo ""
+            echo "   🔧 关键内核模块配置状态:"
+            for kmod in gpio-button-hotplug usb-core usb2 usb3 usb-storage; do
+                if grep -q "^CONFIG_PACKAGE_kmod-${kmod}=y" .config; then
+                    echo "      ✅ kmod-$kmod: 已启用"
+                elif grep -q "^# CONFIG_PACKAGE_kmod-${kmod} is not set" .config; then
+                    echo "      ❌ kmod-$kmod: 已禁用"
+                else
+                    echo "      ⚪ kmod-$kmod: 未配置"
+                fi
+            done
         else
             echo "❌ .config 不存在"
         fi
@@ -6911,14 +6991,25 @@ quick_error_check() {
         # 检查内核源码目录状态
         echo ""
         echo "🔧 内核源码目录状态:"
-        local kernel_dirs=$(find build_dir -maxdepth 3 -type d -name "linux-*" 2>/dev/null)
+        local kernel_dirs=$(find build_dir -maxdepth 3 -type d -name "linux-*" 2>/dev/null | head -10)
         if [ -n "$kernel_dirs" ]; then
             echo "$kernel_dirs" | while read kdir; do
                 local prepared=$(find "$kdir" -name ".prepared_*" 2>/dev/null | head -1)
+                local patched=$(find "$kdir" -name ".patched" 2>/dev/null | head -1)
+                local quilt_series=$(find "$kdir" -name "series" 2>/dev/null | head -1)
+                
+                echo "   📁 $(basename "$kdir"):"
                 if [ -n "$prepared" ]; then
-                    echo "   ✅ $(basename "$kdir"): 已准备"
+                    echo "      ✅ 已准备: $(basename "$prepared")"
                 else
-                    echo "   ⚠️ $(basename "$kdir"): 未完成准备"
+                    echo "      ⚠️ 未完成准备"
+                fi
+                if [ -n "$patched" ]; then
+                    echo "      ✅ 已打补丁"
+                fi
+                if [ -n "$quilt_series" ]; then
+                    local patch_count=$(cat "$quilt_series" 2>/dev/null | wc -l)
+                    echo "      📊 补丁系列: $patch_count 个补丁"
                 fi
             done
         else
@@ -6931,7 +7022,7 @@ quick_error_check() {
         # ============================================
         echo "🔍 5. 构建时间统计:"
         echo "----------------------------------------"
-        grep -E "time:.*#" "$latest_log" 2>/dev/null | tail -5 | while read line; do
+        grep -E "time:.*#" "$latest_log" 2>/dev/null | tail -10 | while read line; do
             echo "   $line"
         done
         echo ""
@@ -6972,38 +7063,51 @@ quick_error_check() {
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "📁 固件位置: $target_dir"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            echo "💡 刷机说明:"
-            if [[ "${firmware_list[*]}" == *"sysupgrade"* ]]; then
-                echo "   - sysupgrade 固件用于已安装 OpenWrt 的系统升级"
-                echo "   - 使用命令: sysupgrade -n /path/to/*sysupgrade.bin"
-            fi
-            if [[ "${firmware_list[*]}" == *"factory"* ]]; then
-                echo "   - factory 固件用于从原厂固件首次刷入"
-                echo "   - 通过路由器原厂 Web 界面刷入"
-            fi
             
         else
             echo "❌❌❌ 编译失败：没有生成有效固件 ❌❌❌"
             echo ""
-            echo "💡 根据诊断结果的可能解决方案:"
+            echo "💡 诊断分析:"
             
             # 智能分析失败原因
             if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
-                echo "   🔧 补丁失败: 检查补丁是否与内核版本兼容"
-                echo "      建议: 尝试更换源码分支（如从23.05换到21.02）"
+                echo ""
+                echo "   🔧 补丁失败分析:"
+                
+                # 分析是否是跨平台补丁问题
+                local failed_patch=$(grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | head -1)
+                if [ -n "$failed_patch" ]; then
+                    local patch_name=$(basename "$failed_patch")
+                    if [[ "$patch_name" == *"mtk"* ]] && [ "$TARGET" != "mediatek" ]; then
+                        echo "      ⚠️ MediaTek 补丁被应用到非 MediaTek 平台 ($TARGET)"
+                        echo "      💡 建议: 检查补丁系列文件，确保平台补丁正确隔离"
+                    elif [[ "$patch_name" == *"v5."* ]] || [[ "$patch_name" == *"v6."* ]]; then
+                        echo "      ⚠️ 补丁版本与内核版本可能不匹配"
+                        echo "      💡 建议: 检查补丁是否适用于当前内核版本"
+                    fi
+                fi
+                
+                # 统计失败的hunk数量
+                local failed_hunks=$(grep -c "Hunk.*FAILED" "$latest_log" 2>/dev/null || echo "0")
+                echo "      📊 失败的 hunk 数量: $failed_hunks"
             fi
-            if grep -q "No space left" "$latest_log" 2>/dev/null; then
-                echo "   🔧 磁盘空间不足: 清理磁盘空间"
-            fi
+            
             if grep -q "gpio-button-hotplug" "$latest_log" 2>/dev/null; then
-                echo "   🔧 gpio-button-hotplug 模块编译失败"
-                echo "      建议: 检查内核头文件是否完整"
+                echo ""
+                echo "   🔧 gpio-button-hotplug 模块问题:"
+                if grep -q "implicit declaration" "$latest_log" 2>/dev/null; then
+                    echo "      ⚠️ 内核 API 变更导致编译失败"
+                    echo "      💡 需要更新模块源码以适配当前内核版本"
+                fi
             fi
-            if grep -q "undefined reference" "$latest_log" 2>/dev/null; then
-                echo "   🔧 链接错误: 可能是依赖库版本问题"
+            
+            if grep -q "No space left" "$latest_log" 2>/dev/null; then
+                echo ""
+                echo "   🔧 磁盘空间不足"
             fi
+            
             if grep -q "Download failed" "$latest_log" 2>/dev/null; then
+                echo ""
                 echo "   🔧 下载失败: 检查网络连接或更换镜像源"
             fi
         fi
