@@ -5877,9 +5877,9 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 修复 gpio-button-hotplug 模块（21.02版本兼容性问题）
+    # 修复补丁隔离问题（符合 OpenWrt 标准实践）
     # ============================================
-    log "🔧 ===== 修复 gpio-button-hotplug 模块 ====="
+    log "🔧 ===== 修复补丁隔离问题 ====="
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
@@ -5887,21 +5887,85 @@ workflow_step25_build_firmware() {
     log "  📌 当前平台: TARGET=$TARGET"
     log "  📌 源码分支: $SELECTED_BRANCH"
     
-    # 只对21.02版本修复
+    # 根据版本确定内核版本
+    local kernel_ver=""
+    if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
+        kernel_ver="5.15"
+    elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
+        kernel_ver="5.4"
+    else
+        kernel_ver="5.15"
+    fi
+    log "  📌 内核版本: $kernel_ver"
+    
+    # ============================================
+    # 使用 OpenWrt 标准补丁隔离机制
+    # 将 MediaTek 专用补丁移动到 platform 子目录
+    # ============================================
+    if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
+        log "  🔧 使用 OpenWrt 标准补丁隔离机制..."
+        
+        # 定义需要隔离的目录
+        local generic_dirs=(
+            "target/linux/generic/backport-${kernel_ver}"
+            "target/linux/generic/pending-${kernel_ver}"
+            "target/linux/generic/hack-${kernel_ver}"
+        )
+        
+        # MediaTek 补丁的关键字模式
+        local mtk_patterns=(
+            "mtk_eth_soc"
+            "mtk_ppe"
+            "mediatek"
+            "mt7530"
+            "mt762"
+            "mt798"
+        )
+        
+        for generic_dir in "${generic_dirs[@]}"; do
+            if [ -d "$generic_dir" ]; then
+                # 创建 mediatek 平台子目录
+                local mtk_subdir="${generic_dir}/mediatek"
+                mkdir -p "$mtk_subdir"
+                
+                # 移动 MediaTek 相关补丁到子目录
+                for pattern in "${mtk_patterns[@]}"; do
+                    find "$generic_dir" -maxdepth 1 -name "*${pattern}*.patch" -type f 2>/dev/null | while read patch_file; do
+                        local patch_name=$(basename "$patch_file")
+                        if [ ! -f "${mtk_subdir}/${patch_name}" ]; then
+                            mv "$patch_file" "$mtk_subdir/"
+                            log "    📁 移动: $patch_name -> mediatek/"
+                        fi
+                    done
+                done
+            fi
+        done
+        
+        log "  ✅ 补丁隔离完成"
+    fi
+    
+    # ============================================
+    # 21.02版本：修复 gpio-button-hotplug 模块
+    # ============================================
     if [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
-        log "  🔧 21.02版本，修复 gpio-button-hotplug 模块..."
+        log "  🔧 21.02版本：修复 gpio-button-hotplug 模块..."
         
         local gpio_src="package/kernel/gpio-button-hotplug/src/gpio-button-hotplug.c"
         if [ -f "$gpio_src" ]; then
             # 备份原文件
-            cp "$gpio_src" "$gpio_src.bak"
+            if [ ! -f "${gpio_src}.orig" ]; then
+                cp "$gpio_src" "${gpio_src}.orig"
+            fi
             
+            # 修复 broadcast_uevent 调用（内核API变更）
             # 检查是否已经修复过
-            if ! grep -q "kobject_uevent_env" "$gpio_src"; then
-                log "    📝 修复 broadcast_uevent 函数调用..."
-                # 将 broadcast_uevent 替换为 kobject_uevent_env
-                sed -i 's/broadcast_uevent(/kobject_uevent_env(button-hotplug, KOBJ_CHANGE, envp/g' "$gpio_src" 2>/dev/null || true
-                sed -i 's/broadcast_uevent(/kobject_uevent_env(\&pdev->dev.kobj, KOBJ_CHANGE, NULL/g' "$gpio_src" 2>/dev/null || true
+            if ! grep -q "kobject_uevent" "$gpio_src" 2>/dev/null || grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
+                log "    📝 修复 broadcast_uevent API 变更..."
+                
+                # 使用正确的 API：kobject_uevent 替代 broadcast_uevent
+                sed -i 's/broadcast_uevent(&button->dev, KOBJ_CHANGE);/kobject_uevent(\&button->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
+                sed -i 's/broadcast_uevent(&b->dev, KOBJ_CHANGE);/kobject_uevent(\&b->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
+                
                 log "    ✅ 已修复 broadcast_uevent"
             else
                 log "    ✅ 已经修复过，跳过"
@@ -5911,7 +5975,7 @@ workflow_step25_build_firmware() {
         fi
     fi
     
-    log "✅ 模块修复完成"
+    log "✅ 编译前准备完成"
     echo ""
     
     ulimit -n 65536 2>/dev/null || true
@@ -6117,17 +6181,6 @@ EOF
         fi
         
         log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
-        
-        if grep -q "broadcast_uevent" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
-            log "    🔧 检测到 broadcast_uevent 错误，修复源代码..."
-            local gpio_src="package/kernel/gpio-button-hotplug/src/gpio-button-hotplug.c"
-            if [ -f "$gpio_src" ]; then
-                sed -i 's/broadcast_uevent(/kobject_uevent_env(\&pdev->dev.kobj, KOBJ_CHANGE, NULL/g' "$gpio_src" 2>/dev/null || true
-                log "    ✅ 已修复 broadcast_uevent"
-            fi
-            rm -rf build_dir/target-*/linux-*/gpio-button-hotplug 2>/dev/null || true
-            rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-        fi
         
         if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    ❌ 磁盘空间不足，无法继续"
