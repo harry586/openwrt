@@ -5877,9 +5877,9 @@ workflow_step25_build_firmware() {
     cd $BUILD_DIR
     
     # ============================================
-    # 修复补丁隔离问题（符合 OpenWrt 标准实践）
+    # 通用智能补丁分析系统
     # ============================================
-    log "🔧 ===== 修复补丁隔离问题 ====="
+    log "🔧 ===== 通用智能补丁分析系统 ====="
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
@@ -5899,49 +5899,145 @@ workflow_step25_build_firmware() {
     log "  📌 内核版本: $kernel_ver"
     
     # ============================================
-    # 使用 OpenWrt 标准补丁隔离机制
-    # 将 MediaTek 专用补丁移动到 platform 子目录
+    # 平台识别规则库
+    # ============================================
+    declare -A PLATFORM_RULES
+    PLATFORM_RULES["mediatek"]="mediatek|mtk_|mt7530|mt753x|mt762|mt798|mt76x"
+    PLATFORM_RULES["ipq40xx"]="ipq40xx|ipq806x|ipq807x|qcom|ath10k|qca"
+    PLATFORM_RULES["ath79"]="ath79|ar71xx|ag71xx|ar93xx|qca95"
+    PLATFORM_RULES["ramips"]="ramips|rt2880|rt305x|rt3883|rt5350|mt7620|mt7621"
+    PLATFORM_RULES["bcm47xx"]="bcm47xx|bcm53xx|brcm|bcm63xx"
+    PLATFORM_RULES["lantiq"]="lantiq|xrx200|xway|danube|ar9|vr9"
+    PLATFORM_RULES["mvebu"]="mvebu|armada|kirkwood|orion|dove"
+    PLATFORM_RULES["mpc85xx"]="mpc85xx|powerpc|pq3"
+    PLATFORM_RULES["x86"]="x86|i386|x86_64|amd64"
+    PLATFORM_RULES["rockchip"]="rockchip|rk3328|rk3399|rk3568"
+    PLATFORM_RULES["sunxi"]="sunxi|allwinner|sun4i|sun5i|sun7i|sun8i"
+    PLATFORM_RULES["imx"]="imx|freescale|mx[0-9]"
+    PLATFORM_RULES["realtek"]="realtek|rtl8|rtl9|rtd"
+    PLATFORM_RULES["gemini"]="gemini|cortina"
+    PLATFORM_RULES["octeon"]="octeon|cavium"
+    PLATFORM_RULES["omap"]="omap|ti-am|am335x|am43xx"
+    PLATFORM_RULES["tegra"]="tegra|nvidia"
+    PLATFORM_RULES["zynq"]="zynq|xilinx"
+    
+    # ============================================
+    # 函数：分析补丁归属平台
+    # ============================================
+    analyze_patch_platform() {
+        local patch_file="$1"
+        local patch_name=$(basename "$patch_file")
+        
+        # 首先从文件名判断
+        for platform in "${!PLATFORM_RULES[@]}"; do
+            local pattern="${PLATFORM_RULES[$platform]}"
+            if echo "$patch_name" | grep -qiE "$pattern"; then
+                echo "$platform"
+                return 0
+            fi
+        done
+        
+        # 然后从补丁内容分析
+        if [ -f "$patch_file" ]; then
+            # 提取补丁修改的文件路径
+            local modified_files=$(grep -E "^\+\+\+ |^--- " "$patch_file" 2>/dev/null | grep -oE "(a|b)/[^[:space:]]+" | sed 's|^[ab]/||' | sort -u)
+            
+            local max_score=0
+            local best_platform=""
+            
+            for platform in "${!PLATFORM_RULES[@]}"; do
+                local pattern="${PLATFORM_RULES[$platform]}"
+                local score=0
+                
+                while IFS= read -r file; do
+                    if echo "$file" | grep -qiE "$pattern"; then
+                        score=$((score + 10))
+                    fi
+                done <<< "$modified_files"
+                
+                # 文件名也加分
+                if echo "$patch_name" | grep -qiE "$pattern"; then
+                    score=$((score + 5))
+                fi
+                
+                if [ $score -gt $max_score ]; then
+                    max_score=$score
+                    best_platform="$platform"
+                fi
+            done
+            
+            if [ $max_score -gt 0 ]; then
+                echo "$best_platform"
+                return 0
+            fi
+        fi
+        
+        # 无法判断，返回 generic
+        echo "generic"
+        return 0
+    }
+    
+    # ============================================
+    # 智能隔离所有补丁
+    # ============================================
+    isolate_all_patches() {
+        local generic_dir="$1"
+        
+        if [ ! -d "$generic_dir" ]; then
+            return 0
+        fi
+        
+        log "  📁 分析目录: $generic_dir"
+        
+        # 统计信息
+        local total_patches=0
+        local moved_patches=0
+        local kept_patches=0
+        
+        # 遍历所有补丁
+        find "$generic_dir" -maxdepth 1 -name "*.patch" -type f 2>/dev/null | while read patch_file; do
+            total_patches=$((total_patches + 1))
+            local patch_name=$(basename "$patch_file")
+            
+            # 分析补丁归属
+            local target_platform=$(analyze_patch_platform "$patch_file")
+            
+            if [ "$target_platform" != "generic" ] && [ "$target_platform" != "" ]; then
+                # 移动到平台专用目录
+                local platform_dir="${generic_dir}/${target_platform}"
+                mkdir -p "$platform_dir"
+                
+                if [ ! -f "${platform_dir}/${patch_name}" ]; then
+                    mv "$patch_file" "$platform_dir/"
+                    moved_patches=$((moved_patches + 1))
+                    log "    📦 $patch_name -> $target_platform/"
+                fi
+            else
+                kept_patches=$((kept_patches + 1))
+            fi
+        done
+        
+        # 输出统计
+        log "    📊 统计: 共 $total_patches 个补丁, 移动 $moved_patches 个, 保留 $kept_patches 个"
+    }
+    
+    # ============================================
+    # 执行智能补丁隔离（仅23.05版本）
     # ============================================
     if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
-        log "  🔧 使用 OpenWrt 标准补丁隔离机制..."
+        log "  🔧 执行智能补丁隔离..."
         
-        # 定义需要隔离的目录
         local generic_dirs=(
             "target/linux/generic/backport-${kernel_ver}"
             "target/linux/generic/pending-${kernel_ver}"
             "target/linux/generic/hack-${kernel_ver}"
         )
         
-        # MediaTek 补丁的关键字模式
-        local mtk_patterns=(
-            "mtk_eth_soc"
-            "mtk_ppe"
-            "mediatek"
-            "mt7530"
-            "mt762"
-            "mt798"
-        )
-        
         for generic_dir in "${generic_dirs[@]}"; do
-            if [ -d "$generic_dir" ]; then
-                # 创建 mediatek 平台子目录
-                local mtk_subdir="${generic_dir}/mediatek"
-                mkdir -p "$mtk_subdir"
-                
-                # 移动 MediaTek 相关补丁到子目录
-                for pattern in "${mtk_patterns[@]}"; do
-                    find "$generic_dir" -maxdepth 1 -name "*${pattern}*.patch" -type f 2>/dev/null | while read patch_file; do
-                        local patch_name=$(basename "$patch_file")
-                        if [ ! -f "${mtk_subdir}/${patch_name}" ]; then
-                            mv "$patch_file" "$mtk_subdir/"
-                            log "    📁 移动: $patch_name -> mediatek/"
-                        fi
-                    done
-                done
-            fi
+            isolate_all_patches "$generic_dir"
         done
         
-        log "  ✅ 补丁隔离完成"
+        log "  ✅ 智能补丁隔离完成"
     fi
     
     # ============================================
@@ -5952,26 +6048,16 @@ workflow_step25_build_firmware() {
         
         local gpio_src="package/kernel/gpio-button-hotplug/src/gpio-button-hotplug.c"
         if [ -f "$gpio_src" ]; then
-            # 备份原文件
             if [ ! -f "${gpio_src}.orig" ]; then
                 cp "$gpio_src" "${gpio_src}.orig"
             fi
             
-            # 修复 broadcast_uevent 调用（内核API变更）
-            # 检查是否已经修复过
             if ! grep -q "kobject_uevent" "$gpio_src" 2>/dev/null || grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
                 log "    📝 修复 broadcast_uevent API 变更..."
-                
-                # 使用正确的 API：kobject_uevent 替代 broadcast_uevent
                 sed -i 's/broadcast_uevent(&button->dev, KOBJ_CHANGE);/kobject_uevent(\&button->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
                 sed -i 's/broadcast_uevent(&b->dev, KOBJ_CHANGE);/kobject_uevent(\&b->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
-                
-                log "    ✅ 已修复 broadcast_uevent"
-            else
-                log "    ✅ 已经修复过，跳过"
+                log "    ✅ 已修复"
             fi
-        else
-            log "    ⚠️ gpio-button-hotplug.c 不存在: $gpio_src"
         fi
     fi
     
