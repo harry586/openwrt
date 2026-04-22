@@ -6797,6 +6797,8 @@ quick_error_check() {
         echo "构建目录: $build_dir"
         echo "目标平台: $target_platform"
         echo "完整目标: ${TARGET:-$target_platform}/${SUBTARGET:-generic}"
+        echo "源码类型: ${SOURCE_REPO_TYPE:-unknown}"
+        echo "源码分支: ${SELECTED_BRANCH:-unknown}"
         echo "================================================================="
 
         local latest_log=""
@@ -6843,12 +6845,10 @@ quick_error_check() {
         local firmware_details=()
         
         if [ -d "$target_dir" ]; then
-            # 只检查 .bin 和 .img 文件
             while IFS= read -r file; do
                 [ -z "$file" ] && continue
                 local fname=$(basename "$file")
                 
-                # 跳过非固件文件
                 if [[ "$fname" == *.itb ]] || [[ "$fname" == *.manifest ]] || [[ "$fname" == *sha256sums* ]]; then
                     continue
                 fi
@@ -6869,13 +6869,8 @@ quick_error_check() {
                     ftype="other"
                 fi
                 
-                local is_flashable=0
-                if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
-                    is_flashable=1
-                fi
-                
                 if [ $fsize_mb -ge 5 ]; then
-                    if [ $is_flashable -eq 1 ]; then
+                    if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
                         echo "✅ $fname"
                         echo "   大小: $fsize_human (${fsize_mb}MB)"
                         echo "   SHA256: $fhash"
@@ -6902,20 +6897,6 @@ quick_error_check() {
             fi
         else
             echo "❌ 目标目录不存在: $target_dir"
-        fi
-        
-        # 从日志中提取固件生成记录
-        local log_firmware=""
-        log_firmware=$(grep "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null | tail -1)
-        if [ -n "$log_firmware" ]; then
-            if [ $valid_firmware -eq 0 ]; then
-                echo "✅ 日志确认固件已成功生成"
-                valid_firmware=1
-                local fw_name=$(echo "$log_firmware" | sed -E 's/.*\/([^/]+\.bin).*/\1/')
-                if [ -n "$fw_name" ]; then
-                    firmware_list+=("$fw_name")
-                fi
-            fi
         fi
         
         echo "----------------------------------------"
@@ -6947,7 +6928,7 @@ quick_error_check() {
         
         if grep -q "ERROR:.*failed to build" "$latest_log"; then
             echo "❌ 检测到构建失败:"
-            grep -n "ERROR:.*failed to build" "$latest_log" | head -3 | while read line; do
+            grep -n "ERROR:.*failed to build" "$latest_log" | head -5 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
@@ -6959,33 +6940,72 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 2. 常见错误模式检查
+        # 2. 补丁失败详细分析（增强版）
         # ============================================
-        echo "🔍 2. 常见错误模式检查:"
+        echo "🔍 2. 补丁失败详细分析:"
         echo "----------------------------------------"
         
-        local error_patterns=(
-            "补丁失败:Patch failed|hunk FAILED"
-            "文件丢失:No such file or directory"
-            "下载失败:Download failed|curl.*error [0-9]"
-            "Broken pipe:Broken pipe"
-            "autoreconf失败:autoreconf.*failed|aclocal.*failed"
-        )
-        
-        for pattern_pair in "${error_patterns[@]}"; do
-            local err_name="${pattern_pair%%:*}"
-            local err_pattern="${pattern_pair##*:}"
-            local match_count=$(grep -E -i -c "$err_pattern" "$latest_log" 2>/dev/null || echo "0")
-            if [ "$match_count" -gt 0 ]; then
-                echo "⚠️ $err_name 检测到 (共 $match_count 处)"
-            fi
-        done
+        if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
+            echo "⚠️ 检测到补丁失败，提取详细信息..."
+            echo ""
+            
+            # 提取失败补丁的完整路径
+            grep -B5 "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null | grep -E "Applying|Patch failed|Hunk FAILED" | head -30 | while read line; do
+                echo "   $line"
+            done
+            
+            echo ""
+            echo "🔧 失败的补丁文件列表:"
+            grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | sort -u | while read patch_file; do
+                echo "   📁 $patch_file"
+                if [ -f "$patch_file" ]; then
+                    echo "      文件存在，大小: $(ls -lh "$patch_file" | awk '{print $5}')"
+                else
+                    echo "      ⚠️ 文件不存在"
+                fi
+            done
+            
+            echo ""
+            echo "🔧 .rej 文件内容 (前20行):"
+            find build_dir -name "*.rej" -type f 2>/dev/null | head -3 | while read rej_file; do
+                echo "   📄 $rej_file"
+                head -20 "$rej_file" 2>/dev/null | sed 's/^/      /'
+                echo ""
+            done
+        else
+            echo "✅ 未检测到补丁失败"
+        fi
         echo ""
 
         # ============================================
-        # 3. 关键组件状态检查
+        # 3. 内核模块编译错误详细分析
         # ============================================
-        echo "🔍 3. 关键组件状态检查:"
+        echo "🔍 3. 内核模块编译错误分析:"
+        echo "----------------------------------------"
+        
+        if grep -q "error:" "$latest_log" 2>/dev/null; then
+            echo "🔧 检测到编译错误，提取关键信息..."
+            echo ""
+            
+            # 提取 GCC 错误
+            grep -E "error:|undefined reference|implicit declaration" "$latest_log" 2>/dev/null | head -20 | sort -u | while read line; do
+                echo "   $line"
+            done
+            
+            echo ""
+            echo "🔧 失败的内核模块:"
+            grep -B10 "failed to build" "$latest_log" 2>/dev/null | grep -E "package/kernel/|ERROR:" | head -10 | while read line; do
+                echo "   $line"
+            done
+        else
+            echo "✅ 未检测到明显的编译错误"
+        fi
+        echo ""
+
+        # ============================================
+        # 4. 关键组件状态检查
+        # ============================================
+        echo "🔍 4. 关键组件状态检查:"
         echo "----------------------------------------"
         
         if [ -d "staging_dir" ]; then
@@ -7014,28 +7034,45 @@ quick_error_check() {
         else
             echo "⚠️ dl 目录不存在"
         fi
+        
+        # 检查内核源码目录状态
+        echo ""
+        echo "🔧 内核源码目录状态:"
+        local kernel_dirs=$(find build_dir -maxdepth 3 -type d -name "linux-*" 2>/dev/null)
+        if [ -n "$kernel_dirs" ]; then
+            echo "$kernel_dirs" | while read kdir; do
+                local prepared=$(find "$kdir" -name ".prepared_*" 2>/dev/null | head -1)
+                if [ -n "$prepared" ]; then
+                    echo "   ✅ $(basename "$kdir"): 已准备"
+                else
+                    echo "   ⚠️ $(basename "$kdir"): 未完成准备"
+                fi
+            done
+        else
+            echo "   ℹ️ 未找到内核源码目录"
+        fi
         echo ""
 
         # ============================================
-        # 4. 构建时间统计
+        # 5. 构建时间统计
         # ============================================
-        echo "🔍 4. 构建时间统计:"
+        echo "🔍 5. 构建时间统计:"
         echo "----------------------------------------"
-        grep -E "time:.*#|real.*user.*sys" "$latest_log" 2>/dev/null | tail -5 | while read line; do
+        grep -E "time:.*#" "$latest_log" 2>/dev/null | tail -5 | while read line; do
             echo "   $line"
         done
         echo ""
 
         # ============================================
-        # 5. 最后30行日志摘要
+        # 6. 最后30行日志摘要
         # ============================================
-        echo "🔍 5. 最后30行日志摘要:"
+        echo "🔍 6. 最后30行日志摘要:"
         echo "----------------------------------------"
         tail -30 "$latest_log" | sed 's/^/   /'
         echo ""
 
         # ============================================
-        # 6. 构建结果总结（增强版）
+        # 7. 构建结果总结（增强版）
         # ============================================
         echo "================================================================="
         echo "📊 构建结果总结:"
@@ -7064,11 +7101,11 @@ quick_error_check() {
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo ""
             echo "💡 刷机说明:"
-            if [[ "$firmware_list" == *"sysupgrade"* ]]; then
+            if [[ "${firmware_list[*]}" == *"sysupgrade"* ]]; then
                 echo "   - sysupgrade 固件用于已安装 OpenWrt 的系统升级"
                 echo "   - 使用命令: sysupgrade -n /path/to/*sysupgrade.bin"
             fi
-            if [[ "$firmware_list" == *"factory"* ]]; then
+            if [[ "${firmware_list[*]}" == *"factory"* ]]; then
                 echo "   - factory 固件用于从原厂固件首次刷入"
                 echo "   - 通过路由器原厂 Web 界面刷入"
             fi
@@ -7077,14 +7114,24 @@ quick_error_check() {
             echo "❌❌❌ 编译失败：没有生成有效固件 ❌❌❌"
             echo ""
             echo "💡 根据诊断结果的可能解决方案:"
-            if grep -q "Download failed" "$latest_log" 2>/dev/null; then
-                echo "   🔧 下载失败: 检查网络连接或更换镜像源"
+            
+            # 智能分析失败原因
+            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
+                echo "   🔧 补丁失败: 检查补丁是否与内核版本兼容"
+                echo "      建议: 尝试更换源码分支（如从23.05换到21.02）"
             fi
             if grep -q "No space left" "$latest_log" 2>/dev/null; then
                 echo "   🔧 磁盘空间不足: 清理磁盘空间"
             fi
-            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
-                echo "   🔧 补丁失败: 删除失败的补丁文件"
+            if grep -q "gpio-button-hotplug" "$latest_log" 2>/dev/null; then
+                echo "   🔧 gpio-button-hotplug 模块编译失败"
+                echo "      建议: 检查内核头文件是否完整"
+            fi
+            if grep -q "undefined reference" "$latest_log" 2>/dev/null; then
+                echo "   🔧 链接错误: 可能是依赖库版本问题"
+            fi
+            if grep -q "Download failed" "$latest_log" 2>/dev/null; then
+                echo "   🔧 下载失败: 检查网络连接或更换镜像源"
             fi
         fi
         
