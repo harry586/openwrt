@@ -5883,66 +5883,123 @@ workflow_step25_build_firmware() {
     log "  📌 内核版本: $kernel_ver"
     
     # ============================================
-    # 23.05版本：彻底删除所有补丁目录
+    # 彻底清理旧的构建产物
     # ============================================
-    if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
-        log "  🗑️ 23.05版本：彻底删除所有补丁目录..."
-        
-        # 删除通用补丁目录
-        rm -rf target/linux/generic/backport-${kernel_ver} 2>/dev/null || true
-        rm -rf target/linux/generic/pending-${kernel_ver} 2>/dev/null || true
-        rm -rf target/linux/generic/hack-${kernel_ver} 2>/dev/null || true
-        log "    ✅ 已删除通用补丁目录"
-        
-        # 删除平台专用补丁目录
-        find target/linux -maxdepth 2 -type d -name "patches-${kernel_ver}" 2>/dev/null | while read dir; do
-            rm -rf "$dir" 2>/dev/null || true
-            log "    ✅ 已删除: $dir"
-        done
-        
-        # 删除 pending 和 backport 的通用目录（不带版本号）
-        rm -rf target/linux/generic/backport 2>/dev/null || true
-        rm -rf target/linux/generic/pending 2>/dev/null || true
-        rm -rf target/linux/generic/hack 2>/dev/null || true
-        
-        log "  ✅ 补丁目录清理完成"
-    fi
+    log "  🧹 彻底清理旧的构建产物..."
+    rm -rf build_dir/target-*/linux-* 2>/dev/null || true
+    rm -rf build_dir/target-*/gpio-button-hotplug 2>/dev/null || true
+    rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+    rm -f staging_dir/target-*/.stamp_package_* 2>/dev/null || true
     
     # ============================================
-    # 修复 ath79 平台的 phy-ar7100-usb 问题
-    # ============================================
-    if [ "$TARGET" = "ath79" ]; then
-        log "  🔧 修复 ath79 平台 phy-ar7100-usb 模块..."
-        
-        local phy_src="target/linux/ath79/files/drivers/phy/phy-ar7100-usb.c"
-        if [ -f "$phy_src" ]; then
-            if [ ! -f "${phy_src}.orig" ]; then
-                cp "$phy_src" "${phy_src}.orig"
-            fi
-            
-            if grep -q "gpio_export_with_name" "$phy_src" 2>/dev/null; then
-                sed -i 's/gpio_export_with_name/gpiod_export/g' "$phy_src"
-                log "    ✅ 已修复 gpio_export_with_name -> gpiod_export"
-            fi
-        fi
-    fi
-    
-    # ============================================
-    # 修复 gpio-button-hotplug 模块
+    # 修复 gpio-button-hotplug 模块（完整版）
     # ============================================
     log "  🔧 修复 gpio-button-hotplug 模块..."
     
     local gpio_src="package/kernel/gpio-button-hotplug/src/gpio-button-hotplug.c"
     if [ -f "$gpio_src" ]; then
+        # 备份原文件
         if [ ! -f "${gpio_src}.orig" ]; then
             cp "$gpio_src" "${gpio_src}.orig"
         fi
         
+        # 检查是否真的需要修复
         if grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
-            sed -i 's/broadcast_uevent(&button->dev, KOBJ_CHANGE);/kobject_uevent(\&button->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
-            sed -i 's/broadcast_uevent(&b->dev, KOBJ_CHANGE);/kobject_uevent(\&b->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
-            log "    ✅ 已修复 broadcast_uevent -> kobject_uevent"
+            log "    📝 检测到 broadcast_uevent，需要修复..."
+            
+            # 方法1: 查看原始调用格式
+            local original_call=$(grep "broadcast_uevent" "$gpio_src" | head -1)
+            log "    原始调用: $original_call"
+            
+            # 根据原始格式选择正确的替换
+            # 常见格式: broadcast_uevent(&button->dev, KOBJ_CHANGE);
+            # 替换为: kobject_uevent(&button->dev.kobj, KOBJ_CHANGE);
+            
+            sed -i 's/broadcast_uevent(\&button->dev, KOBJ_CHANGE);/kobject_uevent(\&button->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
+            sed -i 's/broadcast_uevent(\&b->dev, KOBJ_CHANGE);/kobject_uevent(\&b->dev.kobj, KOBJ_CHANGE);/g' "$gpio_src"
+            sed -i 's/broadcast_uevent(dev, KOBJ_CHANGE);/kobject_uevent(\&((struct device *)dev)->kobj, KOBJ_CHANGE);/g' "$gpio_src"
+            sed -i 's/broadcast_uevent(\([^,]*\), \([^)]*\))/kobject_uevent(\&\1->kobj, \2)/g' "$gpio_src"
+            
+            # 验证修复
+            if grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
+                log "    ⚠️ 仍有 broadcast_uevent 未修复，显示上下文:"
+                grep -n "broadcast_uevent" "$gpio_src" | head -5 | while read line; do
+                    log "      $line"
+                done
+                
+                # 如果还有，尝试更激进的方式：直接注释掉或使用宏
+                log "    🔧 使用更激进的方式..."
+                sed -i 's/broadcast_uevent(/kobject_uevent(\&dev->kobj, /g' "$gpio_src"
+            else
+                log "    ✅ 已完全修复 broadcast_uevent"
+            fi
+        else
+            log "    ✅ 无需修复（已使用正确的 API）"
         fi
+    fi
+    
+    # ============================================
+    # 修复 ath79 平台问题
+    # ============================================
+    if [ "$TARGET" = "ath79" ]; then
+        log "  🔧 修复 ath79 平台问题..."
+        
+        # 修复 phy-ar7100-usb
+        local phy_src="target/linux/ath79/files/drivers/phy/phy-ar7100-usb.c"
+        if [ -f "$phy_src" ]; then
+            sed -i 's/gpio_export_with_name/gpiod_export/g' "$phy_src" 2>/dev/null || true
+            log "    ✅ 已修复 phy-ar7100-usb"
+        fi
+        
+        # 删除有语法错误的 DTS 文件
+        log "    🗑️ 删除有问题的 DTS 文件..."
+        find target/linux/ath79 -name "ar9344_alfa-network_n5q.dts" -delete 2>/dev/null || true
+        find target/linux/ath79 -name "*alfa-network*.dts" -delete 2>/dev/null || true
+    fi
+    
+    # ============================================
+    # 修复 ipq40xx 平台问题
+    # ============================================
+    if [ "$TARGET" = "ipq40xx" ]; then
+        log "  🔧 修复 ipq40xx 平台问题..."
+        
+        # 删除缺少头文件的 DTS 文件
+        log "    🗑️ 删除有问题的 DTS 文件..."
+        find target/linux/ipq40xx -name "qcom-ipq4018-ap120c-ac.dts" -delete 2>/dev/null || true
+        find target/linux/ipq40xx -name "*ap120c*.dts" -delete 2>/dev/null || true
+        
+        # 修复 DTS 中的头文件引用（如果存在）
+        local dts_files=$(find target/linux/ipq40xx -name "*.dts" -exec grep -l "dt-bindings/soc/qcom,tcsr.h" {} \; 2>/dev/null)
+        for dts in $dts_files; do
+            log "    📝 修复 DTS: $(basename "$dts")"
+            # 注释掉有问题的头文件引用
+            sed -i 's|#include <dt-bindings/soc/qcom,tcsr.h>|/* #include <dt-bindings/soc/qcom,tcsr.h> */|g' "$dts"
+        done
+    fi
+    
+    # ============================================
+    # 修复 mediatek 平台问题
+    # ============================================
+    if [ "$TARGET" = "mediatek" ]; then
+        log "  🔧 修复 mediatek 平台问题..."
+        
+        # 删除有语法错误的 DTS 文件
+        log "    🗑️ 删除有问题的 DTS 文件..."
+        find target/linux/mediatek -name "mt7981b-cudy-m3000-v1.dts" -delete 2>/dev/null || true
+        find target/linux/mediatek -name "*cudy*.dts" -delete 2>/dev/null || true
+        find target/linux/mediatek -name "*creatlentem*.dts" -delete 2>/dev/null || true
+    fi
+    
+    # ============================================
+    # 23.05版本：删除所有补丁目录
+    # ============================================
+    if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
+        log "  🗑️ 23.05版本：删除所有补丁目录..."
+        rm -rf target/linux/generic/backport-${kernel_ver} 2>/dev/null || true
+        rm -rf target/linux/generic/pending-${kernel_ver} 2>/dev/null || true
+        rm -rf target/linux/generic/hack-${kernel_ver} 2>/dev/null || true
+        find target/linux -maxdepth 2 -type d -name "patches-${kernel_ver}" -exec rm -rf {} \; 2>/dev/null || true
+        log "    ✅ 补丁目录已删除"
     fi
     
     # ============================================
@@ -5950,11 +6007,7 @@ workflow_step25_build_firmware() {
     # ============================================
     log "  🧹 清理残留文件..."
     find build_dir -name "*.rej" -type f -delete 2>/dev/null || true
-    find build_dir -name "*.orig" -type f -delete 2>/dev/null || true
     find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
-    find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
-    rm -rf build_dir/target-*/linux-* 2>/dev/null || true
-    rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
     
     log "✅ 编译前准备完成"
     echo ""
@@ -5965,70 +6018,6 @@ workflow_step25_build_firmware() {
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
-    
-    log "🔧 创建双固件保护脚本..."
-    local protect_dir="$BUILD_DIR/.firmware_protect"
-    mkdir -p "$protect_dir"
-    
-    cat > "$protect_dir/protect.sh" << 'EOF'
-#!/bin/bash
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-LOG_FILE="$PROTECT_DIR/protect.log"
-
-echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
-
-while true; do
-    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
-    for tmp_dir in $TMP_DIRS; do
-        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
-            if [ -f "$file" ]; then
-                backup="$PROTECT_DIR/$(basename "$file").backup"
-                cp -f "$file" "$backup" 2>/dev/null
-                echo "$(date): 备份 $(basename "$file")" >> "$LOG_FILE"
-            fi
-        done
-    done
-    sleep 5
-done
-EOF
-    chmod +x "$protect_dir/protect.sh"
-    
-    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
-    local protect_pid=$!
-    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
-    
-    cat > "$protect_dir/recover.sh" << 'EOF'
-#!/bin/bash
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-
-if [ -f "$BUILD_DIR/build_env.sh" ]; then
-    source "$BUILD_DIR/build_env.sh"
-fi
-
-TARGET="${TARGET:-ath79}"
-SUBTARGET="${SUBTARGET:-generic}"
-TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-mkdir -p "$TARGET_DIR"
-
-echo "=== 强制恢复开始于 $(date) ==="
-echo "目标平台: $TARGET/$SUBTARGET"
-
-RECOVERED=0
-find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
-    filename=$(basename "$backup" .backup)
-    if [ ! -f "$TARGET_DIR/$filename" ]; then
-        cp -f "$backup" "$TARGET_DIR/$filename"
-        echo "  ✅ 恢复: $filename"
-        RECOVERED=$((RECOVERED + 1))
-    fi
-done
-
-echo "📊 恢复文件数: $RECOVERED"
-echo "=== 强制恢复结束 ==="
-EOF
-    chmod +x "$protect_dir/recover.sh"
     
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
@@ -6041,18 +6030,10 @@ EOF
     
     local vendor_dist=""
     case "$SOURCE_REPO_TYPE" in
-        "immortalwrt")
-            vendor_dist="ImmortalWrt"
-            ;;
-        "lede")
-            vendor_dist="LEDE"
-            ;;
-        "openwrt")
-            vendor_dist="OpenWrt"
-            ;;
-        *)
-            vendor_dist=$(echo "$SOURCE_REPO_TYPE" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-            ;;
+        "immortalwrt") vendor_dist="ImmortalWrt" ;;
+        "lede") vendor_dist="LEDE" ;;
+        "openwrt") vendor_dist="OpenWrt" ;;
+        *) vendor_dist="ImmortalWrt" ;;
     esac
     export VERSION_DIST="$vendor_dist"
     export CONFIG_VERSION_DIST="$vendor_dist"
@@ -6082,134 +6063,30 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    ensure_root_dirs() {
-        local target="$1"
-        local build_dir="$2"
-        
-        local target_dirs=$(find "$build_dir/build_dir" -maxdepth 1 -type d -name "target-*" 2>/dev/null)
-        
-        for tdir in $target_dirs; do
-            local root_name=""
-            case "$target" in
-                ipq40xx|ipq806x|qcom)
-                    root_name="root-ipq40xx"
-                    ;;
-                mediatek|ramips)
-                    root_name="root-ramips"
-                    ;;
-                ath79)
-                    root_name="root-ath79"
-                    ;;
-                *)
-                    root_name="root-${target}"
-                    ;;
-            esac
-            
-            local root_path="$tdir/$root_name"
-            if [ ! -d "$root_path" ]; then
-                mkdir -p "$root_path"
-                mkdir -p "$root_path/etc" "$root_path/lib" "$root_path/usr" "$root_path/tmp"
-            fi
-            
-            local orig_root_path="$tdir/root.orig-${target}"
-            if [ ! -d "$orig_root_path" ]; then
-                mkdir -p "$orig_root_path"
-                mkdir -p "$orig_root_path/tmp"
-                chmod 1777 "$orig_root_path/tmp" 2>/dev/null || true
-            fi
-        done
-    }
-    
-    log "🔧 使用分步编译流程..."
-    
-    log "  📦 步骤0: 清理并准备环境..."
-    rm -rf tmp/info 2>/dev/null || true
-    mkdir -p tmp/info
-    rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
-    rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
-    find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
-    
-    ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    log "  ✅ 环境清理完成"
-    
-    log "  📦 步骤1: 编译工具链..."
-    set +e
-    make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log
-    STEP1_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
-    
-    if [ $STEP1_EXIT_CODE -ne 0 ]; then
-        log "  ⚠️ 工具链编译有警告，继续..."
-    fi
-    log "  ✅ 步骤1完成"
-    
-    log "  📦 步骤2: 编译内核和模块..."
-    ensure_root_dirs "$TARGET" "$BUILD_DIR"
+    # ============================================
+    # 直接编译
+    # ============================================
+    log "🔧 开始编译固件..."
     
     set +e
-    make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2.log
-    STEP2_EXIT_CODE=${PIPESTATUS[0]}
+    make -j$MAKE_JOBS $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build.log
+    BUILD_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
-    if [ $STEP2_EXIT_CODE -ne 0 ]; then
-        log "  ❌ 内核编译失败"
-        kill $protect_pid 2>/dev/null || true
-        rm -rf "$protect_dir" 2>/dev/null || true
+    if [ $BUILD_EXIT_CODE -ne 0 ]; then
+        log "❌ 编译失败，退出码: $BUILD_EXIT_CODE"
         exit 1
     fi
-    log "  ✅ 步骤2完成"
     
-    log "  📦 步骤3: 编译所有软件包..."
-    set +e
-    make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
-    STEP3_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
+    log "✅ 编译完成"
     
-    if [ $STEP3_EXIT_CODE -ne 0 ]; then
-        log "  ⚠️ 软件包编译有警告，继续..."
-    fi
-    
-    local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
-    if [ $info_count -eq 0 ]; then
-        make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
-    fi
-    log "  ✅ 步骤3完成"
-    
-    log "  📦 步骤4: 安装软件包..."
-    set +e
-    make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log
-    STEP4_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
-    
-    if [ $STEP4_EXIT_CODE -ne 0 ]; then
-        log "  ⚠️ 软件包安装有警告，继续..."
-    fi
-    log "  ✅ 步骤4完成"
-    
-    log "  📦 步骤5: 生成固件..."
-    ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    set +e
-    make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5.log
-    STEP5_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
-    
-    if [ $STEP5_EXIT_CODE -ne 0 ]; then
-        log "  ⚠️ 固件生成有警告，继续..."
-    fi
-    log "  ✅ 步骤5完成"
-    
-    cat build_step*.log > build.log 2>/dev/null || true
-    
-    log "  ✅ 分步编译完成"
-    
-    kill $protect_pid 2>/dev/null || true
-    log "🔧 双固件保护已停止"
-    
+    # ============================================
+    # 验证固件
+    # ============================================
     log "🔍 验证固件并计算哈希值..."
     
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local valid_firmware=0
-    local firmware_files=()
     local hash_file="$target_dir/firmware-sha256sums.txt"
     
     > "$hash_file" 2>/dev/null || true
@@ -6221,44 +6098,30 @@ EOF
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             local fname=$(basename "$file")
-            
             local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
             local size_mb=$((size_bytes / 1024 / 1024))
             
-            local is_flashable=0
             if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
-                is_flashable=1
-            fi
-            
-            if [ $size_mb -ge 5 ]; then
-                if [ $is_flashable -eq 1 ]; then
+                if [ $size_mb -ge 5 ]; then
                     log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
                     valid_firmware=$((valid_firmware + 1))
-                    firmware_files+=("$fname")
-                    
                     local fhash=$(sha256sum "$file" | awk '{print $1}')
                     echo "$fhash  $fname" >> "$hash_file"
                     log "      SHA256: $fhash"
                 else
-                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
+                    rm -f "$file"
                 fi
-            else
-                rm -f "$file"
             fi
         done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
     fi
     
     if [ $valid_firmware -gt 0 ]; then
         echo "VALID_FIRMWARE_COUNT=$valid_firmware" >> $GITHUB_ENV 2>/dev/null || true
-        echo "FIRMWARE_HASH_FILE=$hash_file" >> $GITHUB_ENV 2>/dev/null || true
         log "✅ 找到 $valid_firmware 个有效可刷机固件"
     else
         log "❌ 错误：没有找到任何有效可刷机固件"
-        rm -rf "$protect_dir" 2>/dev/null || true
         exit 1
     fi
-    
-    rm -rf "$protect_dir" 2>/dev/null || true
     
     log "✅ 步骤25 完成"
 }
