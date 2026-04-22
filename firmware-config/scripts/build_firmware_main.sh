@@ -5886,70 +5886,73 @@ workflow_step25_build_firmware() {
         source "$BUILD_DIR/build_env.sh"
     fi
     log "  📌 当前平台: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
+    log "  📌 源码分支: $SELECTED_BRANCH"
     
-    # 已知有问题的补丁列表（与5.15内核不兼容的所有补丁）
-    local known_bad_patches=(
-        # mediatek ppe 相关补丁
-        "711-v6.0-02-net-ethernet-mtk_ppe-fix-possible-NULL-pointer-deref.patch"
-        "711-v6.0-03-net-ethernet-mtk-ppe-fix-traffic-offload-with-bridge.patch"
-        "712-v6.0-04-net-ethernet-mtk_ppe-add-support-for-flow-accounting.patch"
-        "713-v6.0-05-net-ethernet-mtk_ppe-add-foe-entry-lifetime-support.patch"
-        "714-v6.0-net-ethernet-mtk_eth_soc-move-ppe-table-hash-offset-.patch"
-        "715-v6.0-net-ethernet-mtk_eth_soc-add-the-capability-to-offlo.patch"
-        "716-v6.0-net-ethernet-mtk_eth_soc-add-flow-offloading-suppor.patch"
-        "717-v6.0-net-ethernet-mtk_eth_soc-add-support-for-hardware-f.patch"
-        "718-v6.1-net-ethernet-mtk_eth_soc-add-l2-flow-offload-support.patch"
-        "719-v6.1-net-ethernet-mtk_eth_soc-add-ipv4-flow-offload-suppo.patch"
-        "720-v6.1-net-ethernet-mtk_eth_soc-enable-threaded-NAPI.patch"
-        "721-v6.1-net-ethernet-mtk_eth_soc-add-mac-mirror-support.patch"
-        # 通用 backport 补丁中与 mediatek 相关的
-        "710-*"
-        "711-*"
-        "712-*"
-        "713-*"
-        "714-*"
-        "715-*"
-        "716-*"
-        "717-*"
-        "718-*"
-        "719-*"
-        "720-*"
-        "721-*"
-    )
+    # 根据内核版本确定 backport 目录
+    local kernel_ver=""
+    if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
+        kernel_ver="5.15"
+    elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
+        kernel_ver="5.4"
+    else
+        kernel_ver="5.15"
+    fi
+    log "  📌 内核版本: $kernel_ver"
     
-    # 直接删除所有可能出问题的补丁目录中的补丁
-    log "  🗑️ 删除 backport-5.15 中所有 7xx 系列的补丁..."
-    if [ -d "target/linux/generic/backport-5.15" ]; then
-        find target/linux/generic/backport-5.15 -name "7[0-9][0-9]-*.patch" -type f 2>/dev/null | while read patch_file; do
+    # 删除 backport 目录中所有编号 >=700 的补丁（这些是backport补丁，容易失败）
+    log "  🗑️ 删除 backport-$kernel_ver 中所有编号 >=700 的补丁..."
+    if [ -d "target/linux/generic/backport-$kernel_ver" ]; then
+        find "target/linux/generic/backport-$kernel_ver" -name "[7-9][0-9][0-9]-*.patch" -type f 2>/dev/null | while read patch_file; do
             log "    🗑️ 删除: $(basename "$patch_file")"
             rm -f "$patch_file"
         done
     fi
     
-    log "  🗑️ 删除 hack-5.15 中所有 7xx 系列的补丁..."
-    if [ -d "target/linux/generic/hack-5.15" ]; then
-        find target/linux/generic/hack-5.15 -name "7[0-9][0-9]-*.patch" -type f 2>/dev/null | while read patch_file; do
+    # 删除 hack 目录中所有编号 >=700 的补丁
+    log "  🗑️ 删除 hack-$kernel_ver 中所有编号 >=700 的补丁..."
+    if [ -d "target/linux/generic/hack-$kernel_ver" ]; then
+        find "target/linux/generic/hack-$kernel_ver" -name "[7-9][0-9][0-9]-*.patch" -type f 2>/dev/null | while read patch_file; do
             log "    🗑️ 删除: $(basename "$patch_file")"
             rm -f "$patch_file"
         done
     fi
     
-    # 删除特定已知补丁
-    for pattern in "${known_bad_patches[@]}"; do
-        find target/linux -name "$pattern" -type f 2>/dev/null | while read patch_file; do
-            log "    🗑️ 删除已知问题补丁: $(basename "$patch_file")"
-            rm -f "$patch_file"
-        done
+    # 删除所有与 qca8k 相关的补丁（LED支持补丁）
+    log "  🗑️ 删除所有 qca8k 相关补丁..."
+    find target/linux -name "*qca8k*.patch" -type f 2>/dev/null | while read patch_file; do
+        log "    🗑️ 删除: $(basename "$patch_file")"
+        rm -f "$patch_file"
+    done
+    
+    # 删除所有与 sfp 相关的补丁（Realtek SFP补丁）
+    log "  🗑️ 删除所有 sfp 相关补丁..."
+    find target/linux -name "*sfp*.patch" -type f 2>/dev/null | while read patch_file; do
+        log "    🗑️ 删除: $(basename "$patch_file")"
+        rm -f "$patch_file"
+    done
+    
+    # 删除所有与 mtk_ppe 相关的补丁
+    log "  🗑️ 删除所有 mtk_ppe 相关补丁..."
+    find target/linux -name "*mtk_ppe*.patch" -type f 2>/dev/null | while read patch_file; do
+        log "    🗑️ 删除: $(basename "$patch_file")"
+        rm -f "$patch_file"
+    done
+    
+    # 删除所有与 mtk_eth_soc 相关的补丁
+    log "  🗑️ 删除所有 mtk_eth_soc 相关补丁..."
+    find target/linux -name "*mtk_eth_soc*.patch" -type f 2>/dev/null | while read patch_file; do
+        log "    🗑️ 删除: $(basename "$patch_file")"
+        rm -f "$patch_file"
     done
     
     # 对于非mediatek平台，删除所有mediatek相关补丁
     if [ "$TARGET" != "mediatek" ]; then
         log "  🔧 非mediatek平台，删除所有mediatek相关补丁..."
-        find target/linux -name "*mtk*.patch" -type f 2>/dev/null | while read patch_file; do
+        find target/linux -name "*mediatek*.patch" -type f 2>/dev/null | while read patch_file; do
             log "    🗑️ 删除: $(basename "$patch_file")"
             rm -f "$patch_file"
         done
-        find target/linux -name "*mediatek*.patch" -type f 2>/dev/null | while read patch_file; do
+        find target/linux -name "*mtk*.patch" -type f 2>/dev/null | while read patch_file; do
             log "    🗑️ 删除: $(basename "$patch_file")"
             rm -f "$patch_file"
         done
@@ -6188,54 +6191,46 @@ EOF
         log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
         
         # 检查是否是补丁失败
-        if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
+        if grep -q "Patch failed\|Hunk FAILED\|No file to patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    🔧 检测到补丁失败，正在修复..."
             
             # 方法1: 从 "Patch failed!  Please fix" 行提取补丁路径
-            local patch_path=$(grep "Patch failed!" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*Please fix[[:space:]]+([^[:space:]]+\.patch).*/\1/' | head -1)
+            local patch_path=$(grep "Patch failed!" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | head -1)
             
             if [ -n "$patch_path" ] && [ -f "$patch_path" ]; then
                 log "      🗑️ 删除失败补丁: $(basename "$patch_path")"
                 rm -f "$patch_path"
             fi
             
-            # 方法2: 从 "Hunk FAILED" 所在区块提取补丁路径
+            # 方法2: 从 "No file to patch" 所在区块提取补丁路径
             if [ -z "$patch_path" ]; then
-                patch_path=$(grep -B5 "Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | head -1)
+                patch_path=$(grep -B10 "No file to patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | head -1)
                 if [ -n "$patch_path" ] && [ -f "$patch_path" ]; then
                     log "      🗑️ 删除失败补丁: $(basename "$patch_path")"
                     rm -f "$patch_path"
                 fi
             fi
             
-            # 方法3: 直接搜索所有 7xx 系列补丁并删除
-            log "    🔍 删除所有 7xx 系列补丁..."
-            find target/linux -name "7[0-9][0-9]-*.patch" -type f 2>/dev/null | while read bad_patch; do
+            # 方法3: 删除所有编号 >=700 的补丁
+            log "    🔍 删除所有编号 >=700 的补丁..."
+            find target/linux -name "[7-9][0-9][0-9]-*.patch" -type f 2>/dev/null | while read bad_patch; do
                 log "      🗑️ 删除: $(basename "$bad_patch")"
                 rm -f "$bad_patch"
             done
             
-            # 方法4: 删除所有与 mtk_ppe 相关的补丁
-            log "    🔍 删除所有 mtk_ppe 相关补丁..."
-            find target/linux -name "*mtk_ppe*.patch" -type f 2>/dev/null | while read bad_patch; do
+            # 方法4: 删除所有 qca8k 相关补丁
+            log "    🔍 删除所有 qca8k 相关补丁..."
+            find target/linux -name "*qca8k*.patch" -type f 2>/dev/null | while read bad_patch; do
                 log "      🗑️ 删除: $(basename "$bad_patch")"
                 rm -f "$bad_patch"
             done
             
-            # 方法5: 删除所有与 mtk_eth_soc 相关的补丁
-            find target/linux -name "*mtk_eth_soc*.patch" -type f 2>/dev/null | while read bad_patch; do
+            # 方法5: 删除所有 sfp 相关补丁
+            log "    🔍 删除所有 sfp 相关补丁..."
+            find target/linux -name "*sfp*.patch" -type f 2>/dev/null | while read bad_patch; do
                 log "      🗑️ 删除: $(basename "$bad_patch")"
                 rm -f "$bad_patch"
             done
-            
-            # 方法6: 对于非mediatek平台，删除所有mediatek相关补丁
-            if [ "$TARGET" != "mediatek" ]; then
-                log "    🔍 非mediatek平台，删除所有mediatek相关补丁..."
-                find target/linux -name "*mediatek*.patch" -type f 2>/dev/null | while read bad_patch; do
-                    log "      🗑️ 删除: $(basename "$bad_patch")"
-                    rm -f "$bad_patch"
-                done
-            fi
             
             # 彻底清理内核构建目录
             log "    🔧 清理内核构建目录..."
