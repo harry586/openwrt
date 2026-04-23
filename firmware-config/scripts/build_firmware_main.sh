@@ -4977,7 +4977,7 @@ workflow_step14_pre_build_space_check() {
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
-    log "=== 步骤15: 智能配置生成【优化版 - 最多2次尝试】 ==="
+    log "=== 步骤15: 智能配置生成 ==="
     log "当前设备: $DEVICE"
     log "当前目标: $TARGET"
     log "当前子目标: $SUBTARGET"
@@ -4998,7 +4998,7 @@ workflow_step15_generate_config() {
     cd "$BUILD_DIR" || handle_error "无法进入构建目录"
     
     log ""
-    log "=== 🔍 设备定义文件验证（前置检查） ==="
+    log "=== 🔍 设备定义文件验证 ==="
     log "搜索设备名: $DEVICE"
     log "搜索路径: target/linux/$TARGET"
     
@@ -5021,7 +5021,9 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # 智能设备匹配函数
+    # ============================================
+    # 智能设备匹配函数（修复权重计算）
+    # ============================================
     find_best_matching_device() {
         local input_device="$1"
         local mk_file="$2"
@@ -5034,69 +5036,115 @@ workflow_step15_generate_config() {
             fi
         done < <(grep -E "define Device/[a-zA-Z0-9_-]+" "$mk_file" 2>/dev/null)
         
+        local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
+        
+        # 提取输入中的关键词
+        local input_base=""
+        if [[ "$lower_input" == *"rax3000m"* ]]; then
+            input_base="rax3000m"
+        elif [[ "$lower_input" == *"ac42u"* ]]; then
+            input_base="ac42u"
+        elif [[ "$lower_input" == *"wndr3800"* ]]; then
+            input_base="wndr3800"
+        else
+            input_base=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+        fi
+        
+        # 判断输入是否包含后缀
+        local input_has_nand=0
+        local input_has_emmc=0
+        local input_has_ubootmod=0
+        if [[ "$lower_input" == *"nand"* ]]; then input_has_nand=1; fi
+        if [[ "$lower_input" == *"emmc"* ]]; then input_has_emmc=1; fi
+        if [[ "$lower_input" == *"ubootmod"* ]]; then input_has_ubootmod=1; fi
+        
         for device in "${all_devices[@]}"; do
+            # 排除 _common 模板
             if [[ "$device" == *_common* ]]; then
                 continue
             fi
             
             local weight=0
-            local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
             local lower_device=$(echo "$device" | tr '[:upper:]' '[:lower:]')
             
+            # 完全匹配：权重+200（最高优先级）
             if [ "$lower_input" = "$lower_device" ]; then
-                weight=$((weight + 100))
+                weight=$((weight + 200))
             fi
             
+            # 输入包含设备名（正向包含）：权重+80
             if [[ "$lower_input" == *"$lower_device"* ]]; then
+                weight=$((weight + 80))
+            fi
+            
+            # 设备名包含输入（反向包含）：权重+60
+            if [[ "$lower_device" == *"$lower_input"* ]]; then
+                weight=$((weight + 60))
+            fi
+            
+            # 同系列基础名匹配：权重+50
+            if [[ "$lower_device" == *"$input_base"* ]]; then
                 weight=$((weight + 50))
             fi
             
-            if [[ "$lower_device" == *"$lower_input"* ]]; then
-                weight=$((weight + 40))
-            fi
-            
+            # 去除后缀后匹配：权重+40
             local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
             local device_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
             if [ "$input_no_suffix" = "$device_no_suffix" ]; then
-                weight=$((weight + 35))
+                weight=$((weight + 40))
             fi
             
-            if [[ "$lower_input" == *"rax3000m"* ]] && [[ "$lower_device" == *"rax3000m"* ]]; then
-                weight=$((weight + 30))
+            # 后缀匹配加分
+            # NAND 后缀匹配
+            if [ $input_has_nand -eq 1 ] && [[ "$lower_device" == *"nand"* ]]; then
+                weight=$((weight + 25))
+            fi
+            # EMMC 后缀匹配
+            if [ $input_has_emmc -eq 1 ] && [[ "$lower_device" == *"emmc"* ]]; then
+                weight=$((weight + 25))
+            fi
+            # ubootmod 后缀匹配
+            if [ $input_has_ubootmod -eq 1 ] && [[ "$lower_device" == *"ubootmod"* ]]; then
+                weight=$((weight + 25))
             fi
             
-            if [[ "$lower_input" == *"nand"* ]] && [[ "$lower_device" == *"nand"* ]]; then
-                weight=$((weight + 20))
-            fi
-            if [[ "$lower_input" == *"emmc"* ]] && [[ "$lower_device" == *"emmc"* ]]; then
-                weight=$((weight + 20))
+            # 设备名更长（更具体）加分
+            local input_len=${#lower_input}
+            local device_len=${#lower_device}
+            if [ $device_len -gt $input_len ]; then
+                weight=$((weight + 15))
             fi
             
+            # 部分单词匹配：权重+10
             local input_parts=($(echo "$lower_input" | tr '_-' ' '))
             local device_parts=($(echo "$lower_device" | tr '_-' ' '))
+            local part_match=0
             for ipart in "${input_parts[@]}"; do
                 for dpart in "${device_parts[@]}"; do
                     if [ "$ipart" = "$dpart" ] && [ ${#ipart} -gt 2 ]; then
-                        weight=$((weight + 10))
+                        part_match=$((part_match + 1))
                     fi
                 done
             done
+            weight=$((weight + part_match * 10))
             
             if [ $weight -gt 0 ]; then
                 results+=("$weight:$device")
             fi
         done
         
+        # 按权重降序排序，取前20个
         if [ ${#results[@]} -gt 0 ]; then
             printf '%s\n' "${results[@]}" | sort -t':' -k1 -rn | head -20
         fi
     }
     
-    # 分析设备固件格式的函数
+    # ============================================
+    # 分析设备固件格式
+    # ============================================
     analyze_device_firmware_format() {
         local device_name="$1"
         local mk_file="$2"
-        local result=""
         
         local device_block=$(awk "/define Device\/$device_name\$/,/^endef/" "$mk_file" 2>/dev/null)
         if [ -z "$device_block" ]; then
@@ -5128,6 +5176,11 @@ workflow_step15_generate_config() {
             has_factory_bin=1
         fi
         
+        local has_factory_img=0
+        if echo "$device_block" | grep -q "IMAGE/factory.img"; then
+            has_factory_img=1
+        fi
+        
         local images_has_bin=0
         local images_has_itb=0
         if [ -n "$images_def" ]; then
@@ -5141,6 +5194,7 @@ workflow_step15_generate_config() {
             images_has_bin=1
         fi
         
+        local result=""
         if [ $images_has_bin -eq 1 ] || [ $has_sysupgrade_bin -eq 1 ]; then
             result="bin"
         elif [ $images_has_itb -eq 1 ] || [ $has_sysupgrade_itb -eq 1 ]; then
@@ -5149,24 +5203,29 @@ workflow_step15_generate_config() {
             result="bin"
         fi
         
-        echo "$result|$images_def|$has_sysupgrade_bin|$has_sysupgrade_itb|$has_factory_bin"
+        echo "$result|$images_def|$has_sysupgrade_bin|$has_sysupgrade_itb|$has_factory_bin|$has_factory_img"
     }
     
-    # 查找同系列设备中支持 .bin 格式的设备
+    # ============================================
+    # 查找同系列支持 .bin 的设备
+    # ============================================
     find_bin_compatible_device() {
         local input_device="$1"
         local mk_file="$2"
         local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
-        local base_name=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+        
+        local base_name=""
+        if [[ "$lower_input" == *"rax3000m"* ]]; then base_name="rax3000m"
+        elif [[ "$lower_input" == *"ac42u"* ]]; then base_name="ac42u"
+        elif [[ "$lower_input" == *"wndr3800"* ]]; then base_name="wndr3800"
+        else base_name=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//'); fi
         
         local candidates=()
         
         while IFS= read -r line; do
             if [[ "$line" =~ define[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
                 local dev_name="${BASH_REMATCH[1]}"
-                if [[ "$dev_name" == *_common* ]]; then
-                    continue
-                fi
+                if [[ "$dev_name" == *_common* ]]; then continue; fi
                 
                 local lower_dev=$(echo "$dev_name" | tr '[:upper:]' '[:lower:]')
                 
@@ -5186,20 +5245,22 @@ workflow_step15_generate_config() {
         fi
     }
     
+    # ============================================
+    # 主匹配逻辑
+    # ============================================
     local device_file=""
     local mk_device_name=""
     local all_matches=()
     
     for mkfile in "${mk_files[@]}"; do
+        # 第一步：尝试精确匹配（排除 _common）
         local exact_match=""
         local all_device_defs=$(grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null)
         
         while IFS= read -r line; do
             if [[ "$line" =~ define[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
                 local dev_name="${BASH_REMATCH[1]}"
-                if [[ "$dev_name" == *_common* ]]; then
-                    continue
-                fi
+                if [[ "$dev_name" == *_common* ]]; then continue; fi
                 if [ "$dev_name" = "$DEVICE" ]; then
                     exact_match="$dev_name"
                     break
@@ -5214,6 +5275,7 @@ workflow_step15_generate_config() {
             break
         fi
         
+        # 第二步：收集所有权重匹配
         local matches=$(find_best_matching_device "$DEVICE" "$mkfile")
         if [ -n "$matches" ]; then
             while IFS= read -r match; do
@@ -5222,12 +5284,16 @@ workflow_step15_generate_config() {
         fi
     done
     
+    # ============================================
+    # 处理匹配结果
+    # ============================================
     if [ -z "$device_file" ] && [ ${#all_matches[@]} -gt 0 ]; then
-        echo ""
-        echo "📋 找到以下相关设备定义:"
-        echo "----------------------------------------"
-        
+        # 按权重降序排序
         local sorted_matches=($(printf '%s\n' "${all_matches[@]}" | sort -t':' -k1 -rn))
+        
+        echo ""
+        echo "📋 设备 '$DEVICE' 未精确匹配，找到以下相关设备:"
+        echo "----------------------------------------"
         
         local display_count=0
         for match in "${sorted_matches[@]}"; do
@@ -5235,32 +5301,49 @@ workflow_step15_generate_config() {
             local dev=$(echo "$match" | cut -d':' -f2)
             local mkf=$(echo "$match" | cut -d':' -f3)
             
-            if [ $display_count -lt 15 ]; then
-                printf "  权重 %3d: %s (位于 %s)\n" "$weight" "$dev" "$(basename "$mkf")"
+            if [ $display_count -lt 20 ]; then
+                # 显示固件格式信息
+                local fmt_info=$(analyze_device_firmware_format "$dev" "$mkf")
+                local fmt_type=$(echo "$fmt_info" | cut -d'|' -f1)
+                local fmt_label=""
+                if [ "$fmt_type" = "bin" ]; then fmt_label="(.bin)"; else fmt_label="(.itb)"; fi
+                
+                printf "  权重 %3d: %-50s %s (位于 %s)\n" "$weight" "$dev" "$fmt_label" "$(basename "$mkf")"
                 display_count=$((display_count + 1))
             fi
         done
         echo "----------------------------------------"
         echo ""
         
+        # 选择权重最高的
         local best_match="${sorted_matches[0]}"
+        local best_weight=$(echo "$best_match" | cut -d':' -f1)
         mk_device_name=$(echo "$best_match" | cut -d':' -f2)
         device_file=$(echo "$best_match" | cut -d':' -f3)
         
-        log "🔧 未找到精确匹配，使用权重最高的设备: $mk_device_name"
+        log "🔧 选择权重最高的设备: $mk_device_name (权重: $best_weight)"
         log "📁 定义文件: $device_file"
         
+        # 显示前5个候选供参考
         if [ ${#sorted_matches[@]} -gt 1 ]; then
             echo ""
-            log "💡 其他可能的设备:"
+            log "💡 其他候选项 (权重降序):"
             local other_count=0
             for match in "${sorted_matches[@]}"; do
-                if [ $other_count -ge 1 ] && [ $other_count -lt 5 ]; then
+                if [ $other_count -ge 1 ] && [ $other_count -lt 6 ]; then
+                    local other_weight=$(echo "$match" | cut -d':' -f1)
                     local other_dev=$(echo "$match" | cut -d':' -f2)
-                    echo "      - $other_dev"
+                    local other_mkf=$(echo "$match" | cut -d':' -f3)
+                    local other_fmt=$(analyze_device_firmware_format "$other_dev" "$other_mkf")
+                    local other_fmt_type=$(echo "$other_fmt" | cut -d'|' -f1)
+                    local other_label=""
+                    if [ "$other_fmt_type" = "bin" ]; then other_label="(.bin)"; else other_label="(.itb)"; fi
+                    echo "      权重 $other_weight: $other_dev $other_label"
                 fi
                 other_count=$((other_count + 1))
             done
+            echo ""
+            echo "💡 如需使用其他设备，请在手动输入框中输入完整设备名"
             echo ""
         fi
     fi
@@ -5284,18 +5367,6 @@ workflow_step15_generate_config() {
     
     if [[ "$mk_device_name" == *_common* ]]; then
         log "❌ 错误：匹配到了通用模板 $mk_device_name，这不是一个可编译的设备！"
-        log "请检查设备名称是否正确，或手动指定正确的设备名。"
-        log ""
-        log "可用的设备列表（排除通用模板）:"
-        echo "----------------------------------------"
-        for mkfile in "${mk_files[@]}"; do
-            if [[ "$mkfile" == *"image/"*".mk" ]]; then
-                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\///' | sed 's/ .*//' | grep -v "_common" | while read dev; do
-                    echo "    - $dev"
-                done
-            fi
-        done
-        echo "----------------------------------------"
         exit 1
     fi
     
@@ -5310,20 +5381,22 @@ workflow_step15_generate_config() {
     local images_def=$(echo "$format_info" | cut -d'|' -f2)
     local has_bin=$(echo "$format_info" | cut -d'|' -f3)
     local has_itb=$(echo "$format_info" | cut -d'|' -f4)
-    local has_factory=$(echo "$format_info" | cut -d'|' -f5)
+    local has_factory_bin=$(echo "$format_info" | cut -d'|' -f5)
+    local has_factory_img=$(echo "$format_info" | cut -d'|' -f6)
     
     log "📋 设备 $mk_device_name 固件格式分析:"
     log "   IMAGES 定义: ${images_def:-未显式定义（默认生成 sysupgrade.bin）}"
     log "   支持 sysupgrade.bin: $([ $has_bin -eq 1 ] && echo '✅ 是' || echo '❌ 否')"
     log "   支持 sysupgrade.itb: $([ $has_itb -eq 1 ] && echo '✅ 是' || echo '❌ 否')"
-    log "   支持 factory.bin: $([ $has_factory -eq 1 ] && echo '✅ 是' || echo '❌ 否')"
+    log "   支持 factory.bin: $([ $has_factory_bin -eq 1 ] && echo '✅ 是' || echo '❌ 否')"
+    log "   支持 factory.img: $([ $has_factory_img -eq 1 ] && echo '✅ 是' || echo '❌ 否')"
     log "   固件格式类型: $format_type"
     
-    # 设置全局变量供后续使用
     export FIRMWARE_FORMAT_TYPE="$format_type"
     export FIRMWARE_HAS_ITB="$has_itb"
     export FIRMWARE_HAS_BIN="$has_bin"
-    export FIRMWARE_HAS_FACTORY="$has_factory"
+    export FIRMWARE_HAS_FACTORY_BIN="$has_factory_bin"
+    export FIRMWARE_HAS_FACTORY_IMG="$has_factory_img"
     export FIRMWARE_NEED_CONVERT="false"
     
     if [ "$format_type" = "itb" ]; then
@@ -5334,12 +5407,7 @@ workflow_step15_generate_config() {
         echo "║  ⚠️  固件格式兼容性提示                                         ║"
         echo "╠══════════════════════════════════════════════════════════════════╣"
         echo "║  设备 $mk_device_name 只生成 .itb 格式固件                     ║"
-        echo "║  .itb 是 FIT (Flattened Image Tree) 格式                         ║"
-        echo "║  某些路由器或 U-Boot 版本可能不直接支持此格式                    ║"
-        echo "║                                                                  ║"
         echo "║  🔧 系统将在编译后自动将 .itb 转换为 .bin 格式                  ║"
-        echo "║                                                                  ║"
-        echo "║  💡 也可以选择以下同系列支持 .bin 格式的设备:                   ║"
         echo "╚══════════════════════════════════════════════════════════════════╝"
         echo ""
         
@@ -5364,36 +5432,27 @@ workflow_step15_generate_config() {
                 alt_count=$((alt_count + 1))
                 local dev_format=$(analyze_device_firmware_format "$dev" "$device_file")
                 local dev_has_factory=$(echo "$dev_format" | cut -d'|' -f5)
-                if [ "$dev_has_factory" -eq 1 ]; then
-                    printf "  [%d] %-50s (sysupgrade.bin + factory.bin)\n" "$alt_count" "$dev"
+                local dev_has_factory_img=$(echo "$dev_format" | cut -d'|' -f6)
+                if [ "$dev_has_factory" -eq 1 ] || [ "$dev_has_factory_img" -eq 1 ]; then
+                    printf "  [%d] %-50s (sysupgrade.bin + factory)\n" "$alt_count" "$dev"
                 else
                     printf "  [%d] %-50s (sysupgrade.bin)\n" "$alt_count" "$dev"
                 fi
             done
             echo "----------------------------------------"
             echo ""
-            echo "💡 提示：如需直接生成 .bin 固件，请重新运行并在手动输入框中输入上述设备名"
-            echo "   当前将继续编译 $mk_device_name，完成后自动转换为 .bin 格式"
-            echo ""
-        else
-            echo "📋 未找到同系列支持 .bin 格式的替代设备"
-            echo ""
-            echo "🔧 编译完成后将自动将 .itb 转换为 .bin 格式"
-            echo ""
         fi
-        
-        echo "🔧 当前操作：继续使用设备 $mk_device_name 编译，完成后自动转换"
-        echo ""
     else
         log "✅ 设备 $mk_device_name 支持 .bin 格式固件，无需转换"
     fi
     
-    # 保存固件格式信息到环境文件
+    # 保存固件格式信息
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         echo "export FIRMWARE_FORMAT_TYPE=\"${FIRMWARE_FORMAT_TYPE:-bin}\"" >> "$BUILD_DIR/build_env.sh"
         echo "export FIRMWARE_HAS_ITB=\"${FIRMWARE_HAS_ITB:-0}\"" >> "$BUILD_DIR/build_env.sh"
         echo "export FIRMWARE_HAS_BIN=\"${FIRMWARE_HAS_BIN:-0}\"" >> "$BUILD_DIR/build_env.sh"
-        echo "export FIRMWARE_HAS_FACTORY=\"${FIRMWARE_HAS_FACTORY:-0}\"" >> "$BUILD_DIR/build_env.sh"
+        echo "export FIRMWARE_HAS_FACTORY_BIN=\"${FIRMWARE_HAS_FACTORY_BIN:-0}\"" >> "$BUILD_DIR/build_env.sh"
+        echo "export FIRMWARE_HAS_FACTORY_IMG=\"${FIRMWARE_HAS_FACTORY_IMG:-0}\"" >> "$BUILD_DIR/build_env.sh"
         echo "export FIRMWARE_NEED_CONVERT=\"${FIRMWARE_NEED_CONVERT:-false}\"" >> "$BUILD_DIR/build_env.sh"
     fi
     
@@ -5405,7 +5464,7 @@ workflow_step15_generate_config() {
     log "=========================================="
     
     local correct_device="$mk_device_name"
-    log "🔧 使用搜索到的正确设备名: $correct_device (原输入: $DEVICE)"
+    log "🔧 最终使用设备名: $correct_device (原始输入: $DEVICE)"
     
     export DEVICE="$correct_device"
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
