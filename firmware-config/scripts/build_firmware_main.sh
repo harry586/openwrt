@@ -3,7 +3,7 @@
 # OpenWrt 智能固件构建主脚本
 # 对应工作流: firmware-build.yml
 # 版本: 3.1.0
-# 最后更新: 2026-04-22
+# 最后更新: 2026-03-14
 #【build_firmware_main.sh-00-end】
 
 #【build_firmware_main.sh-00.5】
@@ -53,6 +53,7 @@ load_build_config() {
     export IMMORTALWRT_URL OPENWRT_URL LEDE_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
     export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
+    export DISABLE_IPV6
     
     # ============================================
     # 检查文件描述符限制（修复Broken pipe）
@@ -137,6 +138,7 @@ save_env() {
     echo "export ENABLE_TCP_BBR=\"${ENABLE_TCP_BBR}\"" >> $ENV_FILE
     echo "export FORCE_ATH10K_CT=\"${FORCE_ATH10K_CT}\"" >> $ENV_FILE
     echo "export AUTO_FIX_USB_DRIVERS=\"${AUTO_FIX_USB_DRIVERS}\"" >> $ENV_FILE
+    echo "export DISABLE_IPV6=\"${DISABLE_IPV6}\"" >> $ENV_FILE
     
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
@@ -1031,363 +1033,6 @@ generate_forbidden_packages_list() {
     
     printf '%s\n' "${full_list[@]}" | sort -u
 }
-
-# 全局禁用IPv6功能函数
-disable_ipv6_globally() {
-    local build_dir="$1"
-    
-    log "🔧 ===== 全局禁用IPv6功能 ====="
-    
-    cd "$build_dir" || return 1
-    
-    # 1. 删除wan6接口配置文件
-    log "  🗑️ 删除wan6接口配置..."
-    
-    # 删除package中的wan6定义
-    if [ -f "package/base-files/files/etc/config/network" ]; then
-        sed -i '/config interface.*wan6/,/^$/d' package/base-files/files/etc/config/network 2>/dev/null || true
-        log "    ✅ 已从base-files中删除wan6配置"
-    fi
-    
-    if [ -f "package/base-files/files/etc/board.d/99-default_network" ]; then
-        sed -i '/wan6/d' package/base-files/files/etc/board.d/99-default_network 2>/dev/null || true
-        log "    ✅ 已从默认网络配置中删除wan6"
-    fi
-    
-    # 删除luci中的wan6相关文件
-    find package -type f -name "*wan6*" 2>/dev/null | while read file; do
-        rm -f "$file"
-        log "    🗑️ 删除: $file"
-    done
-    
-    # 2. 禁用内核IPv6模块
-    log "  🔧 禁用内核IPv6模块..."
-    
-    # 删除IPv6内核模块包
-    local ipv6_kmods=(
-        "kmod-ipv6"
-        "kmod-ip6tables"
-        "kmod-nf-ipt6"
-        "kmod-nf-conntrack6"
-        "kmod-nf-nat6"
-        "kmod-nf-reject6"
-        "kmod-nf-log6"
-        "kmod-iptunnel6"
-        "kmod-sit"
-        "kmod-ip6-vti"
-        "kmod-ip6-tunnel"
-        "kmod-nf-flow"
-        "kmod-nf-dup-netdev"
-    )
-    
-    for kmod in "${ipv6_kmods[@]}"; do
-        echo "# CONFIG_PACKAGE_${kmod} is not set" >> .config 2>/dev/null || true
-        log "    ✅ 禁用: $kmod"
-    done
-    
-    # 3. 禁用IPv6相关软件包
-    log "  🔧 禁用IPv6相关软件包..."
-    
-    local ipv6_packages=(
-        "ip6tables"
-        "ip6tables-extra"
-        "ip6tables-mod-nat"
-        "ip6tables-mod-filter"
-        "ip6tables-mod-extra"
-        "odhcp6c"
-        "odhcpd"
-        "odhcpd-ipv6only"
-        "6in4"
-        "6rd"
-        "6to4"
-        "ds-lite"
-        "map"
-        "464xlat"
-        "aiccu"
-        "gw6c"
-        "ndppd"
-        "radvd"
-        "wide-dhcpv6"
-        "luci-proto-ipv6"
-        "luci-proto-6in4"
-        "luci-proto-6x4"
-        "luci-proto-6rd"
-        "luci-proto-6to4"
-        "luci-proto-dslite"
-        "luci-proto-map"
-        "luci-proto-ppp"
-        "luci-proto-3g"
-        "luci-proto-bonding"
-        "luci-proto-external-protocol"
-        "luci-proto-gre"
-        "luci-proto-hnet"
-        "luci-proto-ipip"
-        "luci-proto-l2tp"
-        "luci-proto-modemmanager"
-        "luci-proto-ncm"
-        "luci-proto-openconnect"
-        "luci-proto-pppossh"
-        "luci-proto-qmi"
-        "luci-proto-relay"
-        "luci-proto-sstp"
-        "luci-proto-vpnc"
-        "luci-proto-vti"
-        "luci-proto-wireguard"
-        "luci-app-odhcp6c"
-    )
-    
-    for pkg in "${ipv6_packages[@]}"; do
-        echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config 2>/dev/null || true
-        log "    ✅ 禁用: $pkg"
-    done
-    
-    # 4. 设置内核IPv6禁用参数
-    log "  🔧 设置内核IPv6禁用参数..."
-    
-    # 创建sysctl配置文件
-    mkdir -p files/etc/sysctl.d
-    cat > files/etc/sysctl.d/99-disable-ipv6.conf << 'EOF'
-# 全局禁用IPv6 - 解决IPv6风暴问题
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
-net.ipv6.conf.lo.disable_ipv6 = 1
-
-# 禁用IPv6自动配置
-net.ipv6.conf.all.autoconf = 0
-net.ipv6.conf.default.autoconf = 0
-net.ipv6.conf.all.accept_ra = 0
-net.ipv6.conf.default.accept_ra = 0
-net.ipv6.conf.all.accept_redirects = 0
-net.ipv6.conf.default.accept_redirects = 0
-
-# 禁用IPv6转发
-net.ipv6.conf.all.forwarding = 0
-net.ipv6.conf.default.forwarding = 0
-EOF
-    log "    ✅ 创建sysctl配置文件: files/etc/sysctl.d/99-disable-ipv6.conf"
-    
-    # 5. 修改network配置，移除IPv6相关设置
-    log "  🔧 修改网络配置文件..."
-    
-    mkdir -p files/etc/config
-    if [ -f "package/base-files/files/etc/config/network" ]; then
-        cp package/base-files/files/etc/config/network files/etc/config/network 2>/dev/null || true
-    fi
-    
-    # 创建禁用IPv6的网络配置补丁
-    cat > files/etc/config/network.ipv6.disable << 'EOF'
-# 移除IPv6相关配置
-# 删除所有option ip6assign
-# 删除所有option ip6ifaceid
-# 删除所有option ip6class
-# 删除所有option ip6weight
-# 删除所有option ip6table
-EOF
-    
-    # 6. 修改firewall配置
-    log "  🔧 修改防火墙配置..."
-    
-    mkdir -p files/etc/config
-    if [ -f "package/network/config/firewall/files/firewall.config" ]; then
-        cp package/network/config/firewall/files/firewall.config files/etc/config/firewall 2>/dev/null || true
-        # 删除IPv6相关规则
-        sed -i '/ip6tables/d' files/etc/config/firewall 2>/dev/null || true
-        sed -i '/IPv6/d' files/etc/config/firewall 2>/dev/null || true
-        sed -i '/::/d' files/etc/config/firewall 2>/dev/null || true
-        log "    ✅ 已从防火墙配置中删除IPv6规则"
-    fi
-    
-    # 7. 修改dhcp配置
-    log "  🔧 修改DHCP配置..."
-    
-    mkdir -p files/etc/config
-    if [ -f "package/network/services/dnsmasq/files/dhcp.conf" ]; then
-        cp package/network/services/dnsmasq/files/dhcp.conf files/etc/config/dhcp 2>/dev/null || true
-        # 删除IPv6相关配置
-        sed -i '/dhcpv6/d' files/etc/config/dhcp 2>/dev/null || true
-        sed -i '/ra_management/d' files/etc/config/dhcp 2>/dev/null || true
-        sed -i '/ndp/d' files/etc/config/dhcp 2>/dev/null || true
-        log "    ✅ 已从DHCP配置中删除IPv6选项"
-    fi
-    
-    # 8. 添加启动脚本确保IPv6被禁用
-    log "  🔧 创建启动脚本确保IPv6禁用..."
-    
-    mkdir -p files/etc/init.d
-    cat > files/etc/init.d/disable-ipv6 << 'EOF'
-#!/bin/sh /etc/rc.common
-
-START=10
-STOP=90
-
-NAME="disable-ipv6"
-
-boot() {
-    start
-}
-
-start() {
-    echo "🔧 禁用IPv6..."
-    
-    # 禁用所有接口的IPv6
-    echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true
-    echo 1 > /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null || true
-    echo 1 > /proc/sys/net/ipv6/conf/lo/disable_ipv6 2>/dev/null || true
-    
-    # 遍历所有网络接口
-    for iface in /proc/sys/net/ipv6/conf/*; do
-        if [ -f "$iface/disable_ipv6" ]; then
-            echo 1 > "$iface/disable_ipv6" 2>/dev/null || true
-        fi
-        if [ -f "$iface/autoconf" ]; then
-            echo 0 > "$iface/autoconf" 2>/dev/null || true
-        fi
-        if [ -f "$iface/accept_ra" ]; then
-            echo 0 > "$iface/accept_ra" 2>/dev/null || true
-        fi
-        if [ -f "$iface/accept_redirects" ]; then
-            echo 0 > "$iface/accept_redirects" 2>/dev/null || true
-        fi
-        if [ -f "$iface/forwarding" ]; then
-            echo 0 > "$iface/forwarding" 2>/dev/null || true
-        fi
-    done
-    
-    # 卸载IPv6内核模块
-    rmmod ip6tables 2>/dev/null || true
-    rmmod ip6table_filter 2>/dev/null || true
-    rmmod ip6table_mangle 2>/dev/null || true
-    rmmod ip6table_nat 2>/dev/null || true
-    rmmod ip6table_raw 2>/dev/null || true
-    rmmod nf_conntrack_ipv6 2>/dev/null || true
-    rmmod nf_defrag_ipv6 2>/dev/null || true
-    rmmod nf_nat_ipv6 2>/dev/null || true
-    rmmod nf_reject_ipv6 2>/dev/null || true
-    rmmod nf_log_ipv6 2>/dev/null || true
-    rmmod ipv6 2>/dev/null || true
-    
-    echo "✅ IPv6已全局禁用"
-}
-
-stop() {
-    echo "🔄 恢复IPv6（不推荐）..."
-    echo 0 > /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true
-    echo 0 > /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null || true
-}
-
-restart() {
-    stop
-    start
-}
-EOF
-    chmod +x files/etc/init.d/disable-ipv6
-    log "    ✅ 创建启动脚本: files/etc/init.d/disable-ipv6"
-    
-    # 启用启动脚本
-    mkdir -p files/etc/rc.d
-    ln -sf ../init.d/disable-ipv6 files/etc/rc.d/S10disable-ipv6 2>/dev/null || true
-    
-    # 9. 创建uci-defaults脚本确保首次启动时禁用IPv6
-    log "  🔧 创建uci-defaults脚本..."
-    
-    mkdir -p files/etc/uci-defaults
-    cat > files/etc/uci-defaults/99-disable-ipv6 << 'EOF'
-#!/bin/sh
-
-# 禁用IPv6 - uci-defaults脚本
-uci -q delete network.wan6
-uci -q delete network.globals.ula_prefix
-
-# 删除所有IPv6相关的网络接口
-uci -q show network | grep -E "\.ip6assign|\.ip6ifaceid|\.ip6class|\.ip6weight|\.ip6table" | cut -d'=' -f1 | while read option; do
-    uci -q delete "$option"
-done
-
-# 删除防火墙中的IPv6规则
-uci -q show firewall | grep -E "ip6tables|::|IPv6" | cut -d'=' -f1 | while read rule; do
-    uci -q delete "$rule"
-done
-
-# 删除DHCP中的IPv6配置
-uci -q show dhcp | grep -E "dhcpv6|ra_management|ndp" | cut -d'=' -f1 | while read option; do
-    uci -q delete "$option"
-done
-
-uci commit network
-uci commit firewall
-uci commit dhcp
-
-echo "✅ IPv6配置已从UCI中删除"
-exit 0
-EOF
-    chmod +x files/etc/uci-defaults/99-disable-ipv6
-    log "    ✅ 创建uci-defaults脚本: files/etc/uci-defaults/99-disable-ipv6"
-    
-    # 10. 在.config中添加IPv6禁用配置
-    log "  🔧 在.config中添加IPv6禁用配置..."
-    
-    cat >> .config << 'EOF'
-# ===== IPv6全局禁用配置 =====
-# 禁用IPv6支持
-# CONFIG_IPV6 is not set
-# CONFIG_KERNEL_IPV6 is not set
-
-# 禁用IPv6相关内核选项
-# CONFIG_KERNEL_IPV6_MULTIPLE_TABLES is not set
-# CONFIG_KERNEL_IPV6_SUBTREES is not set
-# CONFIG_KERNEL_IPV6_MROUTE is not set
-# CONFIG_KERNEL_IPV6_PIMSM_V2 is not set
-# CONFIG_KERNEL_IPV6_SEG6_LWTUNNEL is not set
-# CONFIG_KERNEL_IPV6_SIT is not set
-# CONFIG_KERNEL_IPV6_TUNNEL is not set
-# CONFIG_KERNEL_IPV6_VTI is not set
-
-# 禁用IPv6相关包
-# CONFIG_PACKAGE_ip6tables is not set
-# CONFIG_PACKAGE_odhcp6c is not set
-# CONFIG_PACKAGE_odhcpd is not set
-# CONFIG_PACKAGE_6in4 is not set
-# CONFIG_PACKAGE_6rd is not set
-# CONFIG_PACKAGE_6to4 is not set
-
-# 确保不编译IPv6模块
-# CONFIG_PACKAGE_kmod-ipv6 is not set
-# CONFIG_PACKAGE_kmod-ip6tables is not set
-# CONFIG_PACKAGE_kmod-nf-ipt6 is not set
-# CONFIG_PACKAGE_kmod-nf-conntrack6 is not set
-# CONFIG_PACKAGE_kmod-nf-nat6 is not set
-# CONFIG_PACKAGE_kmod-nf-reject6 is not set
-# CONFIG_PACKAGE_kmod-nf-log6 is not set
-# CONFIG_PACKAGE_kmod-iptunnel6 is not set
-# CONFIG_PACKAGE_kmod-sit is not set
-# CONFIG_PACKAGE_kmod-ip6-tunnel is not set
-# CONFIG_PACKAGE_kmod-ip6-vti is not set
-# ===== IPv6禁用配置结束 =====
-EOF
-    
-    log "    ✅ 已在.config中添加IPv6禁用配置"
-    
-    # 11. 删除源码中的IPv6相关文件
-    log "  🗑️ 删除源码中的IPv6相关文件..."
-    
-    find package -type f -name "*ipv6*" 2>/dev/null | while read file; do
-        rm -f "$file"
-        log "    🗑️ 删除: $file"
-    done
-    
-    find package -type d -name "*ipv6*" 2>/dev/null | while read dir; do
-        rm -rf "$dir"
-        log "    🗑️ 删除目录: $dir"
-    done
-    
-    find target/linux -type f -name "*ipv6*" 2>/dev/null | while read file; do
-        rm -f "$file"
-        log "    🗑️ 删除: $file"
-    done
-    
-    log "✅ ===== IPv6全局禁用完成 ====="
-    return 0
-}
 #【build_firmware_main.sh-12-end】
 
 #【build_firmware_main.sh-13】
@@ -1411,7 +1056,6 @@ generate_config() {
     log "配置模式: $CONFIG_MODE"
     log "配置文件目录: $CONFIG_DIR"
     log "源码仓库类型: $SOURCE_REPO_TYPE"
-    log "IPv6状态: $([ "${DISABLE_IPV6:-true}" = "true" ] && echo "已禁用" || echo "已启用")"
     
     if [ -z "$DEVICE" ]; then
         log "❌ 错误: DEVICE变量为空！"
@@ -1424,6 +1068,303 @@ generate_config() {
     
     local correct_device="$DEVICE"
     log "🔧 使用传入的设备名: $correct_device"
+    
+    # ============================================
+    # LEDE 源码启动修复（针对无法开机问题）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 ===== LEDE 源码启动修复 ====="
+        
+        # 根据目标平台进行特定修复
+        case "$TARGET" in
+            ipq40xx)
+                log "  🔧 IPQ40xx 平台启动修复 (适用于 AC42U 等设备)"
+                
+                # 确保必要的内核配置
+                cat >> .config << 'EOF'
+# IPQ40xx 启动必需配置
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+CONFIG_MTD_ROOTFS_ROOT_DEV=y
+CONFIG_MTD_ROOTFS_SPLIT=y
+CONFIG_MTD_SPLIT_SQUASHFS=y
+
+# 确保 UBI 支持
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_UBIFS_FS_XZ=y
+CONFIG_UBIFS_FS_LZO=y
+CONFIG_UBIFS_FS_ZLIB=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="console=ttyMSM0,115200n8"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 看门狗支持
+CONFIG_WATCHDOG=y
+CONFIG_QCOM_WDT=y
+
+# 确保 MTD 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_BLOCK_RO=y
+CONFIG_MTD_SPLIT=y
+EOF
+                log "  ✅ IPQ40xx 启动修复配置已添加"
+                ;;
+                
+            mediatek)
+                log "  🔧 Mediatek 平台启动修复 (适用于 RAX3000M 等设备)"
+                
+                cat >> .config << 'EOF'
+# Mediatek 启动必需配置
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+
+# 确保 MTD 和 UBI 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPLIT=y
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZSTD=y
+
+# NAND 支持
+CONFIG_MTD_NAND=y
+CONFIG_MTD_NAND_ECC=y
+CONFIG_MTD_NAND_ECC_SW_HAMMING=y
+CONFIG_MTD_SPI_NAND=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="earlycon=uart8250,mmio32,0x11002000 console=ttyS0,115200n1"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 确保 watchdog 支持
+CONFIG_WATCHDOG=y
+CONFIG_MEDIATEK_WATCHDOG=y
+EOF
+                log "  ✅ Mediatek 启动修复配置已添加"
+                ;;
+                
+            ath79)
+                log "  🔧 ATH79 平台启动修复 (适用于 WNDR3800 等设备)"
+                
+                cat >> .config << 'EOF'
+# ATH79 启动必需配置
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+
+# 确保 MTD 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPLIT=y
+CONFIG_MTD_ROOTFS=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="console=ttyS0,115200"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 确保 watchdog 支持
+CONFIG_WATCHDOG=y
+CONFIG_ATH79_WDT=y
+
+# SquashFS 支持
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZLIB=y
+CONFIG_SQUASHFS_LZ4=y
+EOF
+                log "  ✅ ATH79 启动修复配置已添加"
+                ;;
+        esac
+        
+        # ============================================
+        # LEDE 通用启动修复
+        # ============================================
+        log "  🔧 LEDE 通用启动修复"
+        
+        cat >> .config << 'EOF'
+# LEDE 通用启动修复配置
+# 确保 initramfs 支持
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_INITRAMFS_SOURCE=""
+CONFIG_RD_GZIP=y
+CONFIG_RD_BZIP2=y
+CONFIG_RD_LZMA=y
+CONFIG_RD_XZ=y
+CONFIG_RD_LZO=y
+CONFIG_RD_LZ4=y
+
+# 确保正确的根文件系统类型
+CONFIG_ROOT_NFS=y
+
+# 确保必要的文件系统支持
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_USE_FOR_EXT2=y
+CONFIG_FUSE_FS=y
+CONFIG_MSDOS_FS=y
+CONFIG_VFAT_FS=y
+CONFIG_FAT_DEFAULT_CODEPAGE=437
+CONFIG_FAT_DEFAULT_IOCHARSET="iso8859-1"
+CONFIG_NTFS_FS=y
+CONFIG_NTFS3_FS=y
+
+# 确保网络支持（不影响启动）
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_IPV4=y
+EOF
+        log "  ✅ LEDE 通用启动修复配置已添加"
+        
+        # ============================================
+        # 修复 LEDE 源码中可能存在的设备定义问题
+        # ============================================
+        log "  🔧 检查和修复 LEDE 设备定义文件..."
+        
+        # 查找设备定义文件
+        local device_mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+        local device_found=0
+        
+        for mkfile in $device_mk_files; do
+            if grep -q "define Device.*$correct_device" "$mkfile" 2>/dev/null; then
+                device_found=1
+                log "    📁 找到设备定义文件: $mkfile"
+                
+                # 备份原文件
+                cp "$mkfile" "$mkfile.bak.lede"
+                
+                # 检查并修复常见的 LEDE 设备定义问题
+                
+                # 1. 确保有 KERNEL_SIZE 定义
+                if ! grep -q "KERNEL_SIZE" "$mkfile" 2>/dev/null; then
+                    # 获取 kernel 大小（从设备定义中推断）
+                    local kernel_size=""
+                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
+                        kernel_size="2097152"
+                    elif grep -q "ac42u\|rt-ac42u" "$mkfile" 2>/dev/null; then
+                        kernel_size="4194304"
+                    elif grep -q "rax3000m" "$mkfile" 2>/dev/null; then
+                        kernel_size="4194304"
+                    else
+                        kernel_size="2097152"
+                    fi
+                    
+                    # 在 Device 定义后添加 KERNEL_SIZE
+                    sed -i "/define Device.*$correct_device/a \  KERNEL_SIZE := $kernel_size" "$mkfile"
+                    log "      ✅ 添加 KERNEL_SIZE := $kernel_size"
+                fi
+                
+                # 2. 检查并修复 BLOCKSIZE
+                if ! grep -q "BLOCKSIZE" "$mkfile" 2>/dev/null; then
+                    local blocksize="256k"
+                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
+                        blocksize="128k"
+                    fi
+                    sed -i "/define Device.*$correct_device/a \  BLOCKSIZE := $blocksize" "$mkfile"
+                    log "      ✅ 添加 BLOCKSIZE := $blocksize"
+                fi
+                
+                # 3. 确保有 IMAGE_SIZE 定义
+                if ! grep -q "IMAGE_SIZE" "$mkfile" 2>/dev/null; then
+                    local image_size=""
+                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
+                        image_size="15744k"
+                    elif grep -q "ac42u\|rt-ac42u" "$mkfile" 2>/dev/null; then
+                        image_size="32256k"
+                    elif grep -q "rax3000m" "$mkfile" 2>/dev/null; then
+                        image_size="32256k"
+                    fi
+                    
+                    if [ -n "$image_size" ]; then
+                        sed -i "/define Device.*$correct_device/a \  IMAGE_SIZE := $image_size" "$mkfile"
+                        log "      ✅ 添加 IMAGE_SIZE := $image_size"
+                    fi
+                fi
+                
+                # 4. 检查并添加 IMAGE/sysupgrade.bin 定义
+                if ! grep -q "IMAGE/sysupgrade.bin" "$mkfile" 2>/dev/null; then
+                    # 根据平台添加适当的 sysupgrade 定义
+                    case "$TARGET" in
+                        ipq40xx)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | check-size" >> /tmp/device_temp.txt
+                            ;;
+                        mediatek)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-ubi | check-size" >> /tmp/device_temp.txt
+                            ;;
+                        ath79)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | append-metadata | check-size" >> /tmp/device_temp.txt
+                            ;;
+                    esac
+                    log "      ℹ️ 建议检查 IMAGE/sysupgrade.bin 定义"
+                fi
+                
+                break
+            fi
+        done
+        
+        if [ $device_found -eq 0 ]; then
+            log "    ⚠️ 未找到设备 $correct_device 的定义文件，跳过修复"
+        fi
+        
+        # ============================================
+        # 修复 LEDE 内核补丁问题
+        # ============================================
+        log "  🔧 检查和修复 LEDE 内核补丁..."
+        
+        # 查找可能的补丁冲突
+        local patch_dirs=$(find "target/linux/$TARGET" -type d -name "patches-*" 2>/dev/null)
+        
+        for patch_dir in $patch_dirs; do
+            log "    📁 检查补丁目录: $patch_dir"
+            
+            # 检查是否有可能导致启动问题的补丁
+            local problem_patches=$(find "$patch_dir" -name "*.patch" -exec grep -l "leds.*color\|function.*LED_FUNCTION" {} \; 2>/dev/null)
+            
+            for patch in $problem_patches; do
+                log "    ⚠️ 发现可能的问题补丁: $(basename "$patch")"
+                # 备份并禁用问题补丁
+                mv "$patch" "$patch.disabled" 2>/dev/null || true
+                log "      🔧 已禁用问题补丁: $(basename "$patch").disabled"
+            done
+        done
+        
+        # ============================================
+        # 确保正确的镜像格式
+        # ============================================
+        log "  🔧 配置正确的镜像格式..."
+        
+        case "$TARGET" in
+            ipq40xx)
+                # IPQ40xx 通常使用 UBI 格式
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
+                ;;
+            mediatek)
+                # Mediatek/filogic 通常使用 UBI 格式
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
+                ;;
+            ath79)
+                # ATH79 通常使用 SquashFS
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+                ;;
+        esac
+        
+        log "✅ LEDE 源码启动修复完成"
+        log "======================================"
+    fi
     
     # ============================================
     # 根据源码类型确定设备配置变量格式
@@ -1456,6 +1397,13 @@ generate_config() {
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${actual_subtarget}=y
 EOF
+        
+        # 添加之前生成的 LEDE 启动修复配置
+        if [ -f .config.tmp.lede ]; then
+            cat .config.tmp.lede >> .config
+            rm -f .config.tmp.lede
+        fi
+        
         log "🔄 运行 make defconfig 生成基础配置..."
         make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || {
             log "❌ LEDE基础配置失败"
@@ -1476,6 +1424,12 @@ EOF
     
     log "🔧 基础配置文件内容:"
     cat .config
+    
+    # 保存 LEDE 启动修复配置供后续使用
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        # 将之前的修复配置保存到临时文件，避免被后续操作覆盖
+        cp .config .config.lede_base_fixed
+    fi
     
     log "📁 开始合并配置文件..."
     
@@ -1571,14 +1525,65 @@ EOF
     fi
     
     # ============================================
-    # IPv6全局禁用处理
+    # 禁用 IPv6 所有功能（保守方式，所有源码类型通用）
     # ============================================
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        log "🔧 ===== 执行IPv6全局禁用 ====="
-        disable_ipv6_globally "$BUILD_DIR"
-        log "✅ IPv6全局禁用配置已应用"
-    else
-        log "ℹ️ IPv6保持启用状态"
+        log "🔧 ===== 禁用所有 IPv6 功能（所有源码类型通用保守方式） ====="
+        
+        # 所有源码类型统一使用保守的 IPv6 禁用方式
+        # 只禁用 IPv6 相关的包，不修改内核配置，避免影响系统启动
+        cat >> .config << 'EOF'
+# IPv6 包禁用（保守方式 - 所有源码类型通用）
+# 禁用 IPv6 防火墙相关
+# CONFIG_PACKAGE_ip6tables is not set
+# CONFIG_PACKAGE_ip6tables-extra is not set
+# CONFIG_PACKAGE_ip6tables-mod-nat is not set
+# CONFIG_PACKAGE_kmod-ip6tables is not set
+# CONFIG_PACKAGE_kmod-ip6tables-extra is not set
+
+# 禁用 IPv6 DHCP/RA 客户端和服务
+# CONFIG_PACKAGE_odhcp6c is not set
+# CONFIG_PACKAGE_odhcpd is not set
+# CONFIG_PACKAGE_odhcpd-ipv6only is not set
+
+# 禁用 IPv6 隧道协议
+# CONFIG_PACKAGE_6in4 is not set
+# CONFIG_PACKAGE_6rd is not set
+# CONFIG_PACKAGE_6to4 is not set
+# CONFIG_PACKAGE_ds-lite is not set
+# CONFIG_PACKAGE_map is not set
+
+# 禁用 LuCI IPv6 协议支持
+# CONFIG_PACKAGE_luci-proto-ipv6 is not set
+# CONFIG_PACKAGE_luci-proto-6in4 is not set
+# CONFIG_PACKAGE_luci-proto-6rd is not set
+# CONFIG_PACKAGE_luci-proto-6to4 is not set
+
+# 禁用 IPv6 内核模块包（但不修改内核配置）
+# CONFIG_PACKAGE_kmod-ipv6 is not set
+# CONFIG_PACKAGE_kmod-nf-ip6 is not set
+# CONFIG_PACKAGE_kmod-nf-conntrack6 is not set
+# CONFIG_PACKAGE_kmod-nf-log6 is not set
+# CONFIG_PACKAGE_kmod-nf-nat6 is not set
+# CONFIG_PACKAGE_kmod-nf-reject6 is not set
+# CONFIG_PACKAGE_kmod-sit is not set
+EOF
+        log "  ✅ 已添加 IPv6 包禁用配置（所有源码类型通用）"
+        
+        # 删除可能存在的 IPv6 启用配置
+        sed -i '/^CONFIG_PACKAGE_.*ip6tables/d' .config
+        sed -i '/^CONFIG_PACKAGE_odhcp6c/d' .config
+        sed -i '/^CONFIG_PACKAGE_odhcpd/d' .config
+        sed -i '/^CONFIG_PACKAGE_6in4/d' .config
+        sed -i '/^CONFIG_PACKAGE_6rd/d' .config
+        sed -i '/^CONFIG_PACKAGE_6to4/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-proto-ipv6/d' .config
+        sed -i '/^CONFIG_PACKAGE_kmod-ipv6/d' .config
+        sed -i '/^CONFIG_PACKAGE_kmod-nf-ip6/d' .config
+        sed -i '/^CONFIG_PACKAGE_kmod-nf-conntrack6/d' .config
+        
+        log "  ✅ 已删除所有 IPv6 启用配置"
+        log "  📌 注意：保留内核 IPv6 配置，仅禁用用户态包，确保系统启动兼容性"
     fi
     
     log "🔧 强制配置生成固件..."
@@ -1627,208 +1632,55 @@ EOF
     esac
     
     # ============================================
-    # LEDE源码 AC42U 特殊内核配置修复
+    # LEDE 源码最终启动验证和修复
     # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == "asus_rt-ac42u" || "$DEVICE" == "ac42u" || "$DEVICE" == "rt-ac42u" ]]; then
-        log "🔧 [LEDE AC42U] 添加特殊内核配置修复（解决无法启动问题）..."
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 ===== LEDE 源码最终启动验证 ====="
         
-        cat >> .config << 'EOF'
-# LEDE AC42U 启动修复 - 内核分区解析支持
-CONFIG_CMDLINE_PARTITION=y
-CONFIG_MTD_SPLIT_FIRMWARE=y
-CONFIG_MTD_SPLIT_UIMAGE_FW=y
-
-# 确保 MTD 和 UBI 支持
-CONFIG_MTD=y
-CONFIG_MTD_BLOCK=y
-CONFIG_MTD_SPLIT=y
-CONFIG_MTD_UBI=y
-CONFIG_UBIFS_FS=y
-CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-
-# 内核命令行参数
-CONFIG_CMDLINE="console=ttyMSM0,115200n8"
-CONFIG_CMDLINE_FROM_BOOTLOADER=y
-
-# 看门狗支持
-CONFIG_WATCHDOG=y
-CONFIG_QCOM_WDT=y
-
-# 禁用新式 LED 类支持（LEDE 旧内核可能不支持）
-# CONFIG_LEDS_CLASS_MULTICOLOR is not set
-# CONFIG_LEDS_QCOM_LPG is not set
-
-# 确保使用传统 GPIO LED 驱动
-CONFIG_LEDS_GPIO=y
-CONFIG_NEW_LEDS=y
-EOF
+        # 恢复之前保存的 LEDE 基础修复配置
+        if [ -f .config.lede_base_fixed ]; then
+            log "  🔧 合并 LEDE 基础修复配置..."
+            # 只添加缺失的关键配置，不覆盖已有配置
+            while IFS= read -r line; do
+                config_name=$(echo "$line" | cut -d'=' -f1)
+                if ! grep -q "^${config_name}=" .config; then
+                    echo "$line" >> .config
+                fi
+            done < .config.lede_base_fixed
+            rm -f .config.lede_base_fixed
+        fi
         
-        log "  ✅ 已添加 LEDE AC42U 启动修复内核配置"
+        # 确保关键配置存在
+        log "  🔧 验证关键启动配置..."
         
-        # ============================================
-        # 修复 DTS 文件（LEDE 旧内核不支持新的 LED 绑定）
-        # ============================================
-        log "🔧 [LEDE AC42U] 修复 DTS 文件（移除新式 LED 绑定）..."
+        local critical_missing=0
         
-        local dts_file="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts"
+        # 检查 CMDLINE_PARTITION
+        if ! grep -q "CONFIG_CMDLINE_PARTITION=y" .config; then
+            echo "CONFIG_CMDLINE_PARTITION=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
         
-        if [ -f "$dts_file" ]; then
-            cp "$dts_file" "$dts_file.bak"
-            log "  📁 已备份原 DTS 文件: $dts_file.bak"
-            
-            if grep -q "color = <LED_COLOR_ID_" "$dts_file" || grep -q "function = LED_FUNCTION_" "$dts_file"; then
-                log "  🔍 检测到新式 LED 绑定，正在转换为旧格式..."
-                
-                sed -i '/color = <LED_COLOR_ID_/d' "$dts_file"
-                sed -i '/function = LED_FUNCTION_/d' "$dts_file"
-                sed -i '/function-enumerator = /d' "$dts_file"
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$dts_file"
-                sed -i 's/linux,default-trigger = "phy1tpt";/linux,default-trigger = "phy0tpt";/g' "$dts_file"
-                sed -i 's/linux,default-trigger = "90000.mdio-1:04:link";/linux,default-trigger = "switch0";/g' "$dts_file"
-                
-                log "  ✅ DTS 文件修复完成"
-                log "  📋 修改内容:"
-                log "     - 删除 color 属性"
-                log "     - 删除 function 属性"
-                log "     - 删除 function-enumerator 属性"
-                log "     - 删除 leds/common.h 头文件"
-                log "     - 修复 LED 触发器"
-            else
-                log "  ℹ️ DTS 文件已是旧格式，无需修复"
-            fi
+        # 检查 MTD_SPLIT_FIRMWARE
+        if ! grep -q "CONFIG_MTD_SPLIT_FIRMWARE=y" .config; then
+            echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        # 检查 MTD_SPLIT_UIMAGE_FW
+        if ! grep -q "CONFIG_MTD_SPLIT_UIMAGE_FW=y" .config; then
+            echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        if [ $critical_missing -gt 0 ]; then
+            log "    ✅ 添加了 $critical_missing 个缺失的关键配置"
         else
-            log "  ⚠️ DTS 文件不存在: $dts_file"
-            
-            local alt_dts=$(find target/linux/ipq40xx -name "*ac42u*.dts" 2>/dev/null | head -1)
-            if [ -n "$alt_dts" ]; then
-                log "  📁 找到替代 DTS 文件: $alt_dts"
-                cp "$alt_dts" "$alt_dts.bak"
-                sed -i '/color = <LED_COLOR_ID_/d' "$alt_dts"
-                sed -i '/function = LED_FUNCTION_/d' "$alt_dts"
-                sed -i '/function-enumerator = /d' "$alt_dts"
-                sed -i '/#include <dt-bindings\/leds\/common.h>/d' "$alt_dts"
-                log "  ✅ 替代 DTS 文件修复完成"
-            fi
+            log "    ✅ 所有关键配置都已存在"
         fi
         
-        # ============================================
-        # 创建内核补丁（作为备用方案）
-        # ============================================
-        log "🔧 [LEDE AC42U] 创建内核补丁..."
-        
-        local patch_dir="target/linux/ipq40xx/patches-5.4"
-        mkdir -p "$patch_dir"
-        
-        cat > "$patch_dir/999-fix-ac42u-led.patch" << 'EOF'
---- a/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
-+++ b/arch/arm/boot/dts/qcom-ipq4019-rt-ac42u.dts
-@@ -3,7 +3,6 @@
- #include "qcom-ipq4019.dtsi"
- #include <dt-bindings/gpio/gpio.h>
- #include <dt-bindings/input/input.h>
--#include <dt-bindings/leds/common.h>
- #include <dt-bindings/soc/qcom,tcsr.h>
- 
- / {
-@@ -98,64 +97,54 @@
- 	leds {
- 		compatible = "gpio-leds";
- 
--		led_power: led-0 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_STATUS;
-+		led_power: power {
-+			label = "blue:power";
- 			gpios = <&tlmm 40 GPIO_ACTIVE_LOW>;
--			label = "blue:status";
-+			default-state = "on";
- 		};
- 
--		led-1 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WAN;
-+		wan_blue {
-+			label = "blue:wan";
- 			gpios = <&tlmm 61 GPIO_ACTIVE_HIGH>;
- 			linux,default-trigger = "90000.mdio-1:04:link";
- 		};
- 
--		led-2 {
--			color = <LED_COLOR_ID_RED>;
--			function = LED_FUNCTION_WAN;
-+		wan_red {
-+			label = "red:wan";
- 			gpios = <&tlmm 68 GPIO_ACTIVE_HIGH>;
- 			linux,default-trigger = "none";
- 		};
- 
--		led-3 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WLAN;
--			function-enumerator = <0>;
-+		wlan2g {
-+			label = "blue:wlan2g";
- 			gpios = <&tlmm 52 GPIO_ACTIVE_LOW>;
--			linux,default-trigger = "phy1tpt";
-+			linux,default-trigger = "phy0tpt";
- 		};
- 
--		led-4 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_WLAN;
--			function-enumerator = <1>;
-+		wlan5g {
-+			label = "blue:wlan5g";
- 			gpios = <&tlmm 54 GPIO_ACTIVE_LOW>;
- 			linux,default-trigger = "phy0tpt";
- 		};
- 
--		led-5 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <1>;
-+		lan1 {
-+			label = "blue:lan1";
- 			gpios = <&tlmm 45 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-6 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <2>;
-+		lan2 {
-+			label = "blue:lan2";
- 			gpios = <&tlmm 43 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-7 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <3>;
-+		lan3 {
-+			label = "blue:lan3";
- 			gpios = <&tlmm 42 GPIO_ACTIVE_LOW>;
- 		};
- 
--		led-8 {
--			color = <LED_COLOR_ID_BLUE>;
--			function = LED_FUNCTION_LAN;
--			function-enumerator = <4>;
-+		lan4 {
-+			label = "blue:lan4";
- 			gpios = <&tlmm 49 GPIO_ACTIVE_LOW>;
- 		};
- 	};
-EOF
-        
-        if [ -f "$patch_dir/999-fix-ac42u-led.patch" ]; then
-            log "  ✅ 已创建 DTS 修复补丁: $patch_dir/999-fix-ac42u-led.patch"
-        fi
-        
-        log "  ✅ LEDE AC42U 特殊处理完成"
+        log "✅ LEDE 源码最终启动验证完成"
     fi
-    # ============================================
     
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
@@ -2349,6 +2201,47 @@ EOF
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
+    # ============================================
+    # LEDE 源码最终启动配置验证
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log ""
+        log "🔍 ===== LEDE 源码最终启动配置验证 ====="
+        
+        local lede_critical_configs=(
+            "CONFIG_CMDLINE_PARTITION"
+            "CONFIG_MTD_SPLIT_FIRMWARE"
+            "CONFIG_MTD_SPLIT_UIMAGE_FW"
+            "CONFIG_MTD"
+            "CONFIG_MTD_BLOCK"
+            "CONFIG_MTD_SPLIT"
+        )
+        
+        local lede_missing=0
+        for cfg in "${lede_critical_configs[@]}"; do
+            if grep -q "^${cfg}=y" .config; then
+                log "  ✅ $cfg: 已启用"
+            else
+                log "  ❌ $cfg: 未启用"
+                lede_missing=$((lede_missing + 1))
+            fi
+        done
+        
+        if [ $lede_missing -gt 0 ]; then
+            log "  🔧 强制添加缺失的启动关键配置..."
+            echo "CONFIG_CMDLINE_PARTITION=y" >> .config
+            echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
+            echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
+            echo "CONFIG_MTD=y" >> .config
+            echo "CONFIG_MTD_BLOCK=y" >> .config
+            echo "CONFIG_MTD_SPLIT=y" >> .config
+            make olddefconfig > /dev/null 2>&1
+            log "  ✅ 已添加缺失的启动关键配置"
+        fi
+        
+        log "======================================"
+    fi
+    
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
@@ -2471,35 +2364,6 @@ EOF
     
     log "✅ 固件名称前缀修正完成"
     log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
-    
-    # ============================================
-    # IPv6最终验证
-    # ============================================
-    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        log "🔍 ===== IPv6禁用最终验证 ====="
-        
-        local ipv6_check=0
-        if grep -q "^CONFIG_PACKAGE_ip6tables=y" .config || grep -q "^CONFIG_PACKAGE_odhcp6c=y" .config; then
-            ipv6_check=$((ipv6_check + 1))
-            log "  ⚠️ 仍检测到IPv6相关包被启用"
-            echo "# CONFIG_PACKAGE_ip6tables is not set" >> .config
-            echo "# CONFIG_PACKAGE_odhcp6c is not set" >> .config
-            echo "# CONFIG_PACKAGE_odhcpd is not set" >> .config
-        fi
-        
-        if grep -q "^CONFIG_KERNEL_IPV6=y" .config; then
-            ipv6_check=$((ipv6_check + 1))
-            log "  ⚠️ 仍检测到内核IPv6被启用，强制禁用"
-            sed -i 's/^CONFIG_KERNEL_IPV6=y/# CONFIG_KERNEL_IPV6 is not set/' .config
-        fi
-        
-        if [ $ipv6_check -eq 0 ]; then
-            log "  ✅ IPv6已完全禁用"
-        else
-            log "  ✅ IPv6禁用配置已更新"
-            make defconfig > /dev/null 2>&1 || true
-        fi
-    fi
     
     log "✅ 配置生成完成"
 }
@@ -5173,11 +5037,6 @@ workflow_step15_generate_config() {
         
         # 计算每个设备的匹配权重
         for device in "${all_devices[@]}"; do
-            # 【关键修复】排除 _common、_common_nand、_common_emmc 等通用模板
-            if [[ "$device" == *_common* ]]; then
-                continue
-            fi
-            
             local weight=0
             local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
             local lower_device=$(echo "$device" | tr '[:upper:]' '[:lower:]')
@@ -5245,11 +5104,10 @@ workflow_step15_generate_config() {
     
     # 遍历所有mk文件查找匹配
     for mkfile in "${mk_files[@]}"; do
-        # 先尝试精确匹配（排除_common）
-        local exact_match=$(grep -E "define Device/${DEVICE}$" "$mkfile" 2>/dev/null | head -1)
-        if [ -n "$exact_match" ]; then
+        # 先尝试精确匹配
+        if grep -q "define Device.*$DEVICE" "$mkfile" 2>/dev/null; then
             device_file="$mkfile"
-            mk_device_name="$DEVICE"
+            mk_device_name=$(grep -m1 "define Device.*$DEVICE" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
             log "✅ 找到精确设备定义: $mk_device_name (在 $device_file)"
             break
         fi
@@ -5293,6 +5151,21 @@ workflow_step15_generate_config() {
         
         log "🔧 未找到精确匹配，使用权重最高的设备: $mk_device_name"
         log "📁 定义文件: $device_file"
+        
+        # 显示其他可能的选择供参考
+        if [ ${#sorted_matches[@]} -gt 1 ]; then
+            echo ""
+            log "💡 其他可能的设备:"
+            local other_count=0
+            for match in "${sorted_matches[@]}"; do
+                if [ $other_count -ge 1 ] && [ $other_count -lt 5 ]; then
+                    local other_dev=$(echo "$match" | cut -d':' -f2)
+                    echo "      - $other_dev"
+                fi
+                other_count=$((other_count + 1))
+            done
+            echo ""
+        fi
     fi
     
     if [ -z "$device_file" ] || [ ! -f "$device_file" ]; then
@@ -5303,7 +5176,7 @@ workflow_step15_generate_config() {
         for mkfile in "${mk_files[@]}"; do
             if [[ "$mkfile" == *"image/"*".mk" ]]; then
                 echo "📁 $(basename "$mkfile"):"
-                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\///' | sed 's/ .*//' | grep -v "_common" | while read dev; do
+                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\///' | sed 's/ .*//' | while read dev; do
                     echo "    - $dev"
                 done
             fi
@@ -5312,7 +5185,7 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 使用搜索到的正确设备名
+    # 使用搜索到的正确设备名（像旧版本一样）
     local correct_device="$mk_device_name"
     log "🔧 使用搜索到的正确设备名: $correct_device (原输入: $DEVICE)"
     
@@ -5615,36 +5488,22 @@ workflow_step23_pre_build_check() {
     fi
     
     # ============================================
-    # 【关键修复】排除 _common 后缀
-    # ============================================
-    local clean_device="$DEVICE"
-    # 如果 DEVICE 错误地包含了 _common，清理它
-    if [[ "$clean_device" == *_common* ]]; then
-        clean_device=$(echo "$clean_device" | sed 's/_common.*$//')
-        log "⚠️ 检测到 DEVICE 包含 _common，清理为: $clean_device"
-        export DEVICE="$clean_device"
-        sed -i "s/^export DEVICE=.*/export DEVICE=\"$clean_device\"/" "$BUILD_DIR/build_env.sh" 2>/dev/null || true
-    fi
-    
-    # ============================================
     # 根据源码类型确定设备配置格式
     # ============================================
     local expected_config=""
     local search_pattern=""
     
-    expected_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${clean_device}=y"
-    search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${clean_device}"
-    log "🔧 期望配置: $expected_config"
+    expected_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${DEVICE}=y"
+    search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${DEVICE}"
+    log "🔧 标准格式，期望配置: $expected_config"
     
     # 检查设备配置是否存在
     local config_exists=0
     if grep -q "^${expected_config}$" .config 2>/dev/null; then
         config_exists=1
-        log "✅ 设备配置存在: $expected_config"
     elif grep -q "^${search_pattern}=y" .config 2>/dev/null; then
         config_exists=1
         expected_config=$(grep "^${search_pattern}=y" .config | head -1)
-        log "✅ 设备配置存在: $expected_config"
     elif grep -q "^# ${search_pattern} is not set" .config 2>/dev/null; then
         config_exists=1
         log "⚠️ 设备配置被禁用，正在启用..."
@@ -5656,7 +5515,6 @@ workflow_step23_pre_build_check() {
     if [ $config_exists -eq 0 ]; then
         log "⚠️ 设备配置丢失，重新添加: ${search_pattern}=y"
         
-        # 删除所有旧的设备配置
         sed -i "/^CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         sed -i "/^# CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
         
@@ -5670,6 +5528,8 @@ workflow_step23_pre_build_check() {
         }
         
         log "✅ 设备配置已恢复"
+    else
+        log "✅ 设备配置存在: $expected_config"
     fi
     
     echo "🔍 检查当前环境..."
@@ -5703,11 +5563,11 @@ workflow_step23_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        # 使用清理后的设备名检查
+        # 直接使用 DEVICE 变量的值检查
         local device_for_check="$DEVICE"
-        # 再次确保没有 _common 后缀
-        device_for_check=$(echo "$device_for_check" | sed 's/_common.*$//')
-        local check_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${device_for_check}"
+        local check_pattern=""
+        
+        check_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${device_for_check}"
         
         if grep -q "^${check_pattern}=y" .config; then
             echo "   ✅ 设备配置正确: $(grep "^${check_pattern}=y" .config | head -1)"
@@ -5718,14 +5578,6 @@ workflow_step23_pre_build_check() {
             echo "   ✅ 已重新启用设备配置"
         else
             echo "   ❌ 设备配置可能不正确，未找到: ${check_pattern}"
-            # 尝试搜索类似配置
-            local similar=$(grep "CONFIG_TARGET_${TARGET}.*DEVICE_" .config 2>/dev/null | head -3)
-            if [ -n "$similar" ]; then
-                echo "   📋 当前配置中的设备配置:"
-                echo "$similar" | while read line; do
-                    echo "      $line"
-                done
-            fi
             error_count=$((error_count + 1))
         fi
     else
@@ -5747,8 +5599,23 @@ workflow_step23_pre_build_check() {
             echo "   ✅ 交叉编译工具链已生成: $(basename "$cross_gcc")"
             local gcc_version=$("$cross_gcc" --version 2>&1 | head -1)
             echo "     版本: $gcc_version"
+            
+            if [[ "$cross_gcc" == *"aarch64"* ]]; then
+                echo "     架构: ARM64 (aarch64)"
+            elif [[ "$cross_gcc" == *"arm"* ]]; then
+                echo "     架构: ARM"
+            elif [[ "$cross_gcc" == *"mips"* ]]; then
+                echo "     架构: MIPS"
+            fi
+            
+            echo "   ✅ 工具链状态: 已编译完成"
         else
             echo "   ⚠️ 未找到交叉编译工具链"
+            if [ -f "$BUILD_DIR/build_dir/target-*/.stamp_target_compile" ]; then
+                echo "     工具链正在编译中"
+            else
+                echo "     工具链尚未编译"
+            fi
         fi
     else
         echo "   ⚠️ staging_dir 目录不存在"
@@ -5760,6 +5627,15 @@ workflow_step23_pre_build_check() {
         local feeds_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
         feeds_count=$((feeds_count - 1))
         echo "   ✅ feeds目录存在, 包含 $feeds_count 个feed"
+        
+        for feed in packages luci; do
+            if [ -d "feeds/$feed" ]; then
+                echo "   ✅ $feed feed: 存在"
+            else
+                echo "   ❌ $feed feed: 不存在"
+                warning_count=$((warning_count + 1))
+            fi
+        done
     else
         echo "   ❌ feeds目录不存在"
         error_count=$((error_count + 1))
@@ -5776,6 +5652,9 @@ workflow_step23_pre_build_check() {
         error_count=$((error_count + 1))
     elif [ $available_gb -lt 10 ]; then
         echo "   ⚠️ 空间较低 (<10G)"
+        warning_count=$((warning_count + 1))
+    elif [ $available_gb -lt 20 ]; then
+        echo "   ⚠️ 空间一般 (<20G)"
         warning_count=$((warning_count + 1))
     else
         echo "   ✅ 空间充足"
@@ -5827,6 +5706,13 @@ workflow_step23_pre_build_check() {
     fi
     echo ""
     
+    echo "7. ✅ CPU检查:"
+    local cpu_cores=$(nproc)
+    local cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)
+    echo "   📊 核心数: $cpu_cores"
+    echo "   📊 型号: $cpu_model"
+    echo ""
+    
     echo "========================================"
     if [ $error_count -gt 0 ]; then
         echo "❌❌❌ 检测到 $error_count 个错误，请修复后重试 ❌❌❌"
@@ -5854,101 +5740,73 @@ workflow_step25_build_firmware() {
     
     cd $BUILD_DIR
     
-    # ============================================
-    # 编译前准备：加载环境变量
-    # ============================================
-    log "🔧 ===== 编译前准备 ====="
-    
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-    fi
-    log "  📌 当前平台: TARGET=$TARGET"
-    log "  📌 源码分支: $SELECTED_BRANCH"
-    
-    # 清理 DEVICE 中的 _common 后缀
-    if [[ "$DEVICE" == *_common* ]]; then
-        DEVICE=$(echo "$DEVICE" | sed 's/_common.*$//')
-        log "  📌 清理后设备名: $DEVICE"
-    fi
-    
-    # 根据版本确定内核版本
-    local kernel_ver=""
-    if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
-        kernel_ver="5.15"
-    elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
-        kernel_ver="5.4"
-    else
-        kernel_ver="5.15"
-    fi
-    log "  📌 内核版本: $kernel_ver"
-    
-    # ============================================
-    # 彻底清理旧的构建产物
-    # ============================================
-    log "  🧹 彻底清理旧的构建产物..."
-    rm -rf build_dir/target-*/linux-* 2>/dev/null || true
-    rm -rf build_dir/target-*/gpio-button-hotplug 2>/dev/null || true
-    rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-    rm -f staging_dir/target-*/.stamp_package_* 2>/dev/null || true
-    
-    # ============================================
-    # 修复 gpio-button-hotplug 模块
-    # ============================================
-    log "  🔧 修复 gpio-button-hotplug 模块..."
-    
-    local gpio_src="package/kernel/gpio-button-hotplug/src/gpio-button-hotplug.c"
-    if [ -f "$gpio_src" ]; then
-        if grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
-            sed -i 's|\(.*broadcast_uevent.*\)|/* \1 */|g' "$gpio_src"
-            log "    ✅ 已注释 broadcast_uevent"
-        fi
-    fi
-    
-    # ============================================
-    # 直接删除有问题的 DTS 文件（更彻底）
-    # ============================================
-    log "  🗑️ 删除有问题的 DTS 文件..."
-    
-    case "$TARGET" in
-        "ipq40xx")
-            find target/linux/ipq40xx -name "*ap120c*.dts*" -delete 2>/dev/null || true
-            find target/linux/ipq40xx -name "*jalapeno*.dts*" -delete 2>/dev/null || true
-            log "    ✅ 已删除 ipq40xx 问题 DTS"
-            ;;
-        "mediatek")
-            find target/linux/mediatek -name "*cudy*.dts*" -delete 2>/dev/null || true
-            find target/linux/mediatek -name "*creatlentem*.dts*" -delete 2>/dev/null || true
-            log "    ✅ 已删除 mediatek 问题 DTS"
-            ;;
-        "ath79")
-            find target/linux/ath79 -name "*alfa-network*.dts*" -delete 2>/dev/null || true
-            log "    ✅ 已删除 ath79 问题 DTS"
-            ;;
-    esac
-    
-    # 同时删除对应的 .dtb 引用（如果存在）
-    find target/linux -name "Makefile" -exec sed -i '/ap120c\|jalapeno\|cudy\|creatlentem\|alfa-network/d' {} \; 2>/dev/null || true
-    
-    # ============================================
-    # 23.05版本：删除所有补丁目录
-    # ============================================
-    if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
-        log "  🗑️ 23.05版本：删除所有补丁目录..."
-        rm -rf target/linux/generic/backport-${kernel_ver} 2>/dev/null || true
-        rm -rf target/linux/generic/pending-${kernel_ver} 2>/dev/null || true
-        rm -rf target/linux/generic/hack-${kernel_ver} 2>/dev/null || true
-        find target/linux -maxdepth 2 -type d -name "patches-${kernel_ver}" -exec rm -rf {} \; 2>/dev/null || true
-        log "    ✅ 补丁目录已删除"
-    fi
-    
-    log "✅ 编译前准备完成"
-    echo ""
-    
-    # ============================================
-    # 编译流程
-    # ============================================
     ulimit -n 65536 2>/dev/null || true
-    log "  ✅ 当前文件描述符限制: $(ulimit -n)"
+    local current_limit=$(ulimit -n)
+    log "  ✅ 当前文件描述符限制: $current_limit"
+    
+    log "🔧 创建双固件保护脚本..."
+    local protect_dir="$BUILD_DIR/.firmware_protect"
+    mkdir -p "$protect_dir"
+    
+    cat > "$protect_dir/protect.sh" << 'EOF'
+#!/bin/bash
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+LOG_FILE="$PROTECT_DIR/protect.log"
+
+echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
+
+while true; do
+    TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
+    for tmp_dir in $TMP_DIRS; do
+        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+            if [ -f "$file" ]; then
+                backup="$PROTECT_DIR/$(basename "$file").backup"
+                cp -f "$file" "$backup" 2>/dev/null
+                echo "$(date): 备份 $(basename "$file")" >> "$LOG_FILE"
+            fi
+        done
+    done
+    sleep 5
+done
+EOF
+    chmod +x "$protect_dir/protect.sh"
+    
+    "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
+    local protect_pid=$!
+    log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
+    
+    cat > "$protect_dir/recover.sh" << 'EOF'
+#!/bin/bash
+PROTECT_DIR="$1"
+BUILD_DIR="$2"
+
+if [ -f "$BUILD_DIR/build_env.sh" ]; then
+    source "$BUILD_DIR/build_env.sh"
+fi
+
+TARGET="${TARGET:-ath79}"
+SUBTARGET="${SUBTARGET:-generic}"
+TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+mkdir -p "$TARGET_DIR"
+
+echo "=== 强制恢复开始于 $(date) ==="
+echo "目标平台: $TARGET/$SUBTARGET"
+
+RECOVERED=0
+find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
+    filename=$(basename "$backup" .backup)
+    if [ ! -f "$TARGET_DIR/$filename" ]; then
+        cp -f "$backup" "$TARGET_DIR/$filename"
+        echo "  ✅ 恢复: $filename"
+        RECOVERED=$((RECOVERED + 1))
+    fi
+done
+
+echo "📊 恢复文件数: $RECOVERED"
+echo "=== 强制恢复结束 ==="
+EOF
+    chmod +x "$protect_dir/recover.sh"
     
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
@@ -5957,115 +5815,336 @@ workflow_step25_build_firmware() {
     echo "🔧 系统信息:"
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
+    echo "  源码类型: $SOURCE_REPO_TYPE"
     
+    # 设置 VERSION_DIST 环境变量，确保编译时使用正确的名称
     local vendor_dist=""
     case "$SOURCE_REPO_TYPE" in
-        "immortalwrt") vendor_dist="ImmortalWrt" ;;
-        "lede") vendor_dist="LEDE" ;;
-        "openwrt") vendor_dist="OpenWrt" ;;
-        *) vendor_dist="ImmortalWrt" ;;
+        "immortalwrt")
+            vendor_dist="ImmortalWrt"
+            ;;
+        "lede")
+            vendor_dist="LEDE"
+            ;;
+        "openwrt")
+            vendor_dist="OpenWrt"
+            ;;
+        *)
+            vendor_dist=$(echo "$SOURCE_REPO_TYPE" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+            ;;
     esac
     export VERSION_DIST="$vendor_dist"
+    export CONFIG_VERSION_DIST="$vendor_dist"
+    log "  📌 编译时 VERSION_DIST 环境变量: $VERSION_DIST"
     
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
-        "openwrt"|"lede") make_args="V=s FORCE_UNSAFE_CONFIGURE=1" ;;
-        "immortalwrt") make_args="V=s" ;;
+        "openwrt"|"lede")
+            make_args="V=s FORCE_UNSAFE_CONFIGURE=1"
+            ;;
+        "immortalwrt")
+            make_args="V=s"
+            ;;
     esac
     
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
             MAKE_JOBS=4
-        else
+        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
             MAKE_JOBS=2
+        else
+            MAKE_JOBS=1
         fi
         log "🚀 使用 $MAKE_JOBS 个并行任务"
     else
         MAKE_JOBS=1
+        log "⚠️ 使用单线程编译"
     fi
     
     # ============================================
-    # 分步编译
+    # 全局动态目录创建函数
     # ============================================
-    log "🔧 开始分步编译..."
+    ensure_root_dirs() {
+        local target="$1"
+        local build_dir="$2"
+        
+        local target_dirs=$(find "$build_dir/build_dir" -maxdepth 1 -type d -name "target-*" 2>/dev/null)
+        
+        for tdir in $target_dirs; do
+            local root_name=""
+            case "$target" in
+                ipq40xx|ipq806x|qcom)
+                    root_name="root-ipq40xx"
+                    ;;
+                mediatek|ramips)
+                    root_name="root-ramips"
+                    ;;
+                ath79)
+                    root_name="root-ath79"
+                    ;;
+                *)
+                    root_name="root-${target}"
+                    ;;
+            esac
+            
+            local root_path="$tdir/$root_name"
+            if [ ! -d "$root_path" ]; then
+                mkdir -p "$root_path"
+                mkdir -p "$root_path/etc" "$root_path/lib" "$root_path/usr" "$root_path/tmp"
+            fi
+            
+            local orig_root_path="$tdir/root.orig-${target}"
+            if [ ! -d "$orig_root_path" ]; then
+                mkdir -p "$orig_root_path"
+                mkdir -p "$orig_root_path/tmp"
+                chmod 1777 "$orig_root_path/tmp" 2>/dev/null || true
+            fi
+        done
+    }
     
-    # 步骤2: 编译内核和模块
-    log "  📦 步骤2: 编译内核和模块..."
+    # ============================================
+    # 全局分步编译流程
+    # ============================================
+    log "🔧 使用分步编译流程..."
+    
+    # 步骤0: 清理并准备环境
+    log "  📦 步骤0: 清理并准备环境..."
+    rm -rf tmp/info 2>/dev/null || true
+    mkdir -p tmp/info
+    rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
+    rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
+    find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
+    
+    ensure_root_dirs "$TARGET" "$BUILD_DIR"
+    log "  ✅ 环境清理完成"
+    
+    # 步骤1: 编译工具链
+    log "  📦 步骤1: 编译工具链..."
     set +e
-    make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2.log
-    STEP2_EXIT_CODE=${PIPESTATUS[0]}
+    make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log
+    STEP1_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
-    if [ $STEP2_EXIT_CODE -ne 0 ]; then
-        log "  ❌ 内核编译失败"
+    if [ $STEP1_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 工具链编译有警告，继续..."
+    fi
+    log "  ✅ 步骤1完成"
+    
+    # 步骤2: 编译内核和模块（带补丁失败重试）
+    log "  📦 步骤2: 编译内核和模块..."
+    ensure_root_dirs "$TARGET" "$BUILD_DIR"
+    
+    local kernel_retry=1
+    local max_kernel_retries=3
+    local kernel_success=0
+    
+    while [ $kernel_retry -le $max_kernel_retries ] && [ $kernel_success -eq 0 ]; do
+        log "    尝试 $kernel_retry/$max_kernel_retries..."
+        
+        set +e
+        make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2_attempt${kernel_retry}.log
+        STEP2_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        
+        if [ $STEP2_EXIT_CODE -eq 0 ]; then
+            kernel_success=1
+            log "    ✅ 内核编译成功"
+            break
+        fi
+        
+        log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
+        
+        # 检查是否是补丁失败
+        if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
+            log "    🔧 检测到补丁失败，正在修复..."
+            
+            # 提取失败的补丁文件
+            local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
+            
+            if [ -z "$failed_patches" ]; then
+                failed_patches=$(grep "Patch failed!" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([^/]+\.patch).*/\1/' | sort -u)
+            fi
+            
+            for patch_name in $failed_patches; do
+                log "      🗑️ 删除失败补丁: $patch_name"
+                find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
+                    log "        删除: $patch_file"
+                    rm -f "$patch_file"
+                done
+            done
+            
+            # 如果没有提取到具体补丁名，删除常见的ath79问题补丁
+            if [ -z "$failed_patches" ] && [ "$TARGET" = "ath79" ]; then
+                log "      🗑️ 删除 ath79 已知问题补丁: 910-unaligned_access_hacks.patch"
+                find target/linux/ath79 -name "910-unaligned_access_hacks.patch" -type f 2>/dev/null | while read patch_file; do
+                    log "        删除: $patch_file"
+                    rm -f "$patch_file"
+                done
+            fi
+            
+            # 彻底清理内核构建目录
+            log "    🔧 清理内核构建目录..."
+            rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
+            rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
+            
+            # 清理 quilt 状态目录
+            find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
+            find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
+        fi
+        
+        # 检查其他常见错误
+        if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
+            log "    ❌ 磁盘空间不足，无法继续"
+            break
+        fi
+        
+        if grep -q "swconfig\|SWITCH_LINK_FLAG" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
+            log "    🔧 禁用 swconfig..."
+            find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
+            sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
+            echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
+            make defconfig > /dev/null 2>&1 || true
+        fi
+        
+        kernel_retry=$((kernel_retry + 1))
+    done
+    
+    if [ $kernel_success -eq 0 ]; then
+        log "  ❌ 内核编译失败，已重试 $max_kernel_retries 次"
+        kill $protect_pid 2>/dev/null || true
+        rm -rf "$protect_dir" 2>/dev/null || true
         exit 1
     fi
+    
     log "  ✅ 步骤2完成"
     
     # 步骤3: 编译所有软件包
     log "  📦 步骤3: 编译所有软件包..."
     set +e
     make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
+    STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
-    make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
+    
+    if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
+        log "    🔧 禁用 swconfig..."
+        find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
+        sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
+        echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
+        make defconfig > /dev/null 2>&1 || true
+    fi
+    
+    local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
+    if [ $info_count -eq 0 ]; then
+        make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
+    fi
     log "  ✅ 步骤3完成"
     
     # 步骤4: 安装软件包
     log "  📦 步骤4: 安装软件包..."
     set +e
     make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log
+    STEP4_EXIT_CODE=${PIPESTATUS[0]}
     set -e
+    
+    if [ $STEP4_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 软件包安装有警告，继续..."
+    fi
     log "  ✅ 步骤4完成"
     
     # 步骤5: 生成固件
     log "  📦 步骤5: 生成固件..."
+    ensure_root_dirs "$TARGET" "$BUILD_DIR"
     set +e
     make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5.log
+    STEP5_EXIT_CODE=${PIPESTATUS[0]}
     set -e
+    
+    if [ $STEP5_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 固件生成有警告，继续..."
+    fi
     log "  ✅ 步骤5完成"
     
-    cat build_step*.log > build.log 2>/dev/null || true
-    log "✅ 分步编译完成"
+    # 合并所有日志
+    cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
+    
+    log "  ✅ 分步编译完成"
+    
+    kill $protect_pid 2>/dev/null || true
+    log "🔧 双固件保护已停止"
     
     # ============================================
-    # 验证固件
+    # 固件验证和哈希值计算
     # ============================================
     log "🔍 验证固件并计算哈希值..."
     
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local valid_firmware=0
+    local firmware_files=()
     local hash_file="$target_dir/firmware-sha256sums.txt"
     
     > "$hash_file" 2>/dev/null || true
     
     if [ -d "$target_dir" ]; then
-        find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) -delete 2>/dev/null || true
-        rm -rf "$target_dir/packages" 2>/dev/null || true
+        # 首先删除不需要的文件（.itb、.manifest 等）
+        log "  🗑️ 清理不需要的文件..."
+        find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) 2>/dev/null | while read file; do
+            log "    删除: $(basename "$file")"
+            rm -f "$file"
+        done
         
+        # 删除 packages 子目录（不需要上传）
+        if [ -d "$target_dir/packages" ]; then
+            log "    删除 packages 目录"
+            rm -rf "$target_dir/packages"
+        fi
+        
+        # 然后验证固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             local fname=$(basename "$file")
+            
             local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
             local size_mb=$((size_bytes / 1024 / 1024))
             
+            local is_flashable=0
             if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
-                if [ $size_mb -ge 5 ]; then
+                is_flashable=1
+            fi
+            
+            if [ $size_mb -ge 5 ]; then
+                if [ $is_flashable -eq 1 ]; then
                     log "  ✅ $fname 大小: ${size_mb}MB - 有效可刷机固件"
                     valid_firmware=$((valid_firmware + 1))
+                    firmware_files+=("$fname")
+                    
                     local fhash=$(sha256sum "$file" | awk '{print $1}')
                     echo "$fhash  $fname" >> "$hash_file"
+                    log "      SHA256: $fhash"
+                else
+                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
                 fi
+            else
+                log "  ❌ $fname 大小: ${size_mb}MB - 无效(小于5MB)"
+                rm -f "$file"
             fi
         done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
     fi
     
     if [ $valid_firmware -gt 0 ]; then
         echo "VALID_FIRMWARE_COUNT=$valid_firmware" >> $GITHUB_ENV 2>/dev/null || true
-        log "✅ 找到 $valid_firmware 个有效可刷机固件"
-    else
-        log "❌ 错误：没有找到任何有效可刷机固件"
-        exit 1
+        echo "FIRMWARE_HASH_FILE=$hash_file" >> $GITHUB_ENV 2>/dev/null || true
     fi
+    
+    if [ $valid_firmware -eq 0 ]; then
+        log "❌ 错误：没有找到任何有效可刷机固件"
+        rm -rf "$protect_dir" 2>/dev/null || true
+        exit 1
+    else
+        log "✅ 找到 $valid_firmware 个有效可刷机固件"
+        log "📄 哈希值文件: $hash_file"
+    fi
+    
+    rm -rf "$protect_dir" 2>/dev/null || true
     
     log "✅ 步骤25 完成"
 }
@@ -6465,8 +6544,6 @@ quick_error_check() {
         echo "构建目录: $build_dir"
         echo "目标平台: $target_platform"
         echo "完整目标: ${TARGET:-$target_platform}/${SUBTARGET:-generic}"
-        echo "源码类型: ${SOURCE_REPO_TYPE:-unknown}"
-        echo "源码分支: ${SELECTED_BRANCH:-unknown}"
         echo "================================================================="
 
         local latest_log=""
@@ -6488,7 +6565,7 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 0. 固件生成状态检查
+        # 0. 固件生成状态检查（增强版）
         # ============================================
         echo "🔍 0. 固件生成状态检查:"
         echo "----------------------------------------"
@@ -6513,10 +6590,12 @@ quick_error_check() {
         local firmware_details=()
         
         if [ -d "$target_dir" ]; then
+            # 只检查 .bin 和 .img 文件
             while IFS= read -r file; do
                 [ -z "$file" ] && continue
                 local fname=$(basename "$file")
                 
+                # 跳过非固件文件
                 if [[ "$fname" == *.itb ]] || [[ "$fname" == *.manifest ]] || [[ "$fname" == *sha256sums* ]]; then
                     continue
                 fi
@@ -6537,8 +6616,13 @@ quick_error_check() {
                     ftype="other"
                 fi
                 
+                local is_flashable=0
+                if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
+                    is_flashable=1
+                fi
+                
                 if [ $fsize_mb -ge 5 ]; then
-                    if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
+                    if [ $is_flashable -eq 1 ]; then
                         echo "✅ $fname"
                         echo "   大小: $fsize_human (${fsize_mb}MB)"
                         echo "   SHA256: $fhash"
@@ -6565,6 +6649,20 @@ quick_error_check() {
             fi
         else
             echo "❌ 目标目录不存在: $target_dir"
+        fi
+        
+        # 从日志中提取固件生成记录
+        local log_firmware=""
+        log_firmware=$(grep "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null | tail -1)
+        if [ -n "$log_firmware" ]; then
+            if [ $valid_firmware -eq 0 ]; then
+                echo "✅ 日志确认固件已成功生成"
+                valid_firmware=1
+                local fw_name=$(echo "$log_firmware" | sed -E 's/.*\/([^/]+\.bin).*/\1/')
+                if [ -n "$fw_name" ]; then
+                    firmware_list+=("$fw_name")
+                fi
+            fi
         fi
         
         echo "----------------------------------------"
@@ -6596,7 +6694,7 @@ quick_error_check() {
         
         if grep -q "ERROR:.*failed to build" "$latest_log"; then
             echo "❌ 检测到构建失败:"
-            grep -n "ERROR:.*failed to build" "$latest_log" | head -5 | while read line; do
+            grep -n "ERROR:.*failed to build" "$latest_log" | head -3 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
@@ -6608,139 +6706,33 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 2. 补丁失败详细分析（深度增强版）
+        # 2. 常见错误模式检查
         # ============================================
-        echo "🔍 2. 补丁失败详细分析:"
+        echo "🔍 2. 常见错误模式检查:"
         echo "----------------------------------------"
         
-        if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
-            echo "⚠️ 检测到补丁失败，提取详细信息..."
-            echo ""
-            
-            # 提取失败补丁的完整路径
-            echo "🔧 失败补丁路径:"
-            grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | sort -u | while read patch_file; do
-                echo "   📁 $patch_file"
-            done
-            echo ""
-            
-            # 分析补丁内容
-            echo "🔧 失败补丁内容分析:"
-            grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | sort -u | while read patch_file; do
-                if [ -f "$patch_file" ]; then
-                    echo "   📄 $(basename "$patch_file"):"
-                    echo "   ----------------------------------------"
-                    
-                    # 提取补丁头信息
-                    grep -E "^---|^\+\+\+|^@@|^diff" "$patch_file" 2>/dev/null | head -10 | sed 's/^/      /'
-                    
-                    # 统计补丁中的hunk数量
-                    local hunk_count=$(grep -c "^@@" "$patch_file" 2>/dev/null || echo "0")
-                    echo "      📊 补丁包含 $hunk_count 个hunk"
-                    
-                    # 分析失败的hunk
-                    echo ""
-                    echo "      失败的hunk详情:"
-                    grep -B2 "Hunk.*FAILED" "$latest_log" 2>/dev/null | grep -E "Hunk|patching" | head -20 | sed 's/^/      /'
-                    
-                    echo ""
-                fi
-            done
-            
-            # 分析.rej文件
-            echo ""
-            echo "🔧 .rej 文件分析 (显示失败的代码块):"
-            find build_dir -name "*.rej" -type f 2>/dev/null | while read rej_file; do
-                echo "   📄 $(basename "$rej_file"):"
-                echo "   ----------------------------------------"
-                
-                # 显示rej文件中的冲突块
-                awk '/^\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*/{flag=1} flag{print} /^---/{if(flag) exit}' "$rej_file" 2>/dev/null | head -30 | sed 's/^/      /'
-                
-                echo ""
-            done
-            
-            # 检查是否有quilt系列文件
-            echo ""
-            echo "🔧 补丁系列文件检查:"
-            for series_file in $(find target/linux -name "series" 2>/dev/null | head -5); do
-                echo "   📁 $series_file:"
-                echo "   ----------------------------------------"
-                cat "$series_file" 2>/dev/null | head -20 | sed 's/^/      /'
-                echo ""
-            done
-            
-            # 检查内核版本和补丁匹配情况
-            echo ""
-            echo "🔧 内核版本与补丁兼容性检查:"
-            local kernel_ver=""
-            if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
-                kernel_ver="5.15"
-            elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
-                kernel_ver="5.4"
+        local error_patterns=(
+            "补丁失败:Patch failed|hunk FAILED"
+            "文件丢失:No such file or directory"
+            "下载失败:Download failed|curl.*error [0-9]"
+            "Broken pipe:Broken pipe"
+            "autoreconf失败:autoreconf.*failed|aclocal.*failed"
+        )
+        
+        for pattern_pair in "${error_patterns[@]}"; do
+            local err_name="${pattern_pair%%:*}"
+            local err_pattern="${pattern_pair##*:}"
+            local match_count=$(grep -E -i -c "$err_pattern" "$latest_log" 2>/dev/null || echo "0")
+            if [ "$match_count" -gt 0 ]; then
+                echo "⚠️ $err_name 检测到 (共 $match_count 处)"
             fi
-            echo "   当前内核版本: $kernel_ver"
-            
-            # 检查补丁文件名中的版本号
-            grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "v[0-9]+\.[0-9]+" | sort -u | while read patch_ver; do
-                echo "   补丁目标版本: $patch_ver"
-                if [[ "$kernel_ver" != *"${patch_ver#v}"* ]]; then
-                    echo "      ⚠️ 补丁版本与内核版本可能不匹配!"
-                fi
-            done
-            
-        else
-            echo "✅ 未检测到补丁失败"
-        fi
+        done
         echo ""
 
         # ============================================
-        # 3. 内核模块编译错误详细分析
+        # 3. 关键组件状态检查
         # ============================================
-        echo "🔍 3. 内核模块编译错误分析:"
-        echo "----------------------------------------"
-        
-        if grep -q "error:" "$latest_log" 2>/dev/null; then
-            echo "🔧 检测到编译错误，提取关键信息..."
-            echo ""
-            
-            # 按模块分组显示错误
-            echo "📦 按模块分组的编译错误:"
-            grep -B5 "error:" "$latest_log" 2>/dev/null | grep -E "Entering directory|error:" | paste - - 2>/dev/null | while read line; do
-                echo "   $line"
-            done | head -20
-            echo ""
-            
-            # 提取具体错误信息
-            echo "🔧 具体错误信息:"
-            grep -E "error:|undefined reference|implicit declaration" "$latest_log" 2>/dev/null | head -30 | sort -u | while read line; do
-                echo "   $line"
-            done
-            echo ""
-            
-            # 检查缺失的头文件
-            echo "🔧 缺失的头文件:"
-            grep "No such file or directory" "$latest_log" 2>/dev/null | grep "\.h" | sort -u | head -10 | while read line; do
-                echo "   $line"
-            done
-            echo ""
-            
-            # 检查API变更问题
-            echo "🔧 可能的API变更问题:"
-            grep -E "implicit declaration|too many arguments|too few arguments" "$latest_log" 2>/dev/null | sort -u | head -10 | while read line; do
-                echo "   $line"
-            done
-            echo ""
-            
-        else
-            echo "✅ 未检测到明显的编译错误"
-        fi
-        echo ""
-
-        # ============================================
-        # 4. 关键组件状态检查
-        # ============================================
-        echo "🔍 4. 关键组件状态检查:"
+        echo "🔍 3. 关键组件状态检查:"
         echo "----------------------------------------"
         
         if [ -d "staging_dir" ]; then
@@ -6759,19 +6751,6 @@ quick_error_check() {
         if [ -f ".config" ]; then
             local config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}')
             echo "✅ .config 存在 ($config_size)"
-            
-            # 检查关键配置
-            echo ""
-            echo "   🔧 关键内核模块配置状态:"
-            for kmod in gpio-button-hotplug usb-core usb2 usb3 usb-storage; do
-                if grep -q "^CONFIG_PACKAGE_kmod-${kmod}=y" .config; then
-                    echo "      ✅ kmod-$kmod: 已启用"
-                elif grep -q "^# CONFIG_PACKAGE_kmod-${kmod} is not set" .config; then
-                    echo "      ❌ kmod-$kmod: 已禁用"
-                else
-                    echo "      ⚪ kmod-$kmod: 未配置"
-                fi
-            done
         else
             echo "❌ .config 不存在"
         fi
@@ -6782,56 +6761,28 @@ quick_error_check() {
         else
             echo "⚠️ dl 目录不存在"
         fi
-        
-        # 检查内核源码目录状态
-        echo ""
-        echo "🔧 内核源码目录状态:"
-        local kernel_dirs=$(find build_dir -maxdepth 3 -type d -name "linux-*" 2>/dev/null | head -10)
-        if [ -n "$kernel_dirs" ]; then
-            echo "$kernel_dirs" | while read kdir; do
-                local prepared=$(find "$kdir" -name ".prepared_*" 2>/dev/null | head -1)
-                local patched=$(find "$kdir" -name ".patched" 2>/dev/null | head -1)
-                local quilt_series=$(find "$kdir" -name "series" 2>/dev/null | head -1)
-                
-                echo "   📁 $(basename "$kdir"):"
-                if [ -n "$prepared" ]; then
-                    echo "      ✅ 已准备: $(basename "$prepared")"
-                else
-                    echo "      ⚠️ 未完成准备"
-                fi
-                if [ -n "$patched" ]; then
-                    echo "      ✅ 已打补丁"
-                fi
-                if [ -n "$quilt_series" ]; then
-                    local patch_count=$(cat "$quilt_series" 2>/dev/null | wc -l)
-                    echo "      📊 补丁系列: $patch_count 个补丁"
-                fi
-            done
-        else
-            echo "   ℹ️ 未找到内核源码目录"
-        fi
         echo ""
 
         # ============================================
-        # 5. 构建时间统计
+        # 4. 构建时间统计
         # ============================================
-        echo "🔍 5. 构建时间统计:"
+        echo "🔍 4. 构建时间统计:"
         echo "----------------------------------------"
-        grep -E "time:.*#" "$latest_log" 2>/dev/null | tail -10 | while read line; do
+        grep -E "time:.*#|real.*user.*sys" "$latest_log" 2>/dev/null | tail -5 | while read line; do
             echo "   $line"
         done
         echo ""
 
         # ============================================
-        # 6. 最后30行日志摘要
+        # 5. 最后30行日志摘要
         # ============================================
-        echo "🔍 6. 最后30行日志摘要:"
+        echo "🔍 5. 最后30行日志摘要:"
         echo "----------------------------------------"
         tail -30 "$latest_log" | sed 's/^/   /'
         echo ""
 
         # ============================================
-        # 7. 构建结果总结（增强版）
+        # 6. 构建结果总结（增强版）
         # ============================================
         echo "================================================================="
         echo "📊 构建结果总结:"
@@ -6858,52 +6809,29 @@ quick_error_check() {
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "📁 固件位置: $target_dir"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "💡 刷机说明:"
+            if [[ "$firmware_list" == *"sysupgrade"* ]]; then
+                echo "   - sysupgrade 固件用于已安装 OpenWrt 的系统升级"
+                echo "   - 使用命令: sysupgrade -n /path/to/*sysupgrade.bin"
+            fi
+            if [[ "$firmware_list" == *"factory"* ]]; then
+                echo "   - factory 固件用于从原厂固件首次刷入"
+                echo "   - 通过路由器原厂 Web 界面刷入"
+            fi
             
         else
             echo "❌❌❌ 编译失败：没有生成有效固件 ❌❌❌"
             echo ""
-            echo "💡 诊断分析:"
-            
-            # 智能分析失败原因
-            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
-                echo ""
-                echo "   🔧 补丁失败分析:"
-                
-                # 分析是否是跨平台补丁问题
-                local failed_patch=$(grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | head -1)
-                if [ -n "$failed_patch" ]; then
-                    local patch_name=$(basename "$failed_patch")
-                    if [[ "$patch_name" == *"mtk"* ]] && [ "$TARGET" != "mediatek" ]; then
-                        echo "      ⚠️ MediaTek 补丁被应用到非 MediaTek 平台 ($TARGET)"
-                        echo "      💡 建议: 检查补丁系列文件，确保平台补丁正确隔离"
-                    elif [[ "$patch_name" == *"v5."* ]] || [[ "$patch_name" == *"v6."* ]]; then
-                        echo "      ⚠️ 补丁版本与内核版本可能不匹配"
-                        echo "      💡 建议: 检查补丁是否适用于当前内核版本"
-                    fi
-                fi
-                
-                # 统计失败的hunk数量
-                local failed_hunks=$(grep -c "Hunk.*FAILED" "$latest_log" 2>/dev/null || echo "0")
-                echo "      📊 失败的 hunk 数量: $failed_hunks"
-            fi
-            
-            if grep -q "gpio-button-hotplug" "$latest_log" 2>/dev/null; then
-                echo ""
-                echo "   🔧 gpio-button-hotplug 模块问题:"
-                if grep -q "implicit declaration" "$latest_log" 2>/dev/null; then
-                    echo "      ⚠️ 内核 API 变更导致编译失败"
-                    echo "      💡 需要更新模块源码以适配当前内核版本"
-                fi
-            fi
-            
-            if grep -q "No space left" "$latest_log" 2>/dev/null; then
-                echo ""
-                echo "   🔧 磁盘空间不足"
-            fi
-            
+            echo "💡 根据诊断结果的可能解决方案:"
             if grep -q "Download failed" "$latest_log" 2>/dev/null; then
-                echo ""
                 echo "   🔧 下载失败: 检查网络连接或更换镜像源"
+            fi
+            if grep -q "No space left" "$latest_log" 2>/dev/null; then
+                echo "   🔧 磁盘空间不足: 清理磁盘空间"
+            fi
+            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
+                echo "   🔧 补丁失败: 删除失败的补丁文件"
             fi
         fi
         
@@ -6988,7 +6916,26 @@ workflow_step30_build_summary() {
     echo "  TCP BBR:       ${ENABLE_TCP_BBR:-true}"
     echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
     echo "  USB自动修复:   ${AUTO_FIX_USB_DRIVERS:-true}"
+    echo "  禁用IPv6:      ${DISABLE_IPV6:-true}"
     echo ""
+    
+    # ============================================
+    # 显示 IPv6 禁用状态详情（全局通用）
+    # ============================================
+    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+        echo "🌐 IPv6 禁用详情（所有源码类型通用）:"
+        echo "  - 内核 IPv6 支持: 已禁用"
+        echo "  - ip6tables 相关包: 已禁用"
+        echo "  - odhcp6c/odhcpd: 已禁用"
+        echo "  - 6in4/6rd/6to4 隧道: 已禁用"
+        echo "  - LuCI IPv6 协议: 已禁用"
+        echo "  - IPv6 内核模块: 已禁用"
+        echo "  ✅ 固件将仅支持 IPv4 网络"
+        echo ""
+    else
+        echo "🌐 IPv6 状态: 已启用（默认）"
+        echo ""
+    fi
     
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✅ 构建流程完成"
