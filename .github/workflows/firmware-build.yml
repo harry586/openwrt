@@ -62,17 +62,10 @@ on:
       
       # 新增：自定义禁用插件
       forbidden_packages:
-        description: "🚫 自定义禁用插件 - 格式：用空格分隔"
+        description: "🚫 自定义禁用插件 - 格式：用空格分隔，默认禁用 vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
         required: false
         type: string
         default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
-      
-      # 新增：IPv6禁用开关
-      disable_ipv6:
-        description: "🌐 禁用IPv6（解决IPv6风暴问题）"
-        required: false
-        type: boolean
-        default: true
       
       enable_parallel:
         description: "⚡ 启用智能并行优化"
@@ -86,7 +79,6 @@ env:
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
   SOURCE_REPO: "${{ github.event.inputs.source_repo }}"
   FORBIDDEN_PACKAGES: "${{ github.event.inputs.forbidden_packages }}"
-  DISABLE_IPV6: "${{ github.event.inputs.disable_ipv6 }}"
 
 jobs:
   build-firmware:
