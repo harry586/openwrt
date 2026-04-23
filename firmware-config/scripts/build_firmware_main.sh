@@ -5037,11 +5037,16 @@ workflow_step15_generate_config() {
         
         # 计算每个设备的匹配权重
         for device in "${all_devices[@]}"; do
+            # 【关键修复】排除 _common、_common_nand、_common_emmc 等通用模板
+            if [[ "$device" == *_common* ]]; then
+                continue
+            fi
+            
             local weight=0
             local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
             local lower_device=$(echo "$device" | tr '[:upper:]' '[:lower:]')
             
-            # 完全匹配：权重+100
+            # 完全匹配：权重+100（最高优先级）
             if [ "$lower_input" = "$lower_device" ]; then
                 weight=$((weight + 100))
             fi
@@ -5104,10 +5109,29 @@ workflow_step15_generate_config() {
     
     # 遍历所有mk文件查找匹配
     for mkfile in "${mk_files[@]}"; do
-        # 先尝试精确匹配
-        if grep -q "define Device.*$DEVICE" "$mkfile" 2>/dev/null; then
+        # 【关键修复】优先尝试精确匹配（完整单词匹配），排除 _common
+        # 使用更严格的正则表达式：define Device/设备名$ 或 define Device/设备名[[:space:]]
+        local exact_match=""
+        local all_device_defs=$(grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null)
+        
+        while IFS= read -r line; do
+            if [[ "$line" =~ define[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
+                local dev_name="${BASH_REMATCH[1]}"
+                # 排除 _common 后缀
+                if [[ "$dev_name" == *_common* ]]; then
+                    continue
+                fi
+                # 精确匹配
+                if [ "$dev_name" = "$DEVICE" ]; then
+                    exact_match="$dev_name"
+                    break
+                fi
+            fi
+        done <<< "$all_device_defs"
+        
+        if [ -n "$exact_match" ]; then
             device_file="$mkfile"
-            mk_device_name=$(grep -m1 "define Device.*$DEVICE" "$mkfile" | sed 's/define Device\///' | awk '{print $1}')
+            mk_device_name="$exact_match"
             log "✅ 找到精确设备定义: $mk_device_name (在 $device_file)"
             break
         fi
@@ -5176,7 +5200,7 @@ workflow_step15_generate_config() {
         for mkfile in "${mk_files[@]}"; do
             if [[ "$mkfile" == *"image/"*".mk" ]]; then
                 echo "📁 $(basename "$mkfile"):"
-                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\///' | sed 's/ .*//' | while read dev; do
+                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\///' | sed 's/ .*//' | grep -v "_common" | while read dev; do
                     echo "    - $dev"
                 done
             fi
@@ -5185,7 +5209,25 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 使用搜索到的正确设备名（像旧版本一样）
+    # 【关键验证】确保没有选到 _common 模板
+    if [[ "$mk_device_name" == *_common* ]]; then
+        log "❌ 错误：匹配到了通用模板 $mk_device_name，这不是一个可编译的设备！"
+        log "请检查设备名称是否正确，或手动指定正确的设备名。"
+        log ""
+        log "可用的设备列表（排除通用模板）:"
+        echo "----------------------------------------"
+        for mkfile in "${mk_files[@]}"; do
+            if [[ "$mkfile" == *"image/"*".mk" ]]; then
+                grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null | sed 's/define Device\///' | sed 's/ .*//' | grep -v "_common" | while read dev; do
+                    echo "    - $dev"
+                done
+            fi
+        done
+        echo "----------------------------------------"
+        exit 1
+    fi
+    
+    # 使用搜索到的正确设备名
     local correct_device="$mk_device_name"
     log "🔧 使用搜索到的正确设备名: $correct_device (原输入: $DEVICE)"
     
