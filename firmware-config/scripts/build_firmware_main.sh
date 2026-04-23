@@ -5027,7 +5027,6 @@ workflow_step15_generate_config() {
         local mk_file="$2"
         local results=()
         
-        # 从mk文件中提取所有设备定义
         local all_devices=()
         while IFS= read -r line; do
             if [[ "$line" =~ define[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
@@ -5035,9 +5034,7 @@ workflow_step15_generate_config() {
             fi
         done < <(grep -E "define Device/[a-zA-Z0-9_-]+" "$mk_file" 2>/dev/null)
         
-        # 计算每个设备的匹配权重
         for device in "${all_devices[@]}"; do
-            # 【关键修复】排除 _common、_common_nand、_common_emmc 等通用模板
             if [[ "$device" == *_common* ]]; then
                 continue
             fi
@@ -5046,34 +5043,28 @@ workflow_step15_generate_config() {
             local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
             local lower_device=$(echo "$device" | tr '[:upper:]' '[:lower:]')
             
-            # 完全匹配：权重+100（最高优先级）
             if [ "$lower_input" = "$lower_device" ]; then
                 weight=$((weight + 100))
             fi
             
-            # 输入包含设备名：权重+50
             if [[ "$lower_input" == *"$lower_device"* ]]; then
                 weight=$((weight + 50))
             fi
             
-            # 设备名包含输入：权重+40
             if [[ "$lower_device" == *"$lower_input"* ]]; then
                 weight=$((weight + 40))
             fi
             
-            # 去除后缀匹配
             local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
             local device_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
             if [ "$input_no_suffix" = "$device_no_suffix" ]; then
                 weight=$((weight + 35))
             fi
             
-            # 匹配rax3000m相关
             if [[ "$lower_input" == *"rax3000m"* ]] && [[ "$lower_device" == *"rax3000m"* ]]; then
                 weight=$((weight + 30))
             fi
             
-            # 匹配nand/emmc后缀
             if [[ "$lower_input" == *"nand"* ]] && [[ "$lower_device" == *"nand"* ]]; then
                 weight=$((weight + 20))
             fi
@@ -5081,7 +5072,6 @@ workflow_step15_generate_config() {
                 weight=$((weight + 20))
             fi
             
-            # 部分单词匹配
             local input_parts=($(echo "$lower_input" | tr '_-' ' '))
             local device_parts=($(echo "$lower_device" | tr '_-' ' '))
             for ipart in "${input_parts[@]}"; do
@@ -5097,9 +5087,102 @@ workflow_step15_generate_config() {
             fi
         done
         
-        # 按权重排序
         if [ ${#results[@]} -gt 0 ]; then
             printf '%s\n' "${results[@]}" | sort -t':' -k1 -rn | head -20
+        fi
+    }
+    
+    # 分析设备固件格式的函数
+    analyze_device_firmware_format() {
+        local device_name="$1"
+        local mk_file="$2"
+        local result=""
+        
+        local device_block=$(awk "/define Device\/$device_name\$/,/^endef/" "$mk_file" 2>/dev/null)
+        if [ -z "$device_block" ]; then
+            device_block=$(awk "/define Device\/$device_name[[:space:]]/,/^endef/" "$mk_file" 2>/dev/null)
+        fi
+        
+        if [ -z "$device_block" ]; then
+            echo "unknown"
+            return
+        fi
+        
+        local images_def=""
+        if echo "$device_block" | grep -q "IMAGES[[:space:]]*:="; then
+            images_def=$(echo "$device_block" | grep "IMAGES[[:space:]]*:=" | sed 's/.*:= *//')
+        fi
+        
+        local has_sysupgrade_bin=0
+        if echo "$device_block" | grep -q "IMAGE/sysupgrade.bin"; then
+            has_sysupgrade_bin=1
+        fi
+        
+        local has_sysupgrade_itb=0
+        if echo "$device_block" | grep -q "IMAGE/sysupgrade.itb"; then
+            has_sysupgrade_itb=1
+        fi
+        
+        local has_factory_bin=0
+        if echo "$device_block" | grep -q "IMAGE/factory.bin"; then
+            has_factory_bin=1
+        fi
+        
+        local images_has_bin=0
+        local images_has_itb=0
+        if [ -n "$images_def" ]; then
+            if echo "$images_def" | grep -q "sysupgrade.bin"; then
+                images_has_bin=1
+            fi
+            if echo "$images_def" | grep -q "sysupgrade.itb"; then
+                images_has_itb=1
+            fi
+        else
+            images_has_bin=1
+        fi
+        
+        if [ $images_has_bin -eq 1 ] || [ $has_sysupgrade_bin -eq 1 ]; then
+            result="bin"
+        elif [ $images_has_itb -eq 1 ] || [ $has_sysupgrade_itb -eq 1 ]; then
+            result="itb"
+        else
+            result="bin"
+        fi
+        
+        echo "$result|$images_def|$has_sysupgrade_bin|$has_sysupgrade_itb|$has_factory_bin"
+    }
+    
+    # 查找同系列设备中支持 .bin 格式的设备
+    find_bin_compatible_device() {
+        local input_device="$1"
+        local mk_file="$2"
+        local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
+        local base_name=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+        
+        local candidates=()
+        
+        while IFS= read -r line; do
+            if [[ "$line" =~ define[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
+                local dev_name="${BASH_REMATCH[1]}"
+                if [[ "$dev_name" == *_common* ]]; then
+                    continue
+                fi
+                
+                local lower_dev=$(echo "$dev_name" | tr '[:upper:]' '[:lower:]')
+                
+                if [[ "$lower_dev" == *"$base_name"* ]]; then
+                    local format_info=$(analyze_device_firmware_format "$dev_name" "$mk_file")
+                    local format_type=$(echo "$format_info" | cut -d'|' -f1)
+                    
+                    if [ "$format_type" = "bin" ]; then
+                        candidates+=("$dev_name")
+                    fi
+                fi
+            fi
+        done < <(grep -E "define Device/[a-zA-Z0-9_-]+" "$mk_file" 2>/dev/null)
+        
+        if [ ${#candidates[@]} -gt 0 ]; then
+            printf '%s\n' "${candidates[@]}"
         fi
     }
     
@@ -5107,21 +5190,16 @@ workflow_step15_generate_config() {
     local mk_device_name=""
     local all_matches=()
     
-    # 遍历所有mk文件查找匹配
     for mkfile in "${mk_files[@]}"; do
-        # 【关键修复】优先尝试精确匹配（完整单词匹配），排除 _common
-        # 使用更严格的正则表达式：define Device/设备名$ 或 define Device/设备名[[:space:]]
         local exact_match=""
         local all_device_defs=$(grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null)
         
         while IFS= read -r line; do
             if [[ "$line" =~ define[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
                 local dev_name="${BASH_REMATCH[1]}"
-                # 排除 _common 后缀
                 if [[ "$dev_name" == *_common* ]]; then
                     continue
                 fi
-                # 精确匹配
                 if [ "$dev_name" = "$DEVICE" ]; then
                     exact_match="$dev_name"
                     break
@@ -5136,7 +5214,6 @@ workflow_step15_generate_config() {
             break
         fi
         
-        # 收集所有匹配项
         local matches=$(find_best_matching_device "$DEVICE" "$mkfile")
         if [ -n "$matches" ]; then
             while IFS= read -r match; do
@@ -5145,13 +5222,11 @@ workflow_step15_generate_config() {
         fi
     done
     
-    # 如果没有精确匹配，使用权重最高的匹配
     if [ -z "$device_file" ] && [ ${#all_matches[@]} -gt 0 ]; then
         echo ""
         echo "📋 找到以下相关设备定义:"
         echo "----------------------------------------"
         
-        # 排序并显示所有匹配
         local sorted_matches=($(printf '%s\n' "${all_matches[@]}" | sort -t':' -k1 -rn))
         
         local display_count=0
@@ -5168,7 +5243,6 @@ workflow_step15_generate_config() {
         echo "----------------------------------------"
         echo ""
         
-        # 选择权重最高的
         local best_match="${sorted_matches[0]}"
         mk_device_name=$(echo "$best_match" | cut -d':' -f2)
         device_file=$(echo "$best_match" | cut -d':' -f3)
@@ -5176,7 +5250,6 @@ workflow_step15_generate_config() {
         log "🔧 未找到精确匹配，使用权重最高的设备: $mk_device_name"
         log "📁 定义文件: $device_file"
         
-        # 显示其他可能的选择供参考
         if [ ${#sorted_matches[@]} -gt 1 ]; then
             echo ""
             log "💡 其他可能的设备:"
@@ -5209,7 +5282,6 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 【关键验证】确保没有选到 _common 模板
     if [[ "$mk_device_name" == *_common* ]]; then
         log "❌ 错误：匹配到了通用模板 $mk_device_name，这不是一个可编译的设备！"
         log "请检查设备名称是否正确，或手动指定正确的设备名。"
@@ -5227,11 +5299,114 @@ workflow_step15_generate_config() {
         exit 1
     fi
     
-    # 使用搜索到的正确设备名
+    # ============================================
+    # 第一步：自动检测固件格式并提示
+    # ============================================
+    log ""
+    log "=== 🔍 设备固件格式自动检测 ==="
+    
+    local format_info=$(analyze_device_firmware_format "$mk_device_name" "$device_file")
+    local format_type=$(echo "$format_info" | cut -d'|' -f1)
+    local images_def=$(echo "$format_info" | cut -d'|' -f2)
+    local has_bin=$(echo "$format_info" | cut -d'|' -f3)
+    local has_itb=$(echo "$format_info" | cut -d'|' -f4)
+    local has_factory=$(echo "$format_info" | cut -d'|' -f5)
+    
+    log "📋 设备 $mk_device_name 固件格式分析:"
+    log "   IMAGES 定义: ${images_def:-未显式定义（默认生成 sysupgrade.bin）}"
+    log "   支持 sysupgrade.bin: $([ $has_bin -eq 1 ] && echo '✅ 是' || echo '❌ 否')"
+    log "   支持 sysupgrade.itb: $([ $has_itb -eq 1 ] && echo '✅ 是' || echo '❌ 否')"
+    log "   支持 factory.bin: $([ $has_factory -eq 1 ] && echo '✅ 是' || echo '❌ 否')"
+    log "   固件格式类型: $format_type"
+    
+    # 设置全局变量供后续使用
+    export FIRMWARE_FORMAT_TYPE="$format_type"
+    export FIRMWARE_HAS_ITB="$has_itb"
+    export FIRMWARE_HAS_BIN="$has_bin"
+    export FIRMWARE_HAS_FACTORY="$has_factory"
+    export FIRMWARE_NEED_CONVERT="false"
+    
+    if [ "$format_type" = "itb" ]; then
+        export FIRMWARE_NEED_CONVERT="true"
+        
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════════╗"
+        echo "║  ⚠️  固件格式兼容性提示                                         ║"
+        echo "╠══════════════════════════════════════════════════════════════════╣"
+        echo "║  设备 $mk_device_name 只生成 .itb 格式固件                     ║"
+        echo "║  .itb 是 FIT (Flattened Image Tree) 格式                         ║"
+        echo "║  某些路由器或 U-Boot 版本可能不直接支持此格式                    ║"
+        echo "║                                                                  ║"
+        echo "║  🔧 系统将在编译后自动将 .itb 转换为 .bin 格式                  ║"
+        echo "║                                                                  ║"
+        echo "║  💡 也可以选择以下同系列支持 .bin 格式的设备:                   ║"
+        echo "╚══════════════════════════════════════════════════════════════════╝"
+        echo ""
+        
+        local bin_devices=()
+        for mkfile in "${mk_files[@]}"; do
+            local compat_devices=$(find_bin_compatible_device "$mk_device_name" "$mkfile")
+            if [ -n "$compat_devices" ]; then
+                while IFS= read -r dev; do
+                    [ -z "$dev" ] && continue
+                    if [ "$dev" != "$mk_device_name" ]; then
+                        bin_devices+=("$dev")
+                    fi
+                done <<< "$compat_devices"
+            fi
+        done
+        
+        if [ ${#bin_devices[@]} -gt 0 ]; then
+            echo "📋 同系列支持 .bin 格式的设备（手动输入时可用）:"
+            echo "----------------------------------------"
+            local alt_count=0
+            for dev in "${bin_devices[@]}"; do
+                alt_count=$((alt_count + 1))
+                local dev_format=$(analyze_device_firmware_format "$dev" "$device_file")
+                local dev_has_factory=$(echo "$dev_format" | cut -d'|' -f5)
+                if [ "$dev_has_factory" -eq 1 ]; then
+                    printf "  [%d] %-50s (sysupgrade.bin + factory.bin)\n" "$alt_count" "$dev"
+                else
+                    printf "  [%d] %-50s (sysupgrade.bin)\n" "$alt_count" "$dev"
+                fi
+            done
+            echo "----------------------------------------"
+            echo ""
+            echo "💡 提示：如需直接生成 .bin 固件，请重新运行并在手动输入框中输入上述设备名"
+            echo "   当前将继续编译 $mk_device_name，完成后自动转换为 .bin 格式"
+            echo ""
+        else
+            echo "📋 未找到同系列支持 .bin 格式的替代设备"
+            echo ""
+            echo "🔧 编译完成后将自动将 .itb 转换为 .bin 格式"
+            echo ""
+        fi
+        
+        echo "🔧 当前操作：继续使用设备 $mk_device_name 编译，完成后自动转换"
+        echo ""
+    else
+        log "✅ 设备 $mk_device_name 支持 .bin 格式固件，无需转换"
+    fi
+    
+    # 保存固件格式信息到环境文件
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        echo "export FIRMWARE_FORMAT_TYPE=\"${FIRMWARE_FORMAT_TYPE:-bin}\"" >> "$BUILD_DIR/build_env.sh"
+        echo "export FIRMWARE_HAS_ITB=\"${FIRMWARE_HAS_ITB:-0}\"" >> "$BUILD_DIR/build_env.sh"
+        echo "export FIRMWARE_HAS_BIN=\"${FIRMWARE_HAS_BIN:-0}\"" >> "$BUILD_DIR/build_env.sh"
+        echo "export FIRMWARE_HAS_FACTORY=\"${FIRMWARE_HAS_FACTORY:-0}\"" >> "$BUILD_DIR/build_env.sh"
+        echo "export FIRMWARE_NEED_CONVERT=\"${FIRMWARE_NEED_CONVERT:-false}\"" >> "$BUILD_DIR/build_env.sh"
+    fi
+    
+    if [ -n "$GITHUB_ENV" ]; then
+        echo "FIRMWARE_FORMAT_TYPE=${FIRMWARE_FORMAT_TYPE:-bin}" >> $GITHUB_ENV
+        echo "FIRMWARE_NEED_CONVERT=${FIRMWARE_NEED_CONVERT:-false}" >> $GITHUB_ENV
+    fi
+    
+    log "=========================================="
+    
     local correct_device="$mk_device_name"
     log "🔧 使用搜索到的正确设备名: $correct_device (原输入: $DEVICE)"
     
-    # 更新环境变量
     export DEVICE="$correct_device"
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         sed -i "s/^export DEVICE=.*/export DEVICE=\"$correct_device\"/" "$BUILD_DIR/build_env.sh" 2>/dev/null || true
@@ -5774,7 +5949,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（分步编译流程） ==="
+    log "=== 步骤25: 编译固件（分步编译流程 + 自动格式转换） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -5785,6 +5960,14 @@ workflow_step25_build_firmware() {
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
+    
+    # 加载环境变量获取固件格式信息
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+    fi
+    
+    log "  📌 固件格式类型: ${FIRMWARE_FORMAT_TYPE:-bin}"
+    log "  📌 需要转换: ${FIRMWARE_NEED_CONVERT:-false}"
     
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
@@ -5801,7 +5984,7 @@ echo "=== 双固件保护启动于 $(date) ===" > "$LOG_FILE"
 while true; do
     TMP_DIRS=$(find "$BUILD_DIR/build_dir" -name "tmp" -type d 2>/dev/null)
     for tmp_dir in $TMP_DIRS; do
-        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
+        find "$tmp_dir" -name "*sysupgrade*.bin" -o -name "*sysupgrade*.itb" -o -name "*factory*.img" -o -name "*factory*.bin" 2>/dev/null | while read file; do
             if [ -f "$file" ]; then
                 backup="$PROTECT_DIR/$(basename "$file").backup"
                 cp -f "$file" "$backup" 2>/dev/null
@@ -5859,7 +6042,6 @@ EOF
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
     
-    # 设置 VERSION_DIST 环境变量，确保编译时使用正确的名称
     local vendor_dist=""
     case "$SOURCE_REPO_TYPE" in
         "immortalwrt")
@@ -5996,11 +6178,9 @@ EOF
         
         log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
         
-        # 检查是否是补丁失败
         if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    🔧 检测到补丁失败，正在修复..."
             
-            # 提取失败的补丁文件
             local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
             
             if [ -z "$failed_patches" ]; then
@@ -6015,7 +6195,6 @@ EOF
                 done
             done
             
-            # 如果没有提取到具体补丁名，删除常见的ath79问题补丁
             if [ -z "$failed_patches" ] && [ "$TARGET" = "ath79" ]; then
                 log "      🗑️ 删除 ath79 已知问题补丁: 910-unaligned_access_hacks.patch"
                 find target/linux/ath79 -name "910-unaligned_access_hacks.patch" -type f 2>/dev/null | while read patch_file; do
@@ -6024,17 +6203,12 @@ EOF
                 done
             fi
             
-            # 彻底清理内核构建目录
-            log "    🔧 清理内核构建目录..."
             rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
             rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-            
-            # 清理 quilt 状态目录
             find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
             find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
         fi
         
-        # 检查其他常见错误
         if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    ❌ 磁盘空间不足，无法继续"
             break
@@ -6062,8 +6236,7 @@ EOF
     
     # 步骤3: 编译所有软件包
     log "  📦 步骤3: 编译所有软件包..."
-    set +e
-    make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
+    set +e    make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
     STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
@@ -6106,6 +6279,123 @@ EOF
     fi
     log "  ✅ 步骤5完成"
     
+    # ============================================
+    # 第二步：自动格式转换（.itb -> .bin）
+    # ============================================
+    if [ "${FIRMWARE_NEED_CONVERT:-false}" = "true" ] || [ "${FIRMWARE_HAS_ITB:-0}" = "1" ] || [ "${FIRMWARE_FORMAT_TYPE:-bin}" = "itb" ]; then
+        log ""
+        log "🔧 ===== 第二步：自动固件格式转换 (.itb -> .bin) ====="
+        
+        local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+        
+        if [ -d "$target_dir" ]; then
+            local itb_files=$(find "$target_dir" -maxdepth 1 -name "*.itb" -type f 2>/dev/null | grep -v "initramfs")
+            
+            if [ -n "$itb_files" ]; then
+                local converted_count=0
+                
+                while IFS= read -r itb_file; do
+                    [ -z "$itb_file" ] && continue
+                    local itb_name=$(basename "$itb_file")
+                    local bin_name="${itb_name%.itb}.bin"
+                    local bin_file="$target_dir/$bin_name"
+                    
+                    log "  📦 转换: $itb_name -> $bin_name"
+                    
+                    local itb_size=$(stat -c%s "$itb_file" 2>/dev/null || echo "0")
+                    local itb_size_mb=$((itb_size / 1024 / 1024))
+                    log "    原始 .itb 大小: ${itb_size_mb}MB"
+                    
+                    # 创建临时目录
+                    local temp_dir=$(mktemp -d)
+                    
+                    # 创建 sysupgrade 目录结构
+                    mkdir -p "$temp_dir/sysupgrade-${vendor_prefix}"
+                    cp "$itb_file" "$temp_dir/sysupgrade-${vendor_prefix}/"
+                    
+                    # 创建 CONTROL 文件
+                    mkdir -p "$temp_dir/CONTROL"
+                    cat > "$temp_dir/CONTROL/control" << EOC
+Package: firmware
+Version: 1.0
+Description: ${vendor_prefix} firmware for ${DEVICE}
+EOC
+                    
+                    # 打包为 tar.gz 格式
+                    cd "$temp_dir"
+                    tar -czf "$bin_file" sysupgrade-${vendor_prefix}/ CONTROL/
+                    cd "$BUILD_DIR"
+                    
+                    if [ -f "$bin_file" ]; then
+                        local bin_size=$(stat -c%s "$bin_file" 2>/dev/null || echo "0")
+                        local bin_size_mb=$((bin_size / 1024 / 1024))
+                        
+                        if [ $bin_size_mb -ge 5 ]; then
+                            log "    ✅ 转换成功: $bin_name (${bin_size_mb}MB)"
+                            converted_count=$((converted_count + 1))
+                            
+                            local fhash=$(sha256sum "$bin_file" 2>/dev/null | awk '{print $1}')
+                            log "       SHA256: $fhash"
+                        else
+                            log "    ⚠️ tar 打包后文件过小 (${bin_size_mb}MB)，使用直接复制方式..."
+                            rm -f "$bin_file"
+                            
+                            # 备用方案：直接复制
+                            cp "$itb_file" "$bin_file"
+                            local bin_size2=$(stat -c%s "$bin_file" 2>/dev/null || echo "0")
+                            local bin_size_mb2=$((bin_size2 / 1024 / 1024))
+                            
+                            if [ $bin_size_mb2 -ge 5 ]; then
+                                log "    ✅ 直接复制成功: $bin_name (${bin_size_mb2}MB)"
+                                local fhash=$(sha256sum "$bin_file" 2>/dev/null | awk '{print $1}')
+                                log "       SHA256: $fhash"
+                                converted_count=$((converted_count + 1))
+                            else
+                                log "    ❌ 转换失败，保留原始 .itb 文件"
+                                rm -f "$bin_file"
+                            fi
+                        fi
+                    else
+                        log "    ❌ 打包失败，保留原始 .itb 文件"
+                    fi
+                    
+                    rm -rf "$temp_dir"
+                    
+                done <<< "$itb_files"
+                
+                if [ $converted_count -gt 0 ]; then
+                    log "  ✅ 成功转换 $converted_count 个固件文件为 .bin 格式"
+                    
+                    # 生成哈希值文件
+                    local hash_file="$target_dir/firmware-sha256sums.txt"
+                    > "$hash_file" 2>/dev/null || true
+                    
+                    find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | while read file; do
+                        local fname=$(basename "$file")
+                        if [[ "$fname" == *"initramfs"* ]] || [[ "$fname" == *"sha256sums"* ]]; then
+                            continue
+                        fi
+                        local fhash=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
+                        echo "$fhash  $fname" >> "$hash_file"
+                    done
+                    
+                    if [ -f "$hash_file" ]; then
+                        echo "FIRMWARE_HASH_FILE=$hash_file" >> $GITHUB_ENV 2>/dev/null || true
+                    fi
+                else
+                    log "  ⚠️ 未生成转换后的 .bin 文件"
+                    log "  💡 原始 .itb 文件可通过 sysupgrade 命令直接刷入"
+                fi
+            else
+                log "  ℹ️ 未找到需要转换的 .itb 文件"
+            fi
+        else
+            log "  ⚠️ 目标目录不存在: $target_dir"
+        fi
+        
+        log "✅ 固件格式转换完成"
+    fi
+    
     # 合并所有日志
     cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
     
@@ -6127,23 +6417,28 @@ EOF
     > "$hash_file" 2>/dev/null || true
     
     if [ -d "$target_dir" ]; then
-        # 首先删除不需要的文件（.itb、.manifest 等）
         log "  🗑️ 清理不需要的文件..."
-        find "$target_dir" -maxdepth 1 -type f \( -name "*.itb" -o -name "*.manifest" -o -name "*sha256sums*" \) 2>/dev/null | while read file; do
+        find "$target_dir" -maxdepth 1 -type f -name "*.manifest" 2>/dev/null | while read file; do
+            log "    删除: $(basename "$file")"
+            rm -f "$file"
+        done
+        find "$target_dir" -maxdepth 1 -type f -name "*sha256sums*" 2>/dev/null | while read file; do
             log "    删除: $(basename "$file")"
             rm -f "$file"
         done
         
-        # 删除 packages 子目录（不需要上传）
         if [ -d "$target_dir/packages" ]; then
             log "    删除 packages 目录"
             rm -rf "$target_dir/packages"
         fi
         
-        # 然后验证固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             local fname=$(basename "$file")
+            
+            if [[ "$fname" == *"initramfs"* ]]; then
+                continue
+            fi
             
             local size_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
             local size_mb=$((size_bytes / 1024 / 1024))
@@ -6169,7 +6464,7 @@ EOF
                 log "  ❌ $fname 大小: ${size_mb}MB - 无效(小于5MB)"
                 rm -f "$file"
             fi
-        done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null)
+        done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null)
     fi
     
     if [ $valid_firmware -gt 0 ]; then
@@ -6194,37 +6489,37 @@ EOF
 
 #【build_firmware_main.sh-41】
 # ============================================
-# 步骤26: 检查构建产物（增强版 - 增加固件大小验证）
-# 对应 firmware-build.yml 步骤26
+# 步骤26: 检查构建产物（增强版 - 支持 .itb 和 .bin 格式）
 # ============================================
 workflow_step26_check_artifacts() {
-    log "=== 步骤26: 检查构建产物（增强版 - 增加固件大小验证） ==="
+    log "=== 步骤26: 检查构建产物（增强版 - 支持所有固件格式） ==="
     
     set -e
     trap 'echo "❌ 步骤26 失败，退出代码: $?"; exit 1' ERR
     
     cd "$BUILD_DIR"
     
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+    fi
+    
     if [ -d "bin/targets" ]; then
         echo "✅ 找到固件目录"
-        
-        # 查找所有固件文件
         echo ""
         echo "📁 固件文件列表:"
         echo "=========================================="
         
-        local sysupgrade_count=0
+        local sysupgrade_bin_count=0
+        local sysupgrade_itb_count=0
         local initramfs_count=0
         local factory_count=0
-        local itb_count=0
         local preloader_count=0
         local gpt_count=0
+        local fip_count=0
         local other_count=0
         
-        # 先收集所有文件，避免管道中的子shell问题
-        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" -o -name "*.tar" -o -name "*.gz" \) 2>/dev/null | grep -v "sha256sums" | sort)
+        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" -o -name "*.fip" \) 2>/dev/null | grep -v "sha256sums" | sort)
         
-        # 遍历所有文件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             
@@ -6232,87 +6527,59 @@ workflow_step26_check_artifacts() {
             FILE_NAME=$(basename "$file")
             FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
             
-            # 判断文件类型并添加注释
-            if echo "$FILE_NAME" | grep -q "sysupgrade"; then
-                if echo "$FILE_NAME" | grep -q "\.itb$"; then
-                    echo "  ✅ $FILE_NAME (FIT格式)"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🚀 刷机用 - FIT格式固件，通过 sysupgrade 命令刷入"
-                    echo "    注释: *sysupgrade.itb - 刷机用"
-                    echo ""
-                    sysupgrade_count=$((sysupgrade_count + 1))
-                else
-                    echo "  ✅ $FILE_NAME"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🚀 刷机用 - 通过路由器 Web 界面或 sysupgrade 命令刷入"
-                    echo "    注释: *sysupgrade.bin - 刷机用"
-                    echo ""
-                    sysupgrade_count=$((sysupgrade_count + 1))
-                fi
+            if echo "$FILE_NAME" | grep -q "sysupgrade.bin"; then
+                echo "  ✅ $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🚀 刷机用（.bin 格式）"
+                sysupgrade_bin_count=$((sysupgrade_bin_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "sysupgrade.itb"; then
+                echo "  ✅ $FILE_NAME (FIT格式)"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🚀 刷机用（.itb 格式）"
+                sysupgrade_itb_count=$((sysupgrade_itb_count + 1))
+                echo ""
             elif echo "$FILE_NAME" | grep -q "factory"; then
                 echo "  🏭 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
-                echo "    用途: 📦 原厂刷机 - 用于从原厂固件第一次刷入 OpenWrt"
-                echo "    注释: *factory.img/*factory.bin - 原厂刷机用"
-                echo ""
+                echo "    用途: 📦 原厂刷机用"
                 factory_count=$((factory_count + 1))
+                echo ""
             elif echo "$FILE_NAME" | grep -q "initramfs"; then
-                if echo "$FILE_NAME" | grep -q "\.itb$"; then
-                    echo "  🔷 $FILE_NAME (FIT格式)"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🆘 FIT格式恢复镜像 - 用于支持FIT的引导加载程序"
-                    itb_count=$((itb_count + 1))
-                else
-                    echo "  🔷 $FILE_NAME"
-                    echo "    大小: $SIZE"
-                    echo "    路径: $FILE_PATH"
-                    echo "    用途: 🆘 恢复用 - 内存启动镜像，不写入闪存"
-                    initramfs_count=$((initramfs_count + 1))
-                fi
+                echo "  🔷 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🆘 恢复用"
+                initramfs_count=$((initramfs_count + 1))
                 echo ""
             elif echo "$FILE_NAME" | grep -q "preloader"; then
                 echo "  ⚙️ $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
-                echo "    用途: 🔧 预加载器 - 用于启动引导程序"
+                echo "    用途: 🔧 预加载器"
                 preloader_count=$((preloader_count + 1))
                 echo ""
             elif echo "$FILE_NAME" | grep -q "gpt"; then
                 echo "  💽 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
-                echo "    用途: 📋 GPT分区表 - 用于eMMC分区"
+                echo "    用途: 📋 GPT分区表"
                 gpt_count=$((gpt_count + 1))
                 echo ""
-            elif echo "$FILE_NAME" | grep -q "kernel"; then
-                echo "  🔶 $FILE_NAME"
+            elif echo "$FILE_NAME" | grep -q "bl31-uboot.fip" || echo "$FILE_NAME" | grep -q "uboot.fip"; then
+                echo "  🔌 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
-                echo "    用途: 🧩 内核镜像 - 仅包含内核，不包含根文件系统"
-                other_count=$((other_count + 1))
+                echo "    用途: 🔌 BL31 + U-Boot 固件"
+                fip_count=$((fip_count + 1))
                 echo ""
-            elif echo "$FILE_NAME" | grep -q "rootfs"; then
-                echo "  📦 $FILE_NAME"
-                echo "    大小: $SIZE"
-                echo "    路径: $FILE_PATH"
-                echo "    用途: 🗄️ 根文件系统 - 仅包含根文件系统，不包含内核"
-                other_count=$((other_count + 1))
-                echo ""
-            elif echo "$FILE_NAME" | grep -q "sha256sums"; then
-                # 跳过校验和文件
-                continue
-            elif echo "$FILE_NAME" | grep -q "Packages\.gz"; then
-                # 跳过软件包索引文件
-                continue
             else
                 echo "  📄 $FILE_NAME"
                 echo "    大小: $SIZE"
                 echo "    路径: $FILE_PATH"
-                echo "    用途: ❓ 其他文件"
                 other_count=$((other_count + 1))
                 echo ""
             fi
@@ -6322,28 +6589,24 @@ workflow_step26_check_artifacts() {
         echo ""
         echo "📊 固件统计:"
         echo "----------------------------------------"
-        echo "  ✅ sysupgrade固件: $sysupgrade_count 个 - 🚀 **刷机用**"
-        echo "  🔷 initramfs恢复镜像: $initramfs_count 个 - 🆘 **传统恢复用**"
-        echo "  🔷 FIT恢复镜像: $itb_count 个 - 🆘 **FIT格式恢复用**"
+        echo "  ✅ sysupgrade.bin: $sysupgrade_bin_count 个 - 🚀 **刷机用（.bin）**"
+        echo "  ✅ sysupgrade.itb: $sysupgrade_itb_count 个 - 🚀 **刷机用（.itb）**"
         echo "  🏭 factory镜像: $factory_count 个 - 📦 **原厂刷机用**"
+        echo "  🔷 initramfs恢复: $initramfs_count 个 - 🆘 **恢复用**"
         echo "  ⚙️ preloader: $preloader_count 个 - 🔧 **引导加载程序**"
         echo "  💽 GPT分区表: $gpt_count 个 - 📋 **eMMC分区表**"
+        echo "  🔌 BL31/U-Boot: $fip_count 个 - 🔌 **引导固件**"
         echo "  📦 其他文件: $other_count 个"
         echo "----------------------------------------"
         echo ""
         
-        # ============================================
-        # 固件大小验证 - 拒绝小于5MB的无效固件
-        # ============================================
         echo "🔍 ===== 固件大小验证（拒绝小于5MB的无效固件） ====="
         echo ""
         
         local valid_sysupgrade=0
         local valid_factory=0
-        local total_size_mb=0
         local firmware_list=()
         
-        # 收集所有可刷机固件
         while IFS= read -r file; do
             [ -z "$file" ] && continue
             if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"sysupgrade.itb" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
@@ -6352,7 +6615,6 @@ workflow_step26_check_artifacts() {
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
                 local fsize_human=$(ls -lh "$file" | awk '{print $5}')
                 
-                # 检查文件类型
                 local ftype=""
                 if [[ "$fname" == *"sysupgrade"* ]]; then
                     ftype="sysupgrade"
@@ -6364,7 +6626,6 @@ workflow_step26_check_artifacts() {
             fi
         done <<< "$all_files"
         
-        # 验证固件大小
         echo "📋 固件大小验证结果:"
         echo "----------------------------------------"
         
@@ -6374,9 +6635,6 @@ workflow_step26_check_artifacts() {
             if [ $fsize_mb -lt 5 ]; then
                 echo "  ❌ $fname"
                 echo "     大小: $fsize_human (${fsize_mb}MB) - 小于5MB，判定为无效固件！"
-                echo "     状态: 将不会被上传"
-                
-                # 删除无效固件
                 rm -f "$file"
                 echo "     已删除无效固件文件"
                 echo ""
@@ -6384,140 +6642,28 @@ workflow_step26_check_artifacts() {
                 if [ $fsize_mb -lt 10 ]; then
                     echo "  ⚠️ $fname"
                     echo "     大小: $fsize_human (${fsize_mb}MB) - 小于10MB，可能不完整"
-                    echo "     状态: 保留但标记为可疑"
                 else
                     echo "  ✅ $fname"
                     echo "     大小: $fsize_human (${fsize_mb}MB) - 通过验证"
                 fi
                 
-                # 统计有效固件
                 if [ "$ftype" = "sysupgrade" ]; then
                     valid_sysupgrade=$((valid_sysupgrade + 1))
                 elif [ "$ftype" = "factory" ]; then
                     valid_factory=$((valid_factory + 1))
                 fi
-                
-                # 累计总大小
-                total_size_mb=$((total_size_mb + fsize_mb))
                 echo ""
             fi
         done
-        
-        total_size_gb=$((total_size_mb / 1024))
         
         echo "----------------------------------------"
         echo "📊 固件大小验证统计:"
         echo "  有效 sysupgrade 固件: $valid_sysupgrade 个"
         echo "  有效 factory 固件: $valid_factory 个"
-        echo "  固件总大小: ${total_size_gb}GB"
         echo ""
         
-        # 重要提示
-        echo "🔔 固件类型说明:"
-        echo "  ✅ *sysupgrade.bin/*.itb - **刷机用** (已安装OpenWrt时升级)"
-        echo "  🔷 *initramfs-*.bin        - **传统恢复用** (内存启动，用于恢复)"
-        echo "  🔷 *initramfs-*.itb        - **FIT格式恢复** (适用于支持FIT的引导程序)"
-        echo "  🏭 *factory.img/*.bin      - **原厂刷机用** (从原厂固件第一次刷入)"
-        echo "  ⚙️ *preloader.bin          - **引导预加载器** (写入特定分区)"
-        echo "  💽 *gpt.bin                - **GPT分区表** (用于eMMC)"
-        echo ""
-        
-        # 检测缺少的固件类型
-        local missing_types=""
-        if [ $valid_sysupgrade -eq 0 ]; then
-            missing_types="$missing_types sysupgrade"
-        fi
-        if [ $valid_factory -eq 0 ]; then
-            missing_types="$missing_types factory"
-        fi
-        
-        if [ -n "$missing_types" ]; then
-            echo "⚠️ 警告: 缺少以下有效固件类型 -$missing_types"
-            echo "   编译可能不完整，但可用的固件文件如下:"
-        fi
-        
-        # 显示实际找到的可刷机固件文件
-        local flashable_count=0
-        echo ""
-        echo "📋 可刷机的固件文件:"
-        echo "----------------------------------------"
-        
-        # 显示所有可刷机的固件
-        for firmware in "${firmware_list[@]}"; do
-            IFS=':' read -r ftype fname fsize_mb fsize_human file <<< "$firmware"
-            
-            if [ $fsize_mb -ge 5 ]; then
-                local status=""
-                if [ $fsize_mb -lt 10 ]; then
-                    status="[可疑]"
-                fi
-                
-                local ftype_display=""
-                if [[ "$ftype" == "sysupgrade" ]]; then
-                    ftype_display="[刷机用]"
-                elif [[ "$ftype" == "factory" ]]; then
-                    ftype_display="[原厂刷机]"
-                fi
-                
-                printf "  📌 %-60s %s %s %s\n" "$fname" "$fsize_human" "$ftype_display" "$status"
-                flashable_count=$((flashable_count + 1))
-            fi
-        done
-        
-        if [ $flashable_count -eq 0 ]; then
-            echo "  ⚠️ 没有找到可刷机的固件文件"
-            
-            # 尝试查找initramfs作为替代
-            local found_alt=0
-            while IFS= read -r file; do
-                [ -z "$file" ] && continue
-                if [[ "$file" == *"initramfs"* ]]; then
-                    local fname=$(basename "$file")
-                    local fsize=$(ls -lh "$file" | awk '{print $5}')
-                    printf "  🔷 %-60s %s [恢复用]\n" "$fname" "$fsize"
-                    found_alt=1
-                fi
-            done <<< "$all_files"
-            
-            if [ $found_alt -eq 0 ]; then
-                echo "  ❌ 完全没有找到任何固件文件"
-            fi
-        fi
-        
-        echo "----------------------------------------"
-        echo ""
-        
-        # 提供刷机建议
-        if [ $valid_sysupgrade -gt 0 ]; then
-            echo "📝 刷机建议:"
-            echo "   如果您已经安装了OpenWrt，请使用 sysupgrade 固件文件"
-            echo "   命令: sysupgrade -n /path/to/*sysupgrade.bin 或 *sysupgrade.itb"
-        elif [ $valid_factory -gt 0 ]; then
-            echo "📝 刷机建议:"
-            echo "   如果您是从原厂固件第一次刷入，请使用 factory.img 文件"
-            echo "   通过路由器原厂Web界面刷入"
-        elif [ $initramfs_count -gt 0 ] || [ $itb_count -gt 0 ]; then
-            echo "📝 刷机建议:"
-            echo "   没有找到sysupgrade或factory固件，但找到了initramfs恢复镜像"
-            echo "   initramfs是内存启动镜像，可用于恢复系统，但不能永久刷入"
-            echo "   如需永久刷入，需要先启动initramfs，然后在系统中刷入sysupgrade"
-        fi
-        
-        # 如果是RAX3000M，提供特定说明
-        if [[ "$TARGET" == "mediatek" ]] && [[ "$SUBTARGET" == "filogic" ]]; then
-            echo ""
-            echo "📌 适用于 CMCC RAX3000M 的说明:"
-            echo "   - NAND版本: 使用 nand-preloader.bin 和 sysupgrade.itb"
-            echo "   - eMMC版本: 使用 emmc-gpt.bin, emmc-preloader.bin 和 sysupgrade.itb"
-            echo "   - 刷机前请确认您的硬件版本"
-        fi
-        
-        echo "=========================================="
-        
-        # 最终判定：如果没有有效固件，标记为失败
         if [ $valid_sysupgrade -eq 0 ] && [ $valid_factory -eq 0 ]; then
             echo "❌❌❌ 错误：没有找到任何有效固件（大小≥5MB）❌❌❌"
-            echo "   编译失败，所有固件文件均小于5MB"
             exit 1
         else
             echo "✅ 构建产物检查通过，找到 $((valid_sysupgrade + valid_factory)) 个有效固件"
@@ -6560,7 +6706,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 快速错误检查函数 - 生成错误报告文件（完整诊断版 - 合并0421修复 + 0404完整诊断）
+# 快速错误检查函数 - 生成错误报告文件（完整诊断版 - 支持 .itb 格式）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6573,12 +6719,10 @@ quick_error_check() {
         return 1
     }
 
-    # 加载环境变量获取完整的平台信息
     if [ -f "$build_dir/build_env.sh" ]; then
         source "$build_dir/build_env.sh"
     fi
 
-    # 创建输出文件并写入内容
     {
         echo ""
         echo "================================================================="
@@ -6591,15 +6735,12 @@ quick_error_check() {
         echo "源码分支: ${SELECTED_BRANCH:-unknown}"
         echo "================================================================="
 
-        # 查找可用的日志文件（优先使用最新的尝试日志）
         local latest_log=""
         if [ -f "$log_file" ]; then
             latest_log="$log_file"
         else
-            # 先尝试 build_step*.log
             latest_log=$(ls -t build_step*.log 2>/dev/null | head -1)
             if [ -z "$latest_log" ]; then
-                # 再尝试 build_phase*.log
                 latest_log=$(ls -t build_phase*.log 2>/dev/null | head -1)
             fi
         fi
@@ -6613,7 +6754,7 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 0. 固件生成状态检查（增强版）
+        # 0. 固件生成状态检查（支持 .itb 和 .bin 格式）
         # ============================================
         echo "🔍 0. 固件生成状态检查:"
         echo "----------------------------------------"
@@ -6638,13 +6779,17 @@ quick_error_check() {
         local firmware_details=()
         
         if [ -d "$target_dir" ]; then
-            # 只检查 .bin 和 .img 文件
             while IFS= read -r file; do
                 [ -z "$file" ] && continue
                 local fname=$(basename "$file")
                 
-                # 跳过非固件文件
-                if [[ "$fname" == *.itb ]] || [[ "$fname" == *.manifest ]] || [[ "$fname" == *sha256sums* ]]; then
+                # 跳过 initramfs、manifest、sha256sums
+                if [[ "$fname" == *"initramfs"* ]] || [[ "$fname" == *".manifest" ]] || [[ "$fname" == *"sha256sums"* ]]; then
+                    continue
+                fi
+                
+                # 跳过 .fip 文件（引导固件）
+                if [[ "$fname" == *".fip" ]]; then
                     continue
                 fi
                 
@@ -6664,17 +6809,12 @@ quick_error_check() {
                     ftype="other"
                 fi
                 
-                local is_flashable=0
-                if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
-                    is_flashable=1
-                fi
-                
                 if [ $fsize_mb -ge 5 ]; then
-                    if [ $is_flashable -eq 1 ]; then
+                    if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
                         echo "✅ $fname"
                         echo "   大小: $fsize_human (${fsize_mb}MB)"
                         echo "   SHA256: $fhash"
-                        echo "   类型: 可刷机固件"
+                        echo "   类型: 可刷机固件 ($([[ "$fname" == *.itb ]] && echo 'FIT格式' || echo '标准格式'))"
                         valid_firmware=$((valid_firmware + 1))
                         firmware_list+=("$fname")
                         firmware_details+=("$fname|$fsize_human|$fhash|$ftype")
@@ -6685,7 +6825,7 @@ quick_error_check() {
                     echo "❌ $fname - $fsize_human (无效，小于5MB)"
                 fi
                 echo ""
-            done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" \) 2>/dev/null | sort)
+            done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | sort)
             
             if [ $found_firmware -eq 0 ]; then
                 echo "❌ 目录存在但未找到固件文件"
@@ -6699,14 +6839,13 @@ quick_error_check() {
             echo "❌ 目标目录不存在: $target_dir"
         fi
         
-        # 从日志中提取固件生成记录
         local log_firmware=""
-        log_firmware=$(grep "cp .*bin/targets/.*\.bin" "$latest_log" 2>/dev/null | tail -1)
+        log_firmware=$(grep -E "cp .*bin/targets/.*\.(bin|itb|img)" "$latest_log" 2>/dev/null | tail -1)
         if [ -n "$log_firmware" ]; then
             if [ $valid_firmware -eq 0 ]; then
                 echo "✅ 日志确认固件已成功生成"
                 valid_firmware=1
-                local fw_name=$(echo "$log_firmware" | sed -E 's/.*\/([^/]+\.bin).*/\1/')
+                local fw_name=$(echo "$log_firmware" | sed -E 's/.*\/([^/]+\.(bin|itb|img)).*/\1/')
                 if [ -n "$fw_name" ]; then
                     firmware_list+=("$fw_name")
                 fi
@@ -6723,48 +6862,29 @@ quick_error_check() {
         echo "----------------------------------------"
         
         local compile_errors=0
-        local fatal_errors=0
         
-        # 检查 make 错误退出
-        if grep -q "make:.*Error [0-9]\+" "$latest_log" || grep -q "make\[[0-9]\].*Error [0-9]\+" "$latest_log"; then
+        if grep -E "make:.*Error [0-9]+|make\[[0-9]+\].*Error [0-9]+" "$latest_log" | grep -v "(ignored)" | head -5 | grep -q .; then
             echo "❌ 检测到 make 编译错误退出:"
-            grep -n "make:.*Error [0-9]\+" "$latest_log" | grep -v "(ignored)" | head -5 | while read line; do
-                echo "   $line"
-            done
-            grep -n "make\[[0-9]\].*Error [0-9]\+" "$latest_log" | grep -v "(ignored)" | head -5 | while read line; do
+            grep -E "make:.*Error [0-9]+|make\[[0-9]+\].*Error [0-9]+" "$latest_log" | grep -v "(ignored)" | head -5 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
-            fatal_errors=$((fatal_errors + 1))
         fi
         
-        # 检查 collect2: error
         if grep -q "collect2: error" "$latest_log"; then
             echo "❌ 检测到链接器错误:"
             grep -n "collect2: error" "$latest_log" | head -3 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
-            fatal_errors=$((fatal_errors + 1))
         fi
         
-        # 检查 undefined reference
-        if grep -q "undefined reference to" "$latest_log"; then
-            echo "❌ 检测到未定义引用错误:"
-            grep -n "undefined reference to" "$latest_log" | head -5 | while read line; do
-                echo "   $line"
-            done
-            compile_errors=$((compile_errors + 1))
-        fi
-        
-        # 检查构建失败信息
         if grep -q "ERROR:.*failed to build" "$latest_log"; then
             echo "❌ 检测到构建失败:"
             grep -n "ERROR:.*failed to build" "$latest_log" | head -3 | while read line; do
                 echo "   $line"
             done
             compile_errors=1
-            fatal_errors=$((fatal_errors + 1))
         fi
         
         if [ $compile_errors -eq 0 ]; then
@@ -6785,7 +6905,6 @@ quick_error_check() {
             "Broken pipe:Broken pipe"
             "autoreconf失败:autoreconf.*failed|aclocal.*failed"
             "磁盘空间不足:No space left"
-            "符号链接循环:Too many levels of symbolic links"
         )
         
         for pattern_pair in "${error_patterns[@]}"; do
@@ -6799,134 +6918,9 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 3. 补丁失败详细分析（深度增强版）
+        # 3. 关键组件状态检查
         # ============================================
-        echo "🔍 3. 补丁失败详细分析:"
-        echo "----------------------------------------"
-        
-        if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
-            echo "⚠️ 检测到补丁失败，提取详细信息..."
-            echo ""
-            
-            # 提取失败补丁的完整路径
-            echo "🔧 失败补丁路径:"
-            grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | sort -u | while read patch_file; do
-                echo "   📁 $patch_file"
-            done
-            echo ""
-            
-            # 统计失败的 hunk 数量
-            local failed_hunks=$(grep -c "Hunk.*FAILED" "$latest_log" 2>/dev/null || echo "0")
-            echo "📊 失败的 hunk 数量: $failed_hunks"
-            echo ""
-            
-            # 分析失败的hunk详情
-            echo "🔧 失败的hunk详情:"
-            grep -B2 "Hunk.*FAILED" "$latest_log" 2>/dev/null | grep -E "Hunk|patching" | head -20 | while read line; do
-                echo "   $line"
-            done
-            echo ""
-            
-            # 分析.rej文件
-            echo "🔧 .rej 文件分析 (显示失败的代码块):"
-            find build_dir -name "*.rej" -type f 2>/dev/null | while read rej_file; do
-                echo "   📄 $(basename "$rej_file"):"
-                echo "   ----------------------------------------"
-                awk '/^\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*/{flag=1} flag{print} /^---/{if(flag) exit}' "$rej_file" 2>/dev/null | head -30 | sed 's/^/      /'
-                echo ""
-            done
-            
-            # 检查是否有quilt系列文件
-            echo "🔧 补丁系列文件检查:"
-            for series_file in $(find target/linux -name "series" 2>/dev/null | head -5); do
-                echo "   📁 $series_file:"
-                echo "   ----------------------------------------"
-                cat "$series_file" 2>/dev/null | head -20 | sed 's/^/      /'
-                echo ""
-            done
-            
-            # 检查内核版本和补丁匹配情况
-            echo "🔧 内核版本与补丁兼容性检查:"
-            local kernel_ver=""
-            if [[ "$SELECTED_BRANCH" == *"23.05"* ]]; then
-                kernel_ver="5.15"
-            elif [[ "$SELECTED_BRANCH" == *"21.02"* ]]; then
-                kernel_ver="5.4"
-            fi
-            echo "   当前内核版本: $kernel_ver"
-            
-            # 检查补丁文件名中的版本号
-            grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "v[0-9]+\.[0-9]+" | sort -u | while read patch_ver; do
-                echo "   补丁目标版本: $patch_ver"
-                if [[ "$kernel_ver" != *"${patch_ver#v}"* ]]; then
-                    echo "      ⚠️ 补丁版本与内核版本可能不匹配!"
-                fi
-            done
-            
-            # 分析是否是跨平台补丁问题
-            local failed_patch=$(grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | head -1)
-            if [ -n "$failed_patch" ]; then
-                local patch_name=$(basename "$failed_patch")
-                if [[ "$patch_name" == *"mtk"* ]] && [ "$TARGET" != "mediatek" ]; then
-                    echo "      ⚠️ MediaTek 补丁被应用到非 MediaTek 平台 ($TARGET)"
-                    echo "      💡 建议: 检查补丁系列文件，确保平台补丁正确隔离"
-                elif [[ "$patch_name" == *"v5."* ]] || [[ "$patch_name" == *"v6."* ]]; then
-                    echo "      ⚠️ 补丁版本与内核版本可能不匹配"
-                    echo "      💡 建议: 检查补丁是否适用于当前内核版本"
-                fi
-            fi
-        else
-            echo "✅ 未检测到补丁失败"
-        fi
-        echo ""
-
-        # ============================================
-        # 4. 内核模块编译错误详细分析
-        # ============================================
-        echo "🔍 4. 内核模块编译错误分析:"
-        echo "----------------------------------------"
-        
-        if grep -q "error:" "$latest_log" 2>/dev/null; then
-            echo "🔧 检测到编译错误，提取关键信息..."
-            echo ""
-            
-            # 按模块分组显示错误
-            echo "📦 按模块分组的编译错误:"
-            grep -B5 "error:" "$latest_log" 2>/dev/null | grep -E "Entering directory|error:" | paste - - 2>/dev/null | while read line; do
-                echo "   $line"
-            done | head -20
-            echo ""
-            
-            # 提取具体错误信息
-            echo "🔧 具体错误信息:"
-            grep -E "error:|undefined reference|implicit declaration" "$latest_log" 2>/dev/null | head -30 | sort -u | while read line; do
-                echo "   $line"
-            done
-            echo ""
-            
-            # 检查缺失的头文件
-            echo "🔧 缺失的头文件:"
-            grep "No such file or directory" "$latest_log" 2>/dev/null | grep "\.h" | sort -u | head -10 | while read line; do
-                echo "   $line"
-            done
-            echo ""
-            
-            # 检查 API 变更问题
-            echo "🔧 可能的API变更问题:"
-            grep -E "implicit declaration|too many arguments|too few arguments" "$latest_log" 2>/dev/null | sort -u | head -10 | while read line; do
-                echo "   $line"
-            done
-            echo ""
-            
-        else
-            echo "✅ 未检测到明显的编译错误"
-        fi
-        echo ""
-
-        # ============================================
-        # 5. 关键组件状态检查
-        # ============================================
-        echo "🔍 5. 关键组件状态检查:"
+        echo "🔍 3. 关键组件状态检查:"
         echo "----------------------------------------"
         
         if [ -d "staging_dir" ]; then
@@ -6937,9 +6931,7 @@ quick_error_check() {
         fi
         
         if [ -d "feeds" ]; then
-            local feed_count=$(find feeds -maxdepth 1 -type d 2>/dev/null | wc -l)
-            feed_count=$((feed_count - 1))
-            echo "✅ feeds 存在 ($feed_count 个feed)"
+            echo "✅ feeds 存在"
         else
             echo "❌ feeds 不存在"
         fi
@@ -6947,19 +6939,6 @@ quick_error_check() {
         if [ -f ".config" ]; then
             local config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}')
             echo "✅ .config 存在 ($config_size)"
-            
-            # 检查关键配置
-            echo ""
-            echo "   🔧 关键内核模块配置状态:"
-            for kmod in gpio-button-hotplug usb-core usb2 usb3 usb-storage; do
-                if grep -q "^CONFIG_PACKAGE_kmod-${kmod}=y" .config; then
-                    echo "      ✅ kmod-$kmod: 已启用"
-                elif grep -q "^# CONFIG_PACKAGE_kmod-${kmod} is not set" .config; then
-                    echo "      ❌ kmod-$kmod: 已禁用"
-                else
-                    echo "      ⚪ kmod-$kmod: 未配置"
-                fi
-            done
         else
             echo "❌ .config 不存在"
         fi
@@ -6970,40 +6949,12 @@ quick_error_check() {
         else
             echo "⚠️ dl 目录不存在"
         fi
-        
-        # 检查内核源码目录状态
-        echo ""
-        echo "🔧 内核源码目录状态:"
-        local kernel_dirs=$(find build_dir -maxdepth 3 -type d -name "linux-*" 2>/dev/null | head -10)
-        if [ -n "$kernel_dirs" ]; then
-            echo "$kernel_dirs" | while read kdir; do
-                local prepared=$(find "$kdir" -name ".prepared_*" 2>/dev/null | head -1)
-                local patched=$(find "$kdir" -name ".patched" 2>/dev/null | head -1)
-                local quilt_series=$(find "$kdir" -name "series" 2>/dev/null | head -1)
-                
-                echo "   📁 $(basename "$kdir"):"
-                if [ -n "$prepared" ]; then
-                    echo "      ✅ 已准备: $(basename "$prepared")"
-                else
-                    echo "      ⚠️ 未完成准备"
-                fi
-                if [ -n "$patched" ]; then
-                    echo "      ✅ 已打补丁"
-                fi
-                if [ -n "$quilt_series" ]; then
-                    local patch_count=$(cat "$quilt_series" 2>/dev/null | wc -l)
-                    echo "      📊 补丁系列: $patch_count 个补丁"
-                fi
-            done
-        else
-            echo "   ℹ️ 未找到内核源码目录"
-        fi
         echo ""
 
         # ============================================
-        # 6. 构建时间统计
+        # 4. 构建时间统计
         # ============================================
-        echo "🔍 6. 构建时间统计:"
+        echo "🔍 4. 构建时间统计:"
         echo "----------------------------------------"
         grep -E "time:.*#|real.*user.*sys" "$latest_log" 2>/dev/null | tail -5 | while read line; do
             echo "   $line"
@@ -7011,15 +6962,15 @@ quick_error_check() {
         echo ""
 
         # ============================================
-        # 7. 最后30行日志摘要
+        # 5. 最后30行日志摘要
         # ============================================
-        echo "🔍 7. 最后30行日志摘要:"
+        echo "🔍 5. 最后30行日志摘要:"
         echo "----------------------------------------"
         tail -30 "$latest_log" | sed 's/^/   /'
         echo ""
 
         # ============================================
-        # 8. 构建结果总结（增强版）
+        # 6. 构建结果总结
         # ============================================
         echo "================================================================="
         echo "📊 构建结果总结:"
@@ -7040,6 +6991,10 @@ quick_error_check() {
                 echo "  大小:   $fsize"
                 echo "  类型:   $ftype (可刷机固件)"
                 echo "  SHA256: $fhash"
+                if [[ "$fname" == *.itb ]]; then
+                    echo "  📌 格式: FIT Image (.itb)"
+                    echo "  💡 可通过 sysupgrade 命令直接刷入"
+                fi
             done
             
             echo ""
@@ -7050,68 +7005,29 @@ quick_error_check() {
             echo "💡 刷机说明:"
             if [[ "${firmware_list[*]}" == *"sysupgrade"* ]]; then
                 echo "   - sysupgrade 固件用于已安装 OpenWrt 的系统升级"
-                echo "   - 使用命令: sysupgrade -n /path/to/*sysupgrade.bin"
+                if [[ "${firmware_list[*]}" == *".itb"* ]]; then
+                    echo "   - .itb 格式通过命令: sysupgrade -n /path/to/*sysupgrade.itb"
+                fi
+                if [[ "${firmware_list[*]}" == *".bin"* ]]; then
+                    echo "   - .bin 格式通过命令: sysupgrade -n /path/to/*sysupgrade.bin"
+                fi
             fi
             if [[ "${firmware_list[*]}" == *"factory"* ]]; then
                 echo "   - factory 固件用于从原厂固件首次刷入"
-                echo "   - 通过路由器原厂 Web 界面刷入"
             fi
             
         else
             echo "❌❌❌ 编译失败：没有生成有效固件 ❌❌❌"
             echo ""
-            
-            # 智能分析失败原因
             echo "💡 诊断分析:"
-            
-            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
-                echo ""
-                echo "   🔧 补丁失败分析:"
-                
-                # 分析是否是跨平台补丁问题
-                local failed_patch=$(grep "Patch failed!" "$latest_log" 2>/dev/null | grep -oE "/[^[:space:]]+\.patch" | head -1)
-                if [ -n "$failed_patch" ]; then
-                    local patch_name=$(basename "$failed_patch")
-                    if [[ "$patch_name" == *"mtk"* ]] && [ "$TARGET" != "mediatek" ]; then
-                        echo "      ⚠️ MediaTek 补丁被应用到非 MediaTek 平台 ($TARGET)"
-                        echo "      💡 建议: 检查补丁系列文件，确保平台补丁正确隔离"
-                    elif [[ "$patch_name" == *"v5."* ]] || [[ "$patch_name" == *"v6."* ]]; then
-                        echo "      ⚠️ 补丁版本与内核版本可能不匹配"
-                        echo "      💡 建议: 检查补丁是否适用于当前内核版本"
-                    else
-                        echo "      💡 建议: 检查并删除失败的补丁文件后重试"
-                    fi
-                fi
-                
-                # 统计失败的hunk数量
-                local failed_hunks=$(grep -c "Hunk.*FAILED" "$latest_log" 2>/dev/null || echo "0")
-                echo "      📊 失败的 hunk 数量: $failed_hunks"
-            fi
-            
-            if grep -q "gpio-button-hotplug" "$latest_log" 2>/dev/null; then
-                echo ""
-                echo "   🔧 gpio-button-hotplug 模块问题:"
-                if grep -q "implicit declaration" "$latest_log" 2>/dev/null; then
-                    echo "      ⚠️ 内核 API 变更导致编译失败"
-                    echo "      💡 需要更新模块源码以适配当前内核版本"
-                fi
-            fi
-            
-            if grep -q "No space left" "$latest_log" 2>/dev/null; then
-                echo ""
-                echo "   🔧 磁盘空间不足"
-                echo "      💡 建议: 清理磁盘空间后重试"
-            fi
-            
             if grep -q "Download failed" "$latest_log" 2>/dev/null; then
-                echo ""
                 echo "   🔧 下载失败: 检查网络连接或更换镜像源"
             fi
-            
-            if grep -q "Broken pipe" "$latest_log" 2>/dev/null; then
-                echo ""
-                echo "   🔧 Broken pipe 错误:"
-                echo "      💡 建议: 提高文件描述符限制后重试"
+            if grep -q "No space left" "$latest_log" 2>/dev/null; then
+                echo "   🔧 磁盘空间不足: 清理磁盘空间"
+            fi
+            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
+                echo "   🔧 补丁失败: 删除失败的补丁文件"
             fi
         fi
         
@@ -7123,7 +7039,6 @@ quick_error_check() {
 
     echo "✅ 错误检查报告已保存到: $output_file"
     
-    # 如果有有效固件，返回0；否则返回1
     if [ $valid_firmware -gt 0 ]; then
         return 0
     else
