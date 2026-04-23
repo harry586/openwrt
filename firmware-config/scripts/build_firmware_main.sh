@@ -5892,47 +5892,42 @@ workflow_step25_build_firmware() {
     rm -f staging_dir/target-*/.stamp_package_* 2>/dev/null || true
     
     # ============================================
-    # 修复 gpio-button-hotplug 模块（源码 + Makefile）
+    # 修复 gpio-button-hotplug 模块
     # ============================================
     log "  🔧 修复 gpio-button-hotplug 模块..."
     
     local gpio_src="package/kernel/gpio-button-hotplug/src/gpio-button-hotplug.c"
     if [ -f "$gpio_src" ]; then
-        # 注释掉有问题的代码
         if grep -q "broadcast_uevent" "$gpio_src" 2>/dev/null; then
             sed -i 's|\(.*broadcast_uevent.*\)|/* \1 */|g' "$gpio_src"
             log "    ✅ 已注释 broadcast_uevent"
         fi
     fi
     
-    # 修改 Makefile，添加 -Wno-error 忽略警告
-    local gpio_makefile="package/kernel/gpio-button-hotplug/Makefile"
-    if [ -f "$gpio_makefile" ]; then
-        if ! grep -q "PKG_BUILD_FLAGS" "$gpio_makefile" 2>/dev/null; then
-            # 在 Makefile 中添加编译标志
-            sed -i '/include $(INCLUDE_DIR)\/kernel.mk/a PKG_BUILD_FLAGS:=no-mips16\nTARGET_CFLAGS += -Wno-error=implicit-function-declaration' "$gpio_makefile"
-            log "    ✅ 已添加 -Wno-error 编译标志"
-        fi
-    fi
-    
     # ============================================
-    # 注释掉 Makefile 中有问题的 DTS 引用
+    # 直接删除有问题的 DTS 文件（更彻底）
     # ============================================
-    log "  🔧 修复 DTS Makefile 引用..."
+    log "  🗑️ 删除有问题的 DTS 文件..."
     
     case "$TARGET" in
         "ipq40xx")
-            find target/linux/ipq40xx -name "Makefile" -exec sed -i 's/.*ap120c.*/# &/' {} \; 2>/dev/null || true
-            find target/linux/ipq40xx -name "Makefile" -exec sed -i 's/.*jalapeno.*/# &/' {} \; 2>/dev/null || true
+            find target/linux/ipq40xx -name "*ap120c*.dts*" -delete 2>/dev/null || true
+            find target/linux/ipq40xx -name "*jalapeno*.dts*" -delete 2>/dev/null || true
+            log "    ✅ 已删除 ipq40xx 问题 DTS"
             ;;
         "mediatek")
-            find target/linux/mediatek -name "Makefile" -exec sed -i 's/.*cudy.*/# &/' {} \; 2>/dev/null || true
-            find target/linux/mediatek -name "Makefile" -exec sed -i 's/.*creatlentem.*/# &/' {} \; 2>/dev/null || true
+            find target/linux/mediatek -name "*cudy*.dts*" -delete 2>/dev/null || true
+            find target/linux/mediatek -name "*creatlentem*.dts*" -delete 2>/dev/null || true
+            log "    ✅ 已删除 mediatek 问题 DTS"
             ;;
         "ath79")
-            find target/linux/ath79 -name "Makefile" -exec sed -i 's/.*alfa-network.*/# &/' {} \; 2>/dev/null || true
+            find target/linux/ath79 -name "*alfa-network*.dts*" -delete 2>/dev/null || true
+            log "    ✅ 已删除 ath79 问题 DTS"
             ;;
     esac
+    
+    # 同时删除对应的 .dtb 引用（如果存在）
+    find target/linux -name "Makefile" -exec sed -i '/ap120c\|jalapeno\|cudy\|creatlentem\|alfa-network/d' {} \; 2>/dev/null || true
     
     # ============================================
     # 23.05版本：删除所有补丁目录
