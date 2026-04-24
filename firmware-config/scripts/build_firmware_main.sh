@@ -371,12 +371,26 @@ initialize_build_env() {
     elif [ -f "$SUPPORT_SCRIPT" ]; then
         log "🔍 调用support.sh获取设备平台信息..."
         
+        # 调试：查看 support.sh 是否存在以及源码目录状态
+        log "🔧 DEBUG: SUPPORT_SCRIPT=$SUPPORT_SCRIPT"
+        log "🔧 DEBUG: BUILD_DIR=$BUILD_DIR"
+        log "🔧 DEBUG: device_name=$device_name"
+        
+        if [ -d "$BUILD_DIR/target/linux" ]; then
+            log "🔧 DEBUG: 源码目录存在，开始搜索设备..."
+        else
+            log "🔧 DEBUG: 源码目录不存在！$BUILD_DIR/target/linux"
+        fi
+        
         PLATFORM_INFO=$(BUILD_DIR="$BUILD_DIR" "$SUPPORT_SCRIPT" get-platform "$device_name" "" "" 2>/dev/null)
+        log "🔧 DEBUG PLATFORM_INFO=[${PLATFORM_INFO}]"
         
         if [ -n "$PLATFORM_INFO" ]; then
             TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
             SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
             local matched_device=$(echo "$PLATFORM_INFO" | awk '{print $3}')
+            
+            log "🔧 DEBUG: TARGET=[$TARGET] SUBTARGET=[$SUBTARGET] matched_device=[$matched_device]"
             
             if [ -n "$matched_device" ] && [ "$matched_device" != "$device_name" ]; then
                 DEVICE="$matched_device"
@@ -6773,7 +6787,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 快速错误检查函数 - 生成错误报告文件（完整诊断版 - 支持 .itb 格式）
+# 全流程错误检查函数 - 覆盖所有步骤
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6793,7 +6807,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 快速错误检查 - 正在扫描日志中的常见错误..."
+        echo "🔍 全流程错误检查 - 扫描所有步骤日志"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: $target_platform"
@@ -6802,26 +6816,43 @@ quick_error_check() {
         echo "源码分支: ${SELECTED_BRANCH:-unknown}"
         echo "================================================================="
 
-        local latest_log=""
+        # 收集所有日志文件
+        local all_logs=()
+        
+        # 主构建日志
         if [ -f "$log_file" ]; then
-            latest_log="$log_file"
-        else
-            latest_log=$(ls -t build_step*.log 2>/dev/null | head -1)
-            if [ -z "$latest_log" ]; then
-                latest_log=$(ls -t build_phase*.log 2>/dev/null | head -1)
-            fi
+            all_logs+=("$log_file")
         fi
-
-        if [ -z "$latest_log" ] || [ ! -f "$latest_log" ]; then
-            echo "⚠️ 未找到任何日志文件，无法进行错误检查。"
+        
+        # 分步编译日志
+        for step_log in build_step*.log build_phase*.log; do
+            if [ -f "$step_log" ]; then
+                all_logs+=("$step_log")
+            fi
+        done
+        
+        # 下载日志
+        if [ -f "download.log" ]; then
+            all_logs+=("download.log")
+        fi
+        
+        # feeds 日志
+        for feed_log in /tmp/build-logs/*.log; do
+            if [ -f "$feed_log" ]; then
+                all_logs+=("$feed_log")
+            fi
+        done
+        
+        if [ ${#all_logs[@]} -eq 0 ]; then
+            echo "⚠️ 未找到任何日志文件"
             return 1
         fi
-
-        echo "📄 分析日志: $latest_log"
+        
+        echo "📄 找到 ${#all_logs[@]} 个日志文件"
         echo ""
 
         # ============================================
-        # 0. 固件生成状态检查（支持 .itb 和 .bin 格式）
+        # 0. 固件生成状态检查
         # ============================================
         echo "🔍 0. 固件生成状态检查:"
         echo "----------------------------------------"
@@ -6850,12 +6881,10 @@ quick_error_check() {
                 [ -z "$file" ] && continue
                 local fname=$(basename "$file")
                 
-                # 跳过 initramfs、manifest、sha256sums
                 if [[ "$fname" == *"initramfs"* ]] || [[ "$fname" == *".manifest" ]] || [[ "$fname" == *"sha256sums"* ]]; then
                     continue
                 fi
                 
-                # 跳过 .fip 文件（引导固件）
                 if [[ "$fname" == *".fip" ]]; then
                     continue
                 fi
@@ -6906,138 +6935,123 @@ quick_error_check() {
             echo "❌ 目标目录不存在: $target_dir"
         fi
         
-        local log_firmware=""
-        log_firmware=$(grep -E "cp .*bin/targets/.*\.(bin|itb|img)" "$latest_log" 2>/dev/null | tail -1)
-        if [ -n "$log_firmware" ]; then
-            if [ $valid_firmware -eq 0 ]; then
-                echo "✅ 日志确认固件已成功生成"
-                valid_firmware=1
-                local fw_name=$(echo "$log_firmware" | sed -E 's/.*\/([^/]+\.(bin|itb|img)).*/\1/')
-                if [ -n "$fw_name" ]; then
-                    firmware_list+=("$fw_name")
-                fi
-            fi
-        fi
-        
         echo "----------------------------------------"
         echo ""
 
         # ============================================
-        # 1. 编译退出状态检查
+        # 1. 全流程错误扫描
         # ============================================
-        echo "🔍 1. 编译退出状态检查:"
+        echo "🔍 1. 全流程错误扫描（所有步骤）:"
         echo "----------------------------------------"
         
-        local compile_errors=0
-        
-        if grep -E "make:.*Error [0-9]+|make\[[0-9]+\].*Error [0-9]+" "$latest_log" | grep -v "(ignored)" | head -5 | grep -q .; then
-            echo "❌ 检测到 make 编译错误退出:"
-            grep -E "make:.*Error [0-9]+|make\[[0-9]+\].*Error [0-9]+" "$latest_log" | grep -v "(ignored)" | head -5 | while read line; do
-                echo "   $line"
-            done
-            compile_errors=1
-        fi
-        
-        if grep -q "collect2: error" "$latest_log"; then
-            echo "❌ 检测到链接器错误:"
-            grep -n "collect2: error" "$latest_log" | head -3 | while read line; do
-                echo "   $line"
-            done
-            compile_errors=1
-        fi
-        
-        if grep -q "ERROR:.*failed to build" "$latest_log"; then
-            echo "❌ 检测到构建失败:"
-            grep -n "ERROR:.*failed to build" "$latest_log" | head -3 | while read line; do
-                echo "   $line"
-            done
-            compile_errors=1
-        fi
-        
-        if [ $compile_errors -eq 0 ]; then
-            echo "✅ 未检测到致命编译错误退出"
-        fi
-        echo ""
-
-        # ============================================
-        # 2. 常见错误模式检查
-        # ============================================
-        echo "🔍 2. 常见错误模式检查:"
-        echo "----------------------------------------"
+        local total_errors=0
+        local total_warnings=0
         
         local error_patterns=(
-            "补丁失败:Patch failed|hunk FAILED"
-            "文件丢失:No such file or directory"
-            "下载失败:Download failed|curl.*error [0-9]"
+            "make.*Error:make.*Error [0-9]|make\[[0-9]\].*Error [0-9]"
+            "构建失败:ERROR:.*failed to build"
+            "链接错误:collect2: error|undefined reference"
+            "补丁失败:Patch failed|Hunk FAILED"
+            "文件缺失:No such file or directory"
+            "下载失败:Download failed|curl.*error [0-9]|wget.*error"
+            "认证失败:401 Unauthorized|403 Forbidden"
             "Broken pipe:Broken pipe"
-            "autoreconf失败:autoreconf.*failed|aclocal.*failed"
             "磁盘空间不足:No space left"
+            "权限拒绝:Permission denied"
+            "Git错误:fatal:|error:.*git"
+            "apt错误:E:.*Unable to locate|E:.*Failed to fetch"
+            "autoreconf失败:autoreconf.*failed|aclocal.*failed"
+            "设备匹配警告:未精确匹配|匹配设备.*->"
+            "设备配置问题:设备配置可能不正确|设备配置丢失|DEVICE.*为空"
+            "环境文件缺失:环境文件不存在|无法.*获取平台信息"
+            "源码克隆失败:克隆.*失败|克隆.*分支失败"
+            "Feeds问题:feeds.*失败|feeds.*警告|feeds.*错误"
+            "编译超时:timeout|timed out"
+            "符号链接问题:Too many levels of symbolic links"
         )
         
-        for pattern_pair in "${error_patterns[@]}"; do
-            local err_name="${pattern_pair%%:*}"
-            local err_pattern="${pattern_pair##*:}"
-            local match_count=$(grep -E -i -c "$err_pattern" "$latest_log" 2>/dev/null || echo "0")
-            if [ "$match_count" -gt 0 ]; then
-                echo "⚠️ $err_name 检测到 (共 $match_count 处)"
-            fi
+        for log_file_to_check in "${all_logs[@]}"; do
+            local log_name=$(basename "$log_file_to_check")
+            
+            for pattern_pair in "${error_patterns[@]}"; do
+                local err_name="${pattern_pair%%:*}"
+                local err_pattern="${pattern_pair##*:}"
+                local match_count=$(grep -E -i -c "$err_pattern" "$log_file_to_check" 2>/dev/null || echo "0")
+                if [ "$match_count" -gt 0 ]; then
+                    echo "⚠️ [$log_name] $err_name (共 $match_count 处)"
+                    total_errors=$((total_errors + match_count))
+                fi
+            done
         done
+        
+        if [ $total_errors -eq 0 ]; then
+            echo "✅ 未检测到任何错误"
+        else
+            echo ""
+            echo "📊 全流程错误总数: $total_errors"
+        fi
         echo ""
 
         # ============================================
-        # 3. 关键组件状态检查
+        # 2. 关键组件状态检查
         # ============================================
-        echo "🔍 3. 关键组件状态检查:"
+        echo "🔍 2. 关键组件状态检查:"
         echo "----------------------------------------"
         
         if [ -d "staging_dir" ]; then
             local staging_size=$(du -sh staging_dir 2>/dev/null | awk '{print $1}')
             echo "✅ staging_dir 存在 ($staging_size)"
         else
-            echo "❌ staging_dir 不存在"
+            echo "❌ staging_dir 不存在（工具链未编译）"
         fi
         
         if [ -d "feeds" ]; then
             echo "✅ feeds 存在"
         else
-            echo "❌ feeds 不存在"
+            echo "⚠️ feeds 不存在（feeds未更新）"
         fi
         
         if [ -f ".config" ]; then
             local config_size=$(ls -lh .config 2>/dev/null | awk '{print $5}')
             echo "✅ .config 存在 ($config_size)"
         else
-            echo "❌ .config 不存在"
+            echo "⚠️ .config 不存在（配置未生成）"
         fi
         
         if [ -d "dl" ]; then
             local dl_count=$(find dl -type f 2>/dev/null | wc -l)
             echo "✅ dl 目录存在 ($dl_count 个文件)"
         else
-            echo "⚠️ dl 目录不存在"
+            echo "⚠️ dl 目录不存在（依赖未下载）"
+        fi
+        
+        if [ -d "build_dir" ]; then
+            echo "✅ build_dir 存在"
+        else
+            echo "⚠️ build_dir 不存在"
+        fi
+        
+        if [ -f "$build_dir/build_env.sh" ]; then
+            echo "✅ build_env.sh 存在"
+            local env_device=$(grep "^export DEVICE=" "$build_dir/build_env.sh" 2>/dev/null | cut -d'"' -f2)
+            echo "   📌 环境文件中的 DEVICE: $env_device"
+        else
+            echo "⚠️ build_env.sh 不存在"
         fi
         echo ""
 
         # ============================================
-        # 4. 构建时间统计
+        # 3. 最后30行日志摘要（主日志）
         # ============================================
-        echo "🔍 4. 构建时间统计:"
-        echo "----------------------------------------"
-        grep -E "time:.*#|real.*user.*sys" "$latest_log" 2>/dev/null | tail -5 | while read line; do
-            echo "   $line"
-        done
-        echo ""
+        if [ -f "$log_file" ]; then
+            echo "🔍 3. 最后30行日志摘要 ($(basename "$log_file")):"
+            echo "----------------------------------------"
+            tail -30 "$log_file" | sed 's/^/   /'
+            echo ""
+        fi
 
         # ============================================
-        # 5. 最后30行日志摘要
-        # ============================================
-        echo "🔍 5. 最后30行日志摘要:"
-        echo "----------------------------------------"
-        tail -30 "$latest_log" | sed 's/^/   /'
-        echo ""
-
-        # ============================================
-        # 6. 构建结果总结
+        # 4. 构建结果总结
         # ============================================
         echo "================================================================="
         echo "📊 构建结果总结:"
@@ -7084,23 +7098,35 @@ quick_error_check() {
             fi
             
         else
-            echo "❌❌❌ 编译失败：没有生成有效固件 ❌❌❌"
+            echo "❌❌❌ 构建结果: 无有效固件 ❌❌❌"
             echo ""
-            echo "💡 诊断分析:"
-            if grep -q "Download failed" "$latest_log" 2>/dev/null; then
+            
+            if [ $total_errors -gt 0 ]; then
+                echo "📊 全流程共发现 $total_errors 处错误/警告"
+            fi
+            
+            echo ""
+            echo "💡 诊断建议:"
+            if grep -q "Download failed\|curl.*error" "${all_logs[@]}" 2>/dev/null; then
                 echo "   🔧 下载失败: 检查网络连接或更换镜像源"
             fi
-            if grep -q "No space left" "$latest_log" 2>/dev/null; then
+            if grep -q "No space left" "${all_logs[@]}" 2>/dev/null; then
                 echo "   🔧 磁盘空间不足: 清理磁盘空间"
             fi
-            if grep -q "Patch failed\|Hunk FAILED" "$latest_log" 2>/dev/null; then
+            if grep -q "Patch failed\|Hunk FAILED" "${all_logs[@]}" 2>/dev/null; then
                 echo "   🔧 补丁失败: 删除失败的补丁文件"
+            fi
+            if grep -q "无法.*获取平台信息\|环境文件不存在" "${all_logs[@]}" 2>/dev/null; then
+                echo "   🔧 设备配置问题: 检查 support.sh 和步骤08日志"
+            fi
+            if grep -q "DEVICE.*为空" "${all_logs[@]}" 2>/dev/null; then
+                echo "   🔧 DEVICE变量为空: 检查步骤08的设备匹配逻辑"
             fi
         fi
         
         echo ""
         echo "================================================================="
-        echo "💡 提示：如需完整日志，请查看: $latest_log"
+        echo "💡 提示：完整日志请查看上述 ${#all_logs[@]} 个日志文件"
         echo "================================================================="
     } | tee "$output_file"
 
