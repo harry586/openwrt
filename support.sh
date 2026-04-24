@@ -25,6 +25,7 @@ CONFIG_DIR="$REPO_ROOT/firmware-config/config"
 #【support.sh-03】
 # 支持的设备列表
 # 格式: DEVICES["设备名称"]="目标平台 子目标 芯片型号"
+# 注意：此数组仅用于 list-devices 显示，实际设备查找通过源码 mk 文件自动完成
 declare -A DEVICES
 DEVICES["ac42u"]="ipq40xx generic bcm47189"
 DEVICES["asus_rt-ac42u"]="ipq40xx generic bcm47189"
@@ -154,47 +155,112 @@ list_devices() {
 # 验证设备是否支持
 validate_device() {
     local device_name="$1"
+    local manual_target="$2"
+    local manual_subtarget="$3"
     
-    if [ -z "${DEVICES[$device_name]}" ]; then
-        error "不支持的设备: $device_name。支持的设备列表: ${!DEVICES[*]}"
+    # 如果提供了手动指定的平台信息，直接返回
+    if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
+        log "设备验证通过（手动指定）: $device_name"
+        log "目标平台: $manual_target"
+        log "子目标: $manual_subtarget"
+        echo "$manual_target $manual_subtarget"
+        return 0
     fi
     
-    local platform_info="${DEVICES[$device_name]}"
-    local target=$(echo "$platform_info" | awk '{print $1}')
-    local subtarget=$(echo "$platform_info" | awk '{print $2}')
+    # 尝试从源码 mk 文件中自动查找设备
+    local repo_root="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+    local build_dir="${BUILD_DIR:-/mnt/openwrt-build}"
     
-    log "设备验证通过: $device_name"
-    log "目标平台: $target"
-    log "子目标: $subtarget"
+    # 先尝试在源码目录中查找
+    local search_dir="$build_dir"
+    if [ ! -d "$search_dir/target/linux" ]; then
+        search_dir="$repo_root"
+    fi
     
-    echo "$target $subtarget"
-}
-
-# 获取设备的平台信息
-get_device_platform() {
-    local device_name="$1"
+    if [ -d "$search_dir/target/linux" ]; then
+        log "🔍 在源码中自动查找设备: $device_name"
+        
+        # 遍历所有 target 目录
+        local found_target=""
+        local found_subtarget=""
+        
+        for target_dir in "$search_dir/target/linux/"*/; do
+            [ -d "$target_dir" ] || continue
+            local target_name=$(basename "$target_dir")
+            
+            # 查找该 target 下的所有 mk 文件
+            while IFS= read -r mk_file; do
+                [ -f "$mk_file" ] || continue
+                
+                # 搜索设备定义
+                if grep -q "define Device.*$device_name" "$mk_file" 2>/dev/null; then
+                    found_target="$target_name"
+                    
+                    # 提取子目标：从 mk 文件路径中获取
+                    local mk_dir=$(dirname "$mk_file")
+                    local parent_dir=$(basename "$mk_dir")
+                    
+                    if [ "$parent_dir" = "image" ]; then
+                        found_subtarget=$(basename $(dirname "$mk_dir"))
+                    else
+                        found_subtarget="$parent_dir"
+                    fi
+                    
+                    # 如果子目标就是 target 本身，尝试从文件中查找 subtarget
+                    if [ "$found_subtarget" = "$target_name" ] || [ "$found_subtarget" = "image" ]; then
+                        # 查找该 target 下的子目录
+                        for sub_dir in "$search_dir/target/linux/$target_name/"*/; do
+                            [ -d "$sub_dir" ] || continue
+                            local sub_name=$(basename "$sub_dir")
+                            if [ "$sub_name" != "image" ] && [ "$sub_name" != "files" ] && [ "$sub_name" != "patches"* ]; then
+                                if [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
+                                    found_subtarget="$sub_name"
+                                    break
+                                fi
+                            fi
+                        done
+                    fi
+                    
+                    break 2
+                fi
+            done < <(find "$target_dir" -name "*.mk" -type f 2>/dev/null)
+        done
+        
+        if [ -n "$found_target" ] && [ -n "$found_subtarget" ]; then
+            log "✅ 在源码中找到设备: $device_name -> $found_target/$found_subtarget"
+            echo "$found_target $found_subtarget"
+            return 0
+        fi
+    fi
     
-    # 直接查找设备
+    # 回退：从 DEVICES 数组中查找
     if [ -n "${DEVICES[$device_name]}" ]; then
         echo "${DEVICES[$device_name]}"
         return 0
     fi
     
-    # 设备名映射
-    local mapped_name="$device_name"
-    case "$device_name" in
-        cmcc_rax3000m-nand|cmcc_rax3000m-emmc|cmcc_rax3000m-sd)
-            mapped_name="cmcc_rax3000m-nand"
-            log "🔧 设备名映射: $device_name -> $mapped_name"
-            ;;
-        ac42u|rt-ac42u)
-            mapped_name="asus_rt-ac42u"
-            log "🔧 设备名映射: $device_name -> $mapped_name"
-            ;;
-    esac
+    # 都找不到，报错
+    error "不支持的设备: $device_name。支持的设备列表: ${!DEVICES[*]}"
+}
+
+# 获取设备的平台信息
+# 参数: device_name [manual_target] [manual_subtarget]
+get_device_platform() {
+    local device_name="$1"
+    local manual_target="$2"
+    local manual_subtarget="$3"
     
-    if [ -n "${DEVICES[$mapped_name]}" ]; then
-        echo "${DEVICES[$mapped_name]}"
+    # 如果提供了手动指定，直接使用
+    if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
+        log "使用手动指定的平台: $manual_target/$manual_subtarget" >&2
+        echo "$manual_target $manual_subtarget"
+        return 0
+    fi
+    
+    # 调用 validate_device 进行自动查找
+    local result=$(validate_device "$device_name" "$manual_target" "$manual_subtarget" 2>/dev/null)
+    if [ -n "$result" ]; then
+        echo "$result"
         return 0
     fi
     
