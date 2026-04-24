@@ -168,66 +168,93 @@ validate_device() {
     fi
     
     # 尝试从源码 mk 文件中自动查找设备
-    local repo_root="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
     local build_dir="${BUILD_DIR:-/mnt/openwrt-build}"
     
     # 先尝试在源码目录中查找
     local search_dir="$build_dir"
-    if [ ! -d "$search_dir/target/linux" ]; then
-        search_dir="$repo_root"
-    fi
     
     if [ -d "$search_dir/target/linux" ]; then
         log "🔍 在源码中自动查找设备: $device_name"
         
-        # 遍历所有 target 目录
         local found_target=""
         local found_subtarget=""
+        local best_match=""
+        local best_weight=0
+        local lower_input=$(echo "$device_name" | tr '[:upper:]' '[:lower:]')
         
         for target_dir in "$search_dir/target/linux/"*/; do
             [ -d "$target_dir" ] || continue
             local target_name=$(basename "$target_dir")
             
-            # 查找该 target 下的所有 mk 文件
             while IFS= read -r mk_file; do
                 [ -f "$mk_file" ] || continue
                 
-                # 搜索设备定义
-                if grep -q "define Device.*$device_name" "$mk_file" 2>/dev/null; then
-                    found_target="$target_name"
-                    
-                    # 提取子目标：从 mk 文件路径中获取
-                    local mk_dir=$(dirname "$mk_file")
-                    local parent_dir=$(basename "$mk_dir")
-                    
-                    if [ "$parent_dir" = "image" ]; then
-                        found_subtarget=$(basename $(dirname "$mk_dir"))
-                    else
-                        found_subtarget="$parent_dir"
-                    fi
-                    
-                    # 如果子目标就是 target 本身，尝试从文件中查找 subtarget
-                    if [ "$found_subtarget" = "$target_name" ] || [ "$found_subtarget" = "image" ]; then
-                        # 查找该 target 下的子目录
-                        for sub_dir in "$search_dir/target/linux/$target_name/"*/; do
-                            [ -d "$sub_dir" ] || continue
-                            local sub_name=$(basename "$sub_dir")
-                            if [ "$sub_name" != "image" ] && [ "$sub_name" != "files" ] && [ "$sub_name" != "patches"* ]; then
-                                if [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
-                                    found_subtarget="$sub_name"
-                                    break
-                                fi
+                # 提取所有设备定义
+                while IFS= read -r line; do
+                    if [[ "$line" =~ define[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
+                        local dev="${BASH_REMATCH[1]}"
+                        
+                        # 排除 _common 模板
+                        if [[ "$dev" == *_common* ]]; then
+                            continue
+                        fi
+                        
+                        local lower_dev=$(echo "$dev" | tr '[:upper:]' '[:lower:]')
+                        
+                        # 计算匹配权重
+                        local weight=0
+                        
+                        # 完全匹配
+                        if [ "$lower_input" = "$lower_dev" ]; then
+                            weight=$((weight + 200))
+                        fi
+                        
+                        # 反向包含
+                        if [[ "$lower_dev" == *"$lower_input"* ]]; then
+                            weight=$((weight + 60))
+                        fi
+                        
+                        # 正向包含
+                        if [[ "$lower_input" == *"$lower_dev"* ]]; then
+                            weight=$((weight + 80))
+                        fi
+                        
+                        if [ $weight -gt $best_weight ]; then
+                            best_weight=$weight
+                            best_match="$dev"
+                            found_target="$target_name"
+                            
+                            # 提取子目标
+                            local mk_dir=$(dirname "$mk_file")
+                            local parent_dir=$(basename "$mk_dir")
+                            if [ "$parent_dir" = "image" ]; then
+                                found_subtarget=$(basename $(dirname "$mk_dir"))
+                            else
+                                found_subtarget="$parent_dir"
                             fi
-                        done
+                            
+                            # 如果子目标就是 target 本身，从目录结构查找
+                            if [ "$found_subtarget" = "$target_name" ] || [ "$found_subtarget" = "image" ]; then
+                                for sub_dir in "$search_dir/target/linux/$target_name/"*/; do
+                                    [ -d "$sub_dir" ] || continue
+                                    local sub_name=$(basename "$sub_dir")
+                                    if [ "$sub_name" != "image" ] && [ "$sub_name" != "files" ] && [ "$sub_name" != "patches"* ]; then
+                                        if [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
+                                            found_subtarget="$sub_name"
+                                            break
+                                        fi
+                                    fi
+                                done
+                            fi
+                        fi
                     fi
-                    
-                    break 2
-                fi
+                done < <(grep -E "define Device/[a-zA-Z0-9_-]+" "$mk_file" 2>/dev/null)
+                
             done < <(find "$target_dir" -name "*.mk" -type f 2>/dev/null)
         done
         
-        if [ -n "$found_target" ] && [ -n "$found_subtarget" ]; then
-            log "✅ 在源码中找到设备: $device_name -> $found_target/$found_subtarget"
+        if [ -n "$found_target" ] && [ -n "$found_subtarget" ] && [ -n "$best_match" ]; then
+            log "✅ 在源码中找到设备: $device_name -> $best_match ($found_target/$found_subtarget)，权重: $best_weight"
             echo "$found_target $found_subtarget"
             return 0
         fi
