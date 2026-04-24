@@ -299,8 +299,8 @@ validate_device() {
         fi
     fi
     
-    echo "❌ mk文件中未找到设备: $device_name" >&2
-    return 1
+    # 找不到设备，直接报错退出（与04.04版本一致）
+    error "❌ mk文件中未找到设备: $device_name"
 }
 
 # 获取设备的平台信息
@@ -315,17 +315,8 @@ get_device_platform() {
         return 0
     fi
     
-    local result
-    result=$(validate_device "$device_name" "$manual_target" "$manual_subtarget")
-    local ret=$?
-    if [ $ret -ne 0 ]; then
-        return $ret
-    fi
-    if [ -n "$result" ]; then
-        echo "$result"
-        return 0
-    fi
-    return 1
+    # 直接调用，让错误信息透传
+    validate_device "$device_name" "$manual_target" "$manual_subtarget"
 }
 #【support.sh-08-end】
 
