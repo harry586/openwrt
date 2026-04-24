@@ -178,7 +178,6 @@ validate_device() {
         local best_weight=0
         local lower_input=$(echo "$device_name" | tr '[:upper:]' '[:lower:]')
         
-        # 提取输入中的关键信息
         local input_base=""
         if [[ "$lower_input" == *"rax3000m"* ]]; then input_base="rax3000m"
         elif [[ "$lower_input" == *"ac42u"* ]]; then input_base="ac42u"
@@ -209,56 +208,46 @@ validate_device() {
                         
                         local lower_dev=$(echo "$dev" | tr '[:upper:]' '[:lower:]')
                         
-                        # 必须包含系列基础名
                         if [[ "$lower_dev" != *"$input_base"* ]]; then
                             continue
                         fi
                         
                         local weight=0
                         
-                        # 完全匹配：权重+200（最高优先级）
                         if [ "$lower_input" = "$lower_dev" ]; then
                             weight=$((weight + 200))
                         fi
                         
-                        # 输入包含设备名（正向包含）：权重+80
                         if [[ "$lower_input" == *"$lower_dev"* ]]; then
                             weight=$((weight + 80))
                         fi
                         
-                        # 设备名包含输入（反向包含）：权重+50
                         if [[ "$lower_dev" == *"$lower_input"* ]]; then
                             weight=$((weight + 50))
                         fi
                         
-                        # 同系列基础名匹配：权重+25
                         if [[ "$lower_dev" == *"$input_base"* ]]; then
                             weight=$((weight + 25))
                         fi
                         
-                        # NAND 后缀匹配：权重+50
                         if [ $input_has_nand -eq 1 ] && [[ "$lower_dev" == *"nand"* ]]; then
                             weight=$((weight + 50))
                         fi
                         
-                        # EMMC 后缀匹配：权重+50
                         if [ $input_has_emmc -eq 1 ] && [[ "$lower_dev" == *"emmc"* ]]; then
                             weight=$((weight + 50))
                         fi
                         
-                        # ubootmod 后缀匹配：权重+40
                         if [ $input_has_ubootmod -eq 1 ] && [[ "$lower_dev" == *"ubootmod"* ]]; then
                             weight=$((weight + 40))
                         fi
                         
-                        # 设备名更长（更具体）：权重+20
                         local input_len=${#lower_input}
                         local device_len=${#lower_device}
                         if [ $device_len -gt $input_len ]; then
                             weight=$((weight + 20))
                         fi
                         
-                        # 部分单词匹配：权重+10
                         local input_parts=($(echo "$lower_input" | tr '_-' ' '))
                         local device_parts=($(echo "$lower_device" | tr '_-' ' '))
                         local part_match=0
@@ -310,8 +299,7 @@ validate_device() {
         fi
     fi
     
-    echo ""
-    return 1
+    error "❌ mk文件中未找到设备: $device_name"
 }
 
 # 获取设备的平台信息
