@@ -178,6 +178,20 @@ validate_device() {
         local best_weight=0
         local lower_input=$(echo "$device_name" | tr '[:upper:]' '[:lower:]')
         
+        # 提取输入中的关键信息
+        local input_base=""
+        if [[ "$lower_input" == *"rax3000m"* ]]; then input_base="rax3000m"
+        elif [[ "$lower_input" == *"ac42u"* ]]; then input_base="ac42u"
+        elif [[ "$lower_input" == *"wndr3800"* ]]; then input_base="wndr3800"
+        else input_base=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//'); fi
+        
+        local input_has_nand=0
+        local input_has_emmc=0
+        local input_has_ubootmod=0
+        if [[ "$lower_input" == *"nand"* ]]; then input_has_nand=1; fi
+        if [[ "$lower_input" == *"emmc"* ]]; then input_has_emmc=1; fi
+        if [[ "$lower_input" == *"ubootmod"* ]]; then input_has_ubootmod=1; fi
+        
         for target_dir in "$search_dir/target/linux/"*/; do
             [ -d "$target_dir" ] || continue
             local target_name=$(basename "$target_dir")
@@ -196,22 +210,67 @@ validate_device() {
                         local lower_dev=$(echo "$dev" | tr '[:upper:]' '[:lower:]')
                         local weight=0
                         
+                        # 完全匹配：权重+200（最高优先级）
                         if [ "$lower_input" = "$lower_dev" ]; then
                             weight=$((weight + 200))
                         fi
                         
-                        if [[ "$lower_dev" == *"$lower_input"* ]]; then
-                            weight=$((weight + 60))
-                        fi
-                        
+                        # 输入包含设备名（正向包含）：权重+80
                         if [[ "$lower_input" == *"$lower_dev"* ]]; then
                             weight=$((weight + 80))
                         fi
                         
-                        local input_base=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+                        # 设备名包含输入（反向包含）：权重+50
+                        if [[ "$lower_dev" == *"$lower_input"* ]]; then
+                            weight=$((weight + 50))
+                        fi
+                        
+                        # 同系列基础名匹配：权重+25
                         if [[ "$lower_dev" == *"$input_base"* ]]; then
+                            weight=$((weight + 25))
+                        fi
+                        
+                        # 去除后缀后匹配：权重+40
+                        local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+                        local device_no_suffix=$(echo "$lower_dev" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+                        if [ "$input_no_suffix" = "$device_no_suffix" ]; then
                             weight=$((weight + 40))
                         fi
+                        
+                        # NAND 后缀匹配：权重+35
+                        if [ $input_has_nand -eq 1 ] && [[ "$lower_dev" == *"nand"* ]]; then
+                            weight=$((weight + 35))
+                        fi
+                        
+                        # EMMC 后缀匹配：权重+35
+                        if [ $input_has_emmc -eq 1 ] && [[ "$lower_dev" == *"emmc"* ]]; then
+                            weight=$((weight + 35))
+                        fi
+                        
+                        # ubootmod 后缀匹配：权重+25
+                        if [ $input_has_ubootmod -eq 1 ] && [[ "$lower_dev" == *"ubootmod"* ]]; then
+                            weight=$((weight + 25))
+                        fi
+                        
+                        # 设备名更长（更具体）：权重+20
+                        local input_len=${#lower_input}
+                        local device_len=${#lower_device}
+                        if [ $device_len -gt $input_len ]; then
+                            weight=$((weight + 20))
+                        fi
+                        
+                        # 部分单词匹配：权重+10
+                        local input_parts=($(echo "$lower_input" | tr '_-' ' '))
+                        local device_parts=($(echo "$lower_device" | tr '_-' ' '))
+                        local part_match=0
+                        for ipart in "${input_parts[@]}"; do
+                            for dpart in "${device_parts[@]}"; do
+                                if [ "$ipart" = "$dpart" ] && [ ${#ipart} -gt 2 ]; then
+                                    part_match=$((part_match + 1))
+                                fi
+                            done
+                        done
+                        weight=$((weight + part_match * 10))
                         
                         if [ $weight -gt $best_weight ]; then
                             best_weight=$weight
