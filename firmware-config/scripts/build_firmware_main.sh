@@ -6317,7 +6317,8 @@ EOF
     
     # 步骤3: 编译所有软件包
     log "  📦 步骤3: 编译所有软件包..."
-    set +e    make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
+    set +e
+    make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
     STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
@@ -6347,16 +6348,44 @@ EOF
     fi
     log "  ✅ 步骤4完成"
     
-    # 步骤5: 生成固件
+    # 步骤5: 生成固件（带重试）
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    set +e
-    make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5.log
-    STEP5_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
     
-    if [ $STEP5_EXIT_CODE -ne 0 ]; then
-        log "  ⚠️ 固件生成有警告，继续..."
+    local step5_retry=1
+    local max_step5_retries=2
+    local step5_success=0
+    
+    while [ $step5_retry -le $max_step5_retries ] && [ $step5_success -eq 0 ]; do
+        log "    尝试 $step5_retry/$max_step5_retries..."
+        
+        set +e
+        make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5_attempt${step5_retry}.log
+        STEP5_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        
+        if [ $STEP5_EXIT_CODE -eq 0 ]; then
+            step5_success=1
+            log "    ✅ 固件生成成功"
+            break
+        fi
+        
+        log "    ⚠️ 固件生成失败，退出码: $STEP5_EXIT_CODE"
+        
+        if [ $step5_retry -lt $max_step5_retries ]; then
+            log "    🔧 清理并重试..."
+            rm -rf build_dir/target-*/root-* 2>/dev/null || true
+            ensure_root_dirs "$TARGET" "$BUILD_DIR"
+        fi
+        
+        step5_retry=$((step5_retry + 1))
+    done
+    
+    if [ $step5_success -eq 0 ]; then
+        log "  ❌ 固件生成失败，已重试 $max_step5_retries 次"
+        kill $protect_pid 2>/dev/null || true
+        rm -rf "$protect_dir" 2>/dev/null || true
+        exit 1
     fi
     log "  ✅ 步骤5完成"
     
@@ -6478,7 +6507,7 @@ EOC
     fi
     
     # 合并所有日志
-    cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
+    cat build_step*.log build_step2_attempt*.log build_step5_attempt*.log > build.log 2>/dev/null || true
     
     log "  ✅ 分步编译完成"
     
@@ -6549,8 +6578,13 @@ EOC
     fi
     
     if [ $valid_firmware -gt 0 ]; then
-        echo "VALID_FIRMWARE_COUNT=$valid_firmware" >> $GITHUB_ENV 2>/dev/null || true
-        echo "FIRMWARE_HASH_FILE=$hash_file" >> $GITHUB_ENV 2>/dev/null || true
+        if [ -n "$GITHUB_ENV" ]; then
+            echo "VALID_FIRMWARE_COUNT=$valid_firmware" >> $GITHUB_ENV
+            echo "FIRMWARE_HASH_FILE=$hash_file" >> $GITHUB_ENV
+            log "📌 已写入 GITHUB_ENV: VALID_FIRMWARE_COUNT=$valid_firmware"
+        else
+            log "⚠️ GITHUB_ENV 未设置，跳过环境变量写入"
+        fi
     fi
     
     if [ $valid_firmware -eq 0 ]; then
@@ -6787,7 +6821,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 覆盖所有步骤
+# 全流程错误检查函数 - 按步骤标记，包含重试日志
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6807,54 +6841,51 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 扫描所有步骤日志"
+        echo "🔍 全流程错误检查 - 按步骤标记（含重试日志）"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: $target_platform"
         echo "完整目标: ${TARGET:-$target_platform}/${SUBTARGET:-generic}"
         echo "源码类型: ${SOURCE_REPO_TYPE:-unknown}"
         echo "源码分支: ${SELECTED_BRANCH:-unknown}"
+        echo "输入设备: ${DEVICE:-unknown}"
         echo "================================================================="
 
-        # 收集所有日志文件
-        local all_logs=()
+        # ============================================
+        # 收集所有日志文件（含重试日志）
+        # ============================================
+        declare -A log_sources
         
-        # 主构建日志
-        if [ -f "$log_file" ]; then
-            all_logs+=("$log_file")
-        fi
-        
-        # 分步编译日志
-        for step_log in build_step*.log build_phase*.log; do
-            if [ -f "$step_log" ]; then
-                all_logs+=("$step_log")
-            fi
+        # 构建目录日志（含 attempt 重试日志）
+        for pattern in "build_step"*.log "build_phase"*.log "build.log" "download.log"; do
+            for f in "$build_dir/"$pattern; do
+                if [ -f "$f" ]; then
+                    log_sources["$f"]="构建目录"
+                fi
+            done
         done
         
-        # 下载日志
-        if [ -f "download.log" ]; then
-            all_logs+=("download.log")
+        # /tmp/build-logs 目录
+        if [ -d "/tmp/build-logs" ]; then
+            for f in /tmp/build-logs/*.log; do
+                if [ -f "$f" ]; then
+                    log_sources["$f"]="临时日志目录"
+                fi
+            done
         fi
         
-        # feeds 日志
-        for feed_log in /tmp/build-logs/*.log; do
-            if [ -f "$feed_log" ]; then
-                all_logs+=("$feed_log")
-            fi
-        done
-        
-        if [ ${#all_logs[@]} -eq 0 ]; then
+        if [ ${#log_sources[@]} -eq 0 ]; then
             echo "⚠️ 未找到任何日志文件"
             return 1
         fi
         
-        echo "📄 找到 ${#all_logs[@]} 个日志文件"
+        echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
         # ============================================
         # 0. 固件生成状态检查
         # ============================================
-        echo "🔍 0. 固件生成状态检查:"
+        echo "🔍 步骤26: 固件生成状态检查"
         echo "----------------------------------------"
         
         local full_target="${TARGET:-$target_platform}"
@@ -6872,9 +6903,11 @@ quick_error_check() {
         echo ""
         
         local found_firmware=0
-        local valid_firmware=0
+        local valid_sysupgrade=0
+        local valid_factory=0
         local firmware_list=()
         local firmware_details=()
+        local warnings=()
         
         if [ -d "$target_dir" ]; then
             while IFS= read -r file; do
@@ -6905,15 +6938,30 @@ quick_error_check() {
                     ftype="other"
                 fi
                 
+                # 固件大小警告
+                local size_warning=""
+                if [ $fsize_mb -lt 10 ] && [[ "$ftype" == "sysupgrade" || "$ftype" == "factory" ]]; then
+                    size_warning="⚠️ 固件偏小(${fsize_mb}MB)，可能不完整"
+                    warnings+=("${fname}: ${size_warning}")
+                fi
+                
                 if [ $fsize_mb -ge 5 ]; then
                     if [[ "$ftype" == "sysupgrade" ]] || [[ "$ftype" == "factory" ]]; then
-                        echo "✅ $fname"
+                        if [ -n "$size_warning" ]; then
+                            echo "⚠️ $fname"
+                        else
+                            echo "✅ $fname"
+                        fi
                         echo "   大小: $fsize_human (${fsize_mb}MB)"
                         echo "   SHA256: $fhash"
                         echo "   类型: 可刷机固件 ($([[ "$fname" == *.itb ]] && echo 'FIT格式' || echo '标准格式'))"
-                        valid_firmware=$((valid_firmware + 1))
+                        if [ -n "$size_warning" ]; then
+                            echo "   $size_warning"
+                        fi
+                        if [ "$ftype" = "sysupgrade" ]; then valid_sysupgrade=$((valid_sysupgrade + 1)); fi
+                        if [ "$ftype" = "factory" ]; then valid_factory=$((valid_factory + 1)); fi
                         firmware_list+=("$fname")
-                        firmware_details+=("$fname|$fsize_human|$fhash|$ftype")
+                        firmware_details+=("$fname|$fsize_human|$fhash|$ftype|$size_warning")
                     else
                         echo "📄 $fname - $fsize_human (其他文件)"
                     fi
@@ -6931,71 +6979,119 @@ quick_error_check() {
                     echo "   $line"
                 done
             fi
+            
+            if [ $valid_sysupgrade -eq 0 ] && [ $found_firmware -gt 0 ]; then
+                warnings+=("缺少 sysupgrade.bin 固件")
+                echo "⚠️ 缺少 sysupgrade.bin 固件"
+                echo ""
+            fi
         else
             echo "❌ 目标目录不存在: $target_dir"
+            warnings+=("固件目录不存在")
         fi
         
         echo "----------------------------------------"
         echo ""
 
         # ============================================
-        # 1. 全流程错误扫描
+        # 1. 按步骤标注的错误扫描
         # ============================================
-        echo "🔍 1. 全流程错误扫描（所有步骤）:"
+        echo "🔍 按步骤错误扫描:"
         echo "----------------------------------------"
         
-        local total_errors=0
-        local total_warnings=0
+        declare -A step_patterns
+        step_patterns["步骤01-04: 初始化和环境"]="*"
+        step_patterns["步骤05: 安装基础工具"]="*"
+        step_patterns["步骤06: 初始空间检查"]="*"
+        step_patterns["步骤07: 创建构建目录"]="*"
+        step_patterns["步骤08: 初始化构建环境"]="*"
+        step_patterns["步骤09: 编译工具链"]="*toolchain*|*tools*|build_step1*"
+        step_patterns["步骤10: 验证工具链"]="*"
+        step_patterns["步骤11: 添加TurboACC"]="*"
+        step_patterns["步骤12: 配置Feeds"]="*feeds*"
+        step_patterns["步骤13: 安装TurboACC包"]="*"
+        step_patterns["步骤14: 编译前空间检查"]="*"
+        step_patterns["步骤15: 智能配置生成"]="*"
+        step_patterns["步骤16: 验证USB配置"]="*"
+        step_patterns["步骤17: USB驱动检查"]="*"
+        step_patterns["步骤18: 应用配置"]="*"
+        step_patterns["步骤19: 备份配置"]="*"
+        step_patterns["步骤20: 修复网络环境"]="*"
+        step_patterns["步骤21: 下载依赖包"]="*download*"
+        step_patterns["步骤22: 集成自定义文件"]="*"
+        step_patterns["步骤23: 前置错误检查"]="*"
+        step_patterns["步骤24: 编译前空间确认"]="*"
+        step_patterns["步骤25: 编译固件"]="build_step*"
+        step_patterns["步骤26: 检查构建产物"]="*"
+        step_patterns["步骤29: 编译后空间检查"]="*"
+        step_patterns["步骤30: 编译总结"]="*"
         
+        local total_step_errors=0
         local error_patterns=(
-            "make.*Error:make.*Error [0-9]|make\[[0-9]\].*Error [0-9]"
+            "致命错误:make:.*Error [0-9]+|Error 2|Error 1"
             "构建失败:ERROR:.*failed to build"
-            "链接错误:collect2: error|undefined reference"
+            "设备匹配问题:匹配设备.*->|未精确匹配|设备配置可能不正确|环境文件不存在|DEVICE.*为空|无法.*获取平台信息"
+            "源码克隆失败:克隆.*失败|fatal:.*clone"
             "补丁失败:Patch failed|Hunk FAILED"
-            "文件缺失:No such file or directory"
-            "下载失败:Download failed|curl.*error [0-9]|wget.*error"
-            "认证失败:401 Unauthorized|403 Forbidden"
+            "编译错误:error:|undefined reference|implicit declaration"
+            "下载失败:Download failed|curl.*error [0-9]|wget.*error|404 Not Found|401 Unauthorized"
+            "认证问题:403 Forbidden|Authentication failed"
             "Broken pipe:Broken pipe"
             "磁盘空间不足:No space left"
-            "权限拒绝:Permission denied"
+            "权限问题:Permission denied"
+            "Feeds问题:feeds.*Error|feeds.*fatal|Unable to fetch"
             "Git错误:fatal:|error:.*git"
-            "apt错误:E:.*Unable to locate|E:.*Failed to fetch"
             "autoreconf失败:autoreconf.*failed|aclocal.*failed"
-            "设备匹配警告:未精确匹配|匹配设备.*->"
-            "设备配置问题:设备配置可能不正确|设备配置丢失|DEVICE.*为空"
-            "环境文件缺失:环境文件不存在|无法.*获取平台信息"
-            "源码克隆失败:克隆.*失败|克隆.*分支失败"
-            "Feeds问题:feeds.*失败|feeds.*警告|feeds.*错误"
-            "编译超时:timeout|timed out"
+            "库缺失:was not found|No package.*found|E:.*Unable to locate"
             "符号链接问题:Too many levels of symbolic links"
         )
         
-        for log_file_to_check in "${all_logs[@]}"; do
+        # 遍历所有日志文件，按文件名匹配步骤
+        for log_file_to_check in "${!log_sources[@]}"; do
             local log_name=$(basename "$log_file_to_check")
+            local matched_step=""
             
+            # 匹配步骤
+            for step_name in "${!step_patterns[@]}"; do
+                local pat="${step_patterns[$step_name]}"
+                # 将通配符转为正则
+                local regex=$(echo "$pat" | sed 's/\*/.*/g')
+                if [[ "$log_name" =~ $regex ]]; then
+                    matched_step="$step_name"
+                    break
+                fi
+            done
+            
+            [ -z "$matched_step" ] && matched_step="其他步骤"
+            
+            local step_has_error=0
             for pattern_pair in "${error_patterns[@]}"; do
                 local err_name="${pattern_pair%%:*}"
                 local err_pattern="${pattern_pair##*:}"
                 local match_count=$(grep -E -i -c "$err_pattern" "$log_file_to_check" 2>/dev/null || echo "0")
                 if [ "$match_count" -gt 0 ]; then
-                    echo "⚠️ [$log_name] $err_name (共 $match_count 处)"
-                    total_errors=$((total_errors + match_count))
+                    if [ $step_has_error -eq 0 ]; then
+                        echo "⚠️ $matched_step ($log_name):"
+                        step_has_error=1
+                    fi
+                    echo "   $err_name (共 $match_count 处)"
+                    total_step_errors=$((total_step_errors + match_count))
                 fi
             done
+            [ $step_has_error -eq 1 ] && echo ""
         done
         
-        if [ $total_errors -eq 0 ]; then
-            echo "✅ 未检测到任何错误"
+        if [ $total_step_errors -eq 0 ]; then
+            echo "✅ 所有步骤未检测到错误"
         else
-            echo ""
-            echo "📊 全流程错误总数: $total_errors"
+            echo "📊 全流程错误/警告总数: $total_step_errors"
         fi
         echo ""
 
         # ============================================
         # 2. 关键组件状态检查
         # ============================================
-        echo "🔍 2. 关键组件状态检查:"
+        echo "🔍 关键组件状态检查:"
         echo "----------------------------------------"
         
         if [ -d "staging_dir" ]; then
@@ -7038,13 +7134,19 @@ quick_error_check() {
         else
             echo "⚠️ build_env.sh 不存在"
         fi
+        
+        if [ -f "$build_dir/build_env.sh" ]; then
+            local env_target=$(grep "^export TARGET=" "$build_dir/build_env.sh" 2>/dev/null | cut -d'"' -f2)
+            local env_subtarget=$(grep "^export SUBTARGET=" "$build_dir/build_env.sh" 2>/dev/null | cut -d'"' -f2)
+            echo "   📌 平台信息: $env_target/$env_subtarget"
+        fi
         echo ""
 
         # ============================================
-        # 3. 最后30行日志摘要（主日志）
+        # 3. 最后30行日志摘要
         # ============================================
         if [ -f "$log_file" ]; then
-            echo "🔍 3. 最后30行日志摘要 ($(basename "$log_file")):"
+            echo "🔍 最后30行日志摘要 ($(basename "$log_file")):"
             echo "----------------------------------------"
             tail -30 "$log_file" | sed 's/^/   /'
             echo ""
@@ -7058,27 +7160,47 @@ quick_error_check() {
         echo "================================================================="
         echo ""
         
-        if [ $valid_firmware -gt 0 ]; then
-            echo "🎉🎉🎉 编译成功！生成了 $valid_firmware 个有效固件 🎉🎉🎉"
-            echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📦 固件详细信息:"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            
-            for detail in "${firmware_details[@]}"; do
-                IFS='|' read -r fname fsize fhash ftype <<< "$detail"
+        local valid_total=$((valid_sysupgrade + valid_factory))
+        
+        if [ $valid_total -gt 0 ]; then
+            if [ ${#warnings[@]} -gt 0 ]; then
+                echo "⚠️ 编译完成，但有 ${#warnings[@]} 个警告:"
+                for warn in "${warnings[@]}"; do
+                    echo "   - $warn"
+                done
                 echo ""
-                echo "  文件名: $fname"
-                echo "  大小:   $fsize"
-                echo "  类型:   $ftype (可刷机固件)"
-                echo "  SHA256: $fhash"
-                if [[ "$fname" == *.itb ]]; then
-                    echo "  📌 格式: FIT Image (.itb)"
-                    echo "  💡 可通过 sysupgrade 命令直接刷入"
-                fi
-            done
-            
+            else
+                echo "🎉🎉🎉 编译成功！生成了 $valid_total 个有效固件 🎉🎉🎉"
+            fi
             echo ""
+            
+            if [ ${#firmware_details[@]} -gt 0 ]; then
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "📦 固件详细信息:"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                
+                for detail in "${firmware_details[@]}"; do
+                    IFS='|' read -r fname fsize fhash ftype warn <<< "$detail"
+                    echo ""
+                    if [ -n "$warn" ]; then
+                        echo "  ⚠️ 文件名: $fname"
+                    else
+                        echo "  文件名: $fname"
+                    fi
+                    echo "  大小:   $fsize"
+                    echo "  类型:   $ftype (可刷机固件)"
+                    echo "  SHA256: $fhash"
+                    if [ -n "$warn" ]; then
+                        echo "  ⚠️ $warn"
+                    fi
+                    if [[ "$fname" == *.itb ]]; then
+                        echo "  📌 格式: FIT Image (.itb)"
+                    fi
+                done
+                
+                echo ""
+            fi
+            
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "📁 固件位置: $target_dir"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -7086,53 +7208,52 @@ quick_error_check() {
             echo "💡 刷机说明:"
             if [[ "${firmware_list[*]}" == *"sysupgrade"* ]]; then
                 echo "   - sysupgrade 固件用于已安装 OpenWrt 的系统升级"
-                if [[ "${firmware_list[*]}" == *".itb"* ]]; then
-                    echo "   - .itb 格式通过命令: sysupgrade -n /path/to/*sysupgrade.itb"
-                fi
-                if [[ "${firmware_list[*]}" == *".bin"* ]]; then
-                    echo "   - .bin 格式通过命令: sysupgrade -n /path/to/*sysupgrade.bin"
-                fi
             fi
             if [[ "${firmware_list[*]}" == *"factory"* ]]; then
                 echo "   - factory 固件用于从原厂固件首次刷入"
+            fi
+            if [ $valid_sysupgrade -eq 0 ] && [ $valid_factory -gt 0 ]; then
+                echo ""
+                echo "⚠️ 警告: 缺少 sysupgrade.bin，只有 factory.bin"
             fi
             
         else
             echo "❌❌❌ 构建结果: 无有效固件 ❌❌❌"
             echo ""
-            
-            if [ $total_errors -gt 0 ]; then
-                echo "📊 全流程共发现 $total_errors 处错误/警告"
+            if [ $total_step_errors -gt 0 ]; then
+                echo "📊 全流程共发现 $total_step_errors 处错误/警告"
             fi
             
             echo ""
             echo "💡 诊断建议:"
-            if grep -q "Download failed\|curl.*error" "${all_logs[@]}" 2>/dev/null; then
+            local all_logs_list=""
+            for log_f in "${!log_sources[@]}"; do
+                all_logs_list="$all_logs_list $log_f"
+            done
+            
+            if echo "$all_logs_list" | xargs grep -l "Download failed\|curl.*error" 2>/dev/null | grep -q .; then
                 echo "   🔧 下载失败: 检查网络连接或更换镜像源"
             fi
-            if grep -q "No space left" "${all_logs[@]}" 2>/dev/null; then
+            if echo "$all_logs_list" | xargs grep -l "No space left" 2>/dev/null | grep -q .; then
                 echo "   🔧 磁盘空间不足: 清理磁盘空间"
             fi
-            if grep -q "Patch failed\|Hunk FAILED" "${all_logs[@]}" 2>/dev/null; then
+            if echo "$all_logs_list" | xargs grep -l "Patch failed\|Hunk FAILED" 2>/dev/null | grep -q .; then
                 echo "   🔧 补丁失败: 删除失败的补丁文件"
             fi
-            if grep -q "无法.*获取平台信息\|环境文件不存在" "${all_logs[@]}" 2>/dev/null; then
-                echo "   🔧 设备配置问题: 检查 support.sh 和步骤08日志"
-            fi
-            if grep -q "DEVICE.*为空" "${all_logs[@]}" 2>/dev/null; then
-                echo "   🔧 DEVICE变量为空: 检查步骤08的设备匹配逻辑"
+            if echo "$all_logs_list" | xargs grep -l "无法.*获取平台信息\|环境文件不存在\|DEVICE.*为空\|mk文件中未找到" 2>/dev/null | grep -q .; then
+                echo "   🔧 设备配置问题: 检查步骤08日志和设备名称"
             fi
         fi
         
         echo ""
         echo "================================================================="
-        echo "💡 提示：完整日志请查看上述 ${#all_logs[@]} 个日志文件"
+        echo "💡 提示：完整日志请查看上述 ${#log_sources[@]} 个日志文件"
         echo "================================================================="
     } | tee "$output_file"
 
     echo "✅ 错误检查报告已保存到: $output_file"
     
-    if [ $valid_firmware -gt 0 ]; then
+    if [ $valid_total -gt 0 ]; then
         return 0
     else
         return 1
