@@ -299,7 +299,8 @@ validate_device() {
         fi
     fi
     
-    error "❌ mk文件中未找到设备: $device_name"
+    echo ""
+    return 1
 }
 
 # 获取设备的平台信息
@@ -314,7 +315,16 @@ get_device_platform() {
         return 0
     fi
     
-    local result=$(validate_device "$device_name" "$manual_target" "$manual_subtarget" 2>/dev/null)
+    # 不重定向 stderr，保留 validate_device 的错误输出
+    local result=$(validate_device "$device_name" "$manual_target" "$manual_subtarget")
+    local exit_code=$?
+    
+    if [ $exit_code -ne 0 ]; then
+        # validate_device 内部调用 error 会退出子 shell，这里不会执行到
+        echo ""
+        return 1
+    fi
+    
     if [ -n "$result" ]; then
         echo "$result"
         return 0
