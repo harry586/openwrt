@@ -208,6 +208,12 @@ validate_device() {
                         fi
                         
                         local lower_dev=$(echo "$dev" | tr '[:upper:]' '[:lower:]')
+                        
+                        # 必须包含系列基础名
+                        if [[ "$lower_dev" != *"$input_base"* ]]; then
+                            continue
+                        fi
+                        
                         local weight=0
                         
                         # 完全匹配：权重+200（最高优先级）
