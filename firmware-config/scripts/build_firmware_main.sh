@@ -371,44 +371,11 @@ initialize_build_env() {
     elif [ -f "$SUPPORT_SCRIPT" ]; then
         log "🔍 调用support.sh获取设备平台信息..."
         
-        log "🔧 DEBUG: SUPPORT_SCRIPT=$SUPPORT_SCRIPT"
-        log "🔧 DEBUG: BUILD_DIR=$BUILD_DIR"
-        log "🔧 DEBUG: device_name=$device_name"
-        
-        if [ -d "$BUILD_DIR/target/linux" ]; then
-            log "🔧 DEBUG: 源码目录存在，开始搜索设备..."
-        else
-            log "🔧 DEBUG: 源码目录不存在！$BUILD_DIR/target/linux"
-        fi
-        
-        # 合并 stdout 和 stderr，避免错误信息丢失
-        local full_output
-        full_output=$(BUILD_DIR="$BUILD_DIR" "$SUPPORT_SCRIPT" get-platform "$device_name" "" "" 2>&1)
-        local support_exit_code=$?
-        
-        # 先打印所有输出以便调试
-        if [ -n "$full_output" ]; then
-            echo "$full_output" | while IFS= read -r line; do
-                [ -n "$line" ] && log "  support.sh: $line"
-            done
-        fi
-        
-        log "🔧 DEBUG PLATFORM_INFO=[${full_output}]"
-        
-        if [ $support_exit_code -ne 0 ]; then
-            log "❌ support.sh 查找设备失败 (退出码: $support_exit_code)"
-            log "❌ mk文件中未找到设备: $device_name，请检查设备名称是否正确"
-            exit 1
-        fi
-        
-        PLATFORM_INFO="$full_output"
-        
+        PLATFORM_INFO=$(BUILD_DIR="$BUILD_DIR" "$SUPPORT_SCRIPT" get-platform "$device_name" "" "")
         if [ -n "$PLATFORM_INFO" ]; then
             TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
             SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
             local matched_device=$(echo "$PLATFORM_INFO" | awk '{print $3}')
-            
-            log "🔧 DEBUG: TARGET=[$TARGET] SUBTARGET=[$SUBTARGET] matched_device=[$matched_device]"
             
             if [ -n "$matched_device" ] && [ "$matched_device" != "$device_name" ]; then
                 DEVICE="$matched_device"
@@ -421,7 +388,7 @@ initialize_build_env() {
             log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
         else
             log "❌ 无法从support.sh获取平台信息，设备名: $device_name"
-            handle_error "mk文件中未找到设备: $device_name"
+            handle_error "获取平台信息失败"
         fi
     else
         log "❌ support.sh不存在且未手动指定平台信息"
