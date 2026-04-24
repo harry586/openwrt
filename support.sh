@@ -230,26 +230,19 @@ validate_device() {
                             weight=$((weight + 25))
                         fi
                         
-                        # 去除后缀后匹配：权重+40
-                        local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
-                        local device_no_suffix=$(echo "$lower_dev" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
-                        if [ "$input_no_suffix" = "$device_no_suffix" ]; then
-                            weight=$((weight + 40))
-                        fi
-                        
-                        # NAND 后缀匹配：权重+35
+                        # NAND 后缀匹配：权重+50
                         if [ $input_has_nand -eq 1 ] && [[ "$lower_dev" == *"nand"* ]]; then
-                            weight=$((weight + 35))
+                            weight=$((weight + 50))
                         fi
                         
-                        # EMMC 后缀匹配：权重+35
+                        # EMMC 后缀匹配：权重+50
                         if [ $input_has_emmc -eq 1 ] && [[ "$lower_dev" == *"emmc"* ]]; then
-                            weight=$((weight + 35))
+                            weight=$((weight + 50))
                         fi
                         
-                        # ubootmod 后缀匹配：权重+25
+                        # ubootmod 后缀匹配：权重+40
                         if [ $input_has_ubootmod -eq 1 ] && [[ "$lower_dev" == *"ubootmod"* ]]; then
-                            weight=$((weight + 25))
+                            weight=$((weight + 40))
                         fi
                         
                         # 设备名更长（更具体）：权重+20
