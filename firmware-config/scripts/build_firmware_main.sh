@@ -376,7 +376,6 @@ initialize_build_env() {
         if [ -n "$PLATFORM_INFO" ]; then
             TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
             SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
-            # 获取 support.sh 返回的匹配设备名（第三个字段）
             local matched_device=$(echo "$PLATFORM_INFO" | awk '{print $3}')
             
             if [ -n "$matched_device" ] && [ "$matched_device" != "$device_name" ]; then
@@ -384,7 +383,7 @@ initialize_build_env() {
                 log "✅ support.sh 匹配设备: $device_name -> $matched_device"
             else
                 DEVICE="$device_name"
-                log "📌 设备名保持原始输入: $DEVICE（步骤15将自动匹配最佳设备）"
+                log "📌 设备名保持原始输入: $DEVICE（步骤15将自动匹配）"
             fi
             
             log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
