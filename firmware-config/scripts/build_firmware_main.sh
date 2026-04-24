@@ -371,16 +371,15 @@ initialize_build_env() {
     elif [ -f "$SUPPORT_SCRIPT" ]; then
         log "🔍 调用support.sh获取设备平台信息..."
         
-        local lookup_device="$device_name"
-        
-        PLATFORM_INFO=$("$SUPPORT_SCRIPT" get-platform "$lookup_device")
+        # 传入当前源码目录作为搜索路径
+        PLATFORM_INFO=$(BUILD_DIR="$BUILD_DIR" "$SUPPORT_SCRIPT" get-platform "$device_name" "" "")
         if [ -n "$PLATFORM_INFO" ]; then
             TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
             SUBTARGET=$(echo "$PLATFORM_INFO" | awk '{print $2}')
             DEVICE="$device_name"
             log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
         else
-            log "❌ 无法从support.sh获取平台信息，设备名: $lookup_device"
+            log "❌ 无法从support.sh获取平台信息，设备名: $device_name"
             log "📋 支持的设备列表:"
             "$SUPPORT_SCRIPT" list-devices || true
             handle_error "获取平台信息失败"
