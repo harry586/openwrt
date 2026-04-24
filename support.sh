@@ -158,19 +158,15 @@ validate_device() {
     local manual_target="$2"
     local manual_subtarget="$3"
     
-    # 如果提供了手动指定的平台信息，直接返回
     if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
         log "设备验证通过（手动指定）: $device_name"
         log "目标平台: $manual_target"
         log "子目标: $manual_subtarget"
-        echo "$manual_target $manual_subtarget"
+        echo "$manual_target $manual_subtarget $device_name"
         return 0
     fi
     
-    # 尝试从源码 mk 文件中自动查找设备
     local build_dir="${BUILD_DIR:-/mnt/openwrt-build}"
-    
-    # 先尝试在源码目录中查找
     local search_dir="$build_dir"
     
     if [ -d "$search_dir/target/linux" ]; then
@@ -189,22 +185,18 @@ validate_device() {
             while IFS= read -r mk_file; do
                 [ -f "$mk_file" ] || continue
                 
-                # 提取所有设备定义
                 while IFS= read -r line; do
                     if [[ "$line" =~ define[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
                         local dev="${BASH_REMATCH[1]}"
                         
-                        # 排除 _common 模板
                         if [[ "$dev" == *_common* ]]; then
                             continue
                         fi
                         
                         local lower_dev=$(echo "$dev" | tr '[:upper:]' '[:lower:]')
-                        
-                        # 计算匹配权重
                         local weight=0
                         
-                        # 完全匹配
+                        # 完全匹配最高权重
                         if [ "$lower_input" = "$lower_dev" ]; then
                             weight=$((weight + 200))
                         fi
@@ -217,6 +209,12 @@ validate_device() {
                         # 正向包含
                         if [[ "$lower_input" == *"$lower_dev"* ]]; then
                             weight=$((weight + 80))
+                        fi
+                        
+                        # 提取输入基础名进行匹配
+                        local input_base=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
+                        if [[ "$lower_dev" == *"$input_base"* ]]; then
+                            weight=$((weight + 40))
                         fi
                         
                         if [ $weight -gt $best_weight ]; then
@@ -233,7 +231,6 @@ validate_device() {
                                 found_subtarget="$parent_dir"
                             fi
                             
-                            # 如果子目标就是 target 本身，从目录结构查找
                             if [ "$found_subtarget" = "$target_name" ] || [ "$found_subtarget" = "image" ]; then
                                 for sub_dir in "$search_dir/target/linux/$target_name/"*/; do
                                     [ -d "$sub_dir" ] || continue
@@ -254,37 +251,35 @@ validate_device() {
         done
         
         if [ -n "$found_target" ] && [ -n "$found_subtarget" ] && [ -n "$best_match" ]; then
-            log "✅ 在源码中找到设备: $device_name -> $best_match ($found_target/$found_subtarget)，权重: $best_weight"
-            echo "$found_target $found_subtarget"
+            log "✅ 在源码中找到最佳匹配: $device_name -> $best_match ($found_target/$found_subtarget)，权重: $best_weight"
+            echo "$found_target $found_subtarget $best_match"
             return 0
         fi
     fi
     
     # 回退：从 DEVICES 数组中查找
     if [ -n "${DEVICES[$device_name]}" ]; then
-        echo "${DEVICES[$device_name]}"
+        echo "${DEVICES[$device_name]} $device_name"
         return 0
     fi
     
-    # 都找不到，报错
-    error "不支持的设备: $device_name。支持的设备列表: ${!DEVICES[*]}"
+    echo ""
+    return 1
 }
 
 # 获取设备的平台信息
-# 参数: device_name [manual_target] [manual_subtarget]
+# 返回: 目标平台 子目标 设备名
 get_device_platform() {
     local device_name="$1"
     local manual_target="$2"
     local manual_subtarget="$3"
     
-    # 如果提供了手动指定，直接使用
     if [ -n "$manual_target" ] && [ -n "$manual_subtarget" ]; then
         log "使用手动指定的平台: $manual_target/$manual_subtarget" >&2
-        echo "$manual_target $manual_subtarget"
+        echo "$manual_target $manual_subtarget $device_name"
         return 0
     fi
     
-    # 调用 validate_device 进行自动查找
     local result=$(validate_device "$device_name" "$manual_target" "$manual_subtarget" 2>/dev/null)
     if [ -n "$result" ]; then
         echo "$result"
