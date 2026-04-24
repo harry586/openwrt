@@ -196,22 +196,18 @@ validate_device() {
                         local lower_dev=$(echo "$dev" | tr '[:upper:]' '[:lower:]')
                         local weight=0
                         
-                        # 完全匹配最高权重
                         if [ "$lower_input" = "$lower_dev" ]; then
                             weight=$((weight + 200))
                         fi
                         
-                        # 反向包含
                         if [[ "$lower_dev" == *"$lower_input"* ]]; then
                             weight=$((weight + 60))
                         fi
                         
-                        # 正向包含
                         if [[ "$lower_input" == *"$lower_dev"* ]]; then
                             weight=$((weight + 80))
                         fi
                         
-                        # 提取输入基础名进行匹配
                         local input_base=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
                         if [[ "$lower_dev" == *"$input_base"* ]]; then
                             weight=$((weight + 40))
@@ -222,7 +218,6 @@ validate_device() {
                             best_match="$dev"
                             found_target="$target_name"
                             
-                            # 提取子目标
                             local mk_dir=$(dirname "$mk_file")
                             local parent_dir=$(basename "$mk_dir")
                             if [ "$parent_dir" = "image" ]; then
@@ -257,18 +252,11 @@ validate_device() {
         fi
     fi
     
-    # 回退：从 DEVICES 数组中查找
-    if [ -n "${DEVICES[$device_name]}" ]; then
-        echo "${DEVICES[$device_name]} $device_name"
-        return 0
-    fi
-    
     echo ""
     return 1
 }
 
 # 获取设备的平台信息
-# 返回: 目标平台 子目标 设备名
 get_device_platform() {
     local device_name="$1"
     local manual_target="$2"
