@@ -371,7 +371,6 @@ initialize_build_env() {
     elif [ -f "$SUPPORT_SCRIPT" ]; then
         log "🔍 调用support.sh获取设备平台信息..."
         
-        # 调试：查看 support.sh 是否存在以及源码目录状态
         log "🔧 DEBUG: SUPPORT_SCRIPT=$SUPPORT_SCRIPT"
         log "🔧 DEBUG: BUILD_DIR=$BUILD_DIR"
         log "🔧 DEBUG: device_name=$device_name"
@@ -382,8 +381,29 @@ initialize_build_env() {
             log "🔧 DEBUG: 源码目录不存在！$BUILD_DIR/target/linux"
         fi
         
-        PLATFORM_INFO=$(BUILD_DIR="$BUILD_DIR" "$SUPPORT_SCRIPT" get-platform "$device_name" "" "" 2>/dev/null)
+        local tmp_result=$(mktemp)
+        local tmp_error=$(mktemp)
+        
+        BUILD_DIR="$BUILD_DIR" "$SUPPORT_SCRIPT" get-platform "$device_name" "" "" >"$tmp_result" 2>"$tmp_error"
+        local support_exit_code=$?
+        
+        PLATFORM_INFO=$(cat "$tmp_result" 2>/dev/null)
+        local platform_error=$(cat "$tmp_error" 2>/dev/null)
+        
+        if [ -n "$platform_error" ]; then
+            echo "$platform_error" | while IFS= read -r line; do
+                [ -n "$line" ] && log "  $line"
+            done
+        fi
+        
+        rm -f "$tmp_result" "$tmp_error"
+        
         log "🔧 DEBUG PLATFORM_INFO=[${PLATFORM_INFO}]"
+        
+        if [ $support_exit_code -ne 0 ]; then
+            log "❌ support.sh 退出码: $support_exit_code"
+            handle_error "mk文件中未找到设备: $device_name，请检查设备名称是否正确"
+        fi
         
         if [ -n "$PLATFORM_INFO" ]; then
             TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
@@ -403,9 +423,7 @@ initialize_build_env() {
             log "✅ 从support.sh获取平台信息: TARGET=$TARGET, SUBTARGET=$SUBTARGET"
         else
             log "❌ 无法从support.sh获取平台信息，设备名: $device_name"
-            log "📋 支持的设备列表:"
-            "$SUPPORT_SCRIPT" list-devices 2>/dev/null || true
-            handle_error "获取平台信息失败"
+            handle_error "mk文件中未找到设备: $device_name"
         fi
     else
         log "❌ support.sh不存在且未手动指定平台信息"
