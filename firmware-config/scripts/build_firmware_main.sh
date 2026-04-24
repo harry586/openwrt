@@ -381,29 +381,27 @@ initialize_build_env() {
             log "🔧 DEBUG: 源码目录不存在！$BUILD_DIR/target/linux"
         fi
         
-        local tmp_result=$(mktemp)
-        local tmp_error=$(mktemp)
-        
-        BUILD_DIR="$BUILD_DIR" "$SUPPORT_SCRIPT" get-platform "$device_name" "" "" >"$tmp_result" 2>"$tmp_error"
+        # 合并 stdout 和 stderr，避免错误信息丢失
+        local full_output
+        full_output=$(BUILD_DIR="$BUILD_DIR" "$SUPPORT_SCRIPT" get-platform "$device_name" "" "" 2>&1)
         local support_exit_code=$?
         
-        PLATFORM_INFO=$(cat "$tmp_result" 2>/dev/null)
-        local platform_error=$(cat "$tmp_error" 2>/dev/null)
-        
-        if [ -n "$platform_error" ]; then
-            echo "$platform_error" | while IFS= read -r line; do
-                [ -n "$line" ] && log "  $line"
+        # 先打印所有输出以便调试
+        if [ -n "$full_output" ]; then
+            echo "$full_output" | while IFS= read -r line; do
+                [ -n "$line" ] && log "  support.sh: $line"
             done
         fi
         
-        rm -f "$tmp_result" "$tmp_error"
-        
-        log "🔧 DEBUG PLATFORM_INFO=[${PLATFORM_INFO}]"
+        log "🔧 DEBUG PLATFORM_INFO=[${full_output}]"
         
         if [ $support_exit_code -ne 0 ]; then
-            log "❌ support.sh 退出码: $support_exit_code"
-            handle_error "mk文件中未找到设备: $device_name，请检查设备名称是否正确"
+            log "❌ support.sh 查找设备失败 (退出码: $support_exit_code)"
+            log "❌ mk文件中未找到设备: $device_name，请检查设备名称是否正确"
+            exit 1
         fi
+        
+        PLATFORM_INFO="$full_output"
         
         if [ -n "$PLATFORM_INFO" ]; then
             TARGET=$(echo "$PLATFORM_INFO" | awk '{print $1}')
