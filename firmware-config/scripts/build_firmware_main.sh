@@ -92,10 +92,9 @@ if [ -n "${SOURCE_REPO:-}" ]; then
     export SOURCE_REPO_TYPE="$SOURCE_REPO"
 fi
 
-# 只在首次加载时执行
+# 修复：只调用 load_build_config，不在外部重复 source
 if [ -z "$CONFIG_ALREADY_LOADED" ]; then
     if [ -f "$CONFIG_FILE" ]; then
-        source "$CONFIG_FILE"
         load_build_config
     fi
 fi
@@ -1354,26 +1353,37 @@ EOF
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
-    # 自动查找正确的子目标（修正所有平台）
-    log "🔧 查找正确的子目标..."
-    local found_subtarget=""
-    for sub_dir in "target/linux/$TARGET/"*/; do
-        [ -d "$sub_dir" ] || continue
-        local sub_name=$(basename "$sub_dir")
-        if [ "$sub_name" = "image" ] || [ "$sub_name" = "files" ] || [[ "$sub_name" == patches* ]]; then
-            continue
+    # 修复：只有当 SUBTARGET 无效（不存在或等于目标名）时才尝试自动查找
+    local subtarget_valid=0
+    if [ -n "$actual_subtarget" ] && [ "$actual_subtarget" != "$TARGET" ]; then
+        if [ -f "target/linux/$TARGET/$actual_subtarget/target.mk" ] || [ -d "target/linux/$TARGET/$actual_subtarget/base-files" ]; then
+            subtarget_valid=1
         fi
-        if [ -f "$sub_dir/target.mk" ] || [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
-            found_subtarget="$sub_name"
-            break
+    fi
+    
+    if [ $subtarget_valid -eq 0 ]; then
+        log "🔧 当前子目标无效 ($actual_subtarget)，尝试自动查找..."
+        local found_subtarget=""
+        for sub_dir in "target/linux/$TARGET/"*/; do
+            [ -d "$sub_dir" ] || continue
+            local sub_name=$(basename "$sub_dir")
+            if [ "$sub_name" = "image" ] || [ "$sub_name" = "files" ] || [[ "$sub_name" == patches* ]]; then
+                continue
+            fi
+            if [ -f "$sub_dir/target.mk" ] || [ -d "$sub_dir/base-files" ]; then
+                found_subtarget="$sub_name"
+                break
+            fi
+        done
+        if [ -n "$found_subtarget" ]; then
+            actual_subtarget="$found_subtarget"
+            log "  ✅ 自动找到子目标: $actual_subtarget"
+        else
+            log "  ❌ 无法自动找到子目标，请手动指定"
+            handle_error "无法确定设备子目标"
         fi
-    done
-
-    if [ -n "$found_subtarget" ]; then
-        actual_subtarget="$found_subtarget"
-        log "  ✅ 找到子目标: $actual_subtarget"
     else
-        log "  ⚠️ 未找到有效子目标，将使用传入值: $actual_subtarget"
+        log "  ✅ 子目标已正确设置: $actual_subtarget"
     fi
     
     device_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}=y"
