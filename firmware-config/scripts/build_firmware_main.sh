@@ -5921,6 +5921,25 @@ workflow_step25_build_firmware() {
     
     cd $BUILD_DIR
     
+    # ============================================
+    # LEDE 源码特殊处理：修复文件描述符及并发编译稳定性
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE 源码：修复文件描述符限制..."
+        # 尝试提高到最大可能值，避免 "Bad file descriptor" 错误
+        ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null || true
+        local current_limit=$(ulimit -n)
+        log "  ✅ 当前文件描述符限制: $current_limit"
+        
+        # 清理可能残留的并发编译临时文件
+        log "🔧 LEDE 源码：清理残留编译文件..."
+        rm -rf tmp/ccache 2>/dev/null || true
+        find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
+        find build_dir -maxdepth 2 -name ".built" -exec rm -f {} \; 2>/dev/null || true
+        log "  ✅ 清理完成"
+    fi
+    
+    # 标准限制设置（对其他源码也适用）
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
@@ -6035,7 +6054,12 @@ EOF
             ;;
     esac
     
-    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
+    # 设置并行任务数
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        # LEDE 源码强制单线程编译，避免并发问题导致编译失败
+        MAKE_JOBS=1
+        log "⚠️ LEDE 源码：强制使用单线程编译（避免并发编译错误）"
+    elif [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then
             MAKE_JOBS=4
         elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then
