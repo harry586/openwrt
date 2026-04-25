@@ -1080,12 +1080,10 @@ generate_config() {
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 ===== LEDE 源码启动修复 ====="
         
-        # 根据目标平台进行特定修复
         case "$TARGET" in
             ipq40xx)
                 log "  🔧 IPQ40xx 平台启动修复 (适用于 AC42U 等设备)"
                 
-                # 确保必要的内核配置
                 cat >> .config << 'EOF'
 # IPQ40xx 启动必需配置
 CONFIG_CMDLINE_PARTITION=y
@@ -1188,9 +1186,6 @@ EOF
                 ;;
         esac
         
-        # ============================================
-        # LEDE 通用启动修复
-        # ============================================
         log "  🔧 LEDE 通用启动修复"
         
         cat >> .config << 'EOF'
@@ -1226,12 +1221,8 @@ CONFIG_IPV4=y
 EOF
         log "  ✅ LEDE 通用启动修复配置已添加"
         
-        # ============================================
-        # 修复 LEDE 源码中可能存在的设备定义问题
-        # ============================================
         log "  🔧 检查和修复 LEDE 设备定义文件..."
         
-        # 查找设备定义文件
         local device_mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
         local device_found=0
         
@@ -1240,14 +1231,9 @@ EOF
                 device_found=1
                 log "    📁 找到设备定义文件: $mkfile"
                 
-                # 备份原文件
                 cp "$mkfile" "$mkfile.bak.lede"
                 
-                # 检查并修复常见的 LEDE 设备定义问题
-                
-                # 1. 确保有 KERNEL_SIZE 定义
                 if ! grep -q "KERNEL_SIZE" "$mkfile" 2>/dev/null; then
-                    # 获取 kernel 大小（从设备定义中推断）
                     local kernel_size=""
                     if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
                         kernel_size="2097152"
@@ -1259,12 +1245,10 @@ EOF
                         kernel_size="2097152"
                     fi
                     
-                    # 在 Device 定义后添加 KERNEL_SIZE
                     sed -i "/define Device.*$correct_device/a \  KERNEL_SIZE := $kernel_size" "$mkfile"
                     log "      ✅ 添加 KERNEL_SIZE := $kernel_size"
                 fi
                 
-                # 2. 检查并修复 BLOCKSIZE
                 if ! grep -q "BLOCKSIZE" "$mkfile" 2>/dev/null; then
                     local blocksize="256k"
                     if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
@@ -1274,7 +1258,6 @@ EOF
                     log "      ✅ 添加 BLOCKSIZE := $blocksize"
                 fi
                 
-                # 3. 确保有 IMAGE_SIZE 定义
                 if ! grep -q "IMAGE_SIZE" "$mkfile" 2>/dev/null; then
                     local image_size=""
                     if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
@@ -1291,9 +1274,7 @@ EOF
                     fi
                 fi
                 
-                # 4. 检查并添加 IMAGE/sysupgrade.bin 定义
                 if ! grep -q "IMAGE/sysupgrade.bin" "$mkfile" 2>/dev/null; then
-                    # 根据平台添加适当的 sysupgrade 定义
                     case "$TARGET" in
                         ipq40xx)
                             echo "define Device/$correct_device" > /tmp/device_temp.txt
@@ -1319,50 +1300,38 @@ EOF
             log "    ⚠️ 未找到设备 $correct_device 的定义文件，跳过修复"
         fi
         
-        # ============================================
-        # 修复 LEDE 内核补丁问题
-        # ============================================
         log "  🔧 检查和修复 LEDE 内核补丁..."
         
-        # 查找可能的补丁冲突
         local patch_dirs=$(find "target/linux/$TARGET" -type d -name "patches-*" 2>/dev/null)
         
         for patch_dir in $patch_dirs; do
             log "    📁 检查补丁目录: $patch_dir"
             
-            # 检查是否有可能导致启动问题的补丁
             local problem_patches=$(find "$patch_dir" -name "*.patch" -exec grep -l "leds.*color\|function.*LED_FUNCTION" {} \; 2>/dev/null)
             
             for patch in $problem_patches; do
                 log "    ⚠️ 发现可能的问题补丁: $(basename "$patch")"
-                # 备份并禁用问题补丁
                 mv "$patch" "$patch.disabled" 2>/dev/null || true
                 log "      🔧 已禁用问题补丁: $(basename "$patch").disabled"
             done
         done
         
-        # ============================================
-        # 确保正确的镜像格式
-        # ============================================
         log "  🔧 配置正确的镜像格式..."
         
         case "$TARGET" in
             ipq40xx)
-                # IPQ40xx 通常使用 UBI 格式
                 echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
                 echo "CONFIG_TARGET_UBIFS=y" >> .config
                 echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
                 echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
                 ;;
             mediatek)
-                # Mediatek/filogic 通常使用 UBI 格式
                 echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
                 echo "CONFIG_TARGET_UBIFS=y" >> .config
                 echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
                 echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
                 ;;
             ath79)
-                # ATH79 通常使用 SquashFS
                 echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
                 ;;
         esac
@@ -1377,21 +1346,31 @@ EOF
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
-    # 修正 mediatek 平台的子目标名称
-    if [ "$TARGET" = "mediatek" ]; then
-        # 检查实际存在的子目标
-        if [ -d "target/linux/mediatek/filogic" ]; then
-            actual_subtarget="filogic"
-        elif [ -d "target/linux/mediatek/mt7622" ]; then
-            actual_subtarget="mt7622"
+    # 自动查找正确的子目标（修正所有平台）
+    log "🔧 查找正确的子目标..."
+    local found_subtarget=""
+    for sub_dir in "target/linux/$TARGET/"*/; do
+        [ -d "$sub_dir" ] || continue
+        local sub_name=$(basename "$sub_dir")
+        if [ "$sub_name" = "image" ] || [ "$sub_name" = "files" ] || [[ "$sub_name" == patches* ]]; then
+            continue
         fi
-        log "🔧 mediatek平台，子目标修正: $SUBTARGET -> $actual_subtarget"
+        if [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
+            found_subtarget="$sub_name"
+            break
+        fi
+    done
+
+    if [ -n "$found_subtarget" ]; then
+        actual_subtarget="$found_subtarget"
+        log "  ✅ 找到子目标: $actual_subtarget"
+    else
+        log "  ⚠️ 未找到有效子目标，将使用传入值: $actual_subtarget"
     fi
     
     device_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}=y"
     log "🔧 标准设备配置格式: $device_config"
     
-    # 更新 SUBTARGET 变量
     SUBTARGET="$actual_subtarget"
     
     log "🔧 最终设备配置变量: $device_config"
@@ -1403,7 +1382,6 @@ CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${actual_subtarget}=y
 EOF
         
-        # 添加之前生成的 LEDE 启动修复配置
         if [ -f .config.tmp.lede ]; then
             cat .config.tmp.lede >> .config
             rm -f .config.tmp.lede
@@ -1430,9 +1408,7 @@ EOF
     log "🔧 基础配置文件内容:"
     cat .config
     
-    # 保存 LEDE 启动修复配置供后续使用
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        # 将之前的修复配置保存到临时文件，避免被后续操作覆盖
         cp .config .config.lede_base_fixed
     fi
     
@@ -1535,8 +1511,6 @@ EOF
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
         log "🔧 ===== 禁用所有 IPv6 功能（所有源码类型通用保守方式） ====="
         
-        # 所有源码类型统一使用保守的 IPv6 禁用方式
-        # 只禁用 IPv6 相关的包，不修改内核配置，避免影响系统启动
         cat >> .config << 'EOF'
 # IPv6 包禁用（保守方式 - 所有源码类型通用）
 # 禁用 IPv6 防火墙相关
@@ -1575,7 +1549,6 @@ EOF
 EOF
         log "  ✅ 已添加 IPv6 包禁用配置（所有源码类型通用）"
         
-        # 删除可能存在的 IPv6 启用配置
         sed -i '/^CONFIG_PACKAGE_.*ip6tables/d' .config
         sed -i '/^CONFIG_PACKAGE_odhcp6c/d' .config
         sed -i '/^CONFIG_PACKAGE_odhcpd/d' .config
@@ -1642,10 +1615,8 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 ===== LEDE 源码最终启动验证 ====="
         
-        # 恢复之前保存的 LEDE 基础修复配置
         if [ -f .config.lede_base_fixed ]; then
             log "  🔧 合并 LEDE 基础修复配置..."
-            # 只添加缺失的关键配置，不覆盖已有配置
             while IFS= read -r line; do
                 config_name=$(echo "$line" | cut -d'=' -f1)
                 if ! grep -q "^${config_name}=" .config; then
@@ -1655,24 +1626,20 @@ EOF
             rm -f .config.lede_base_fixed
         fi
         
-        # 确保关键配置存在
         log "  🔧 验证关键启动配置..."
         
         local critical_missing=0
         
-        # 检查 CMDLINE_PARTITION
         if ! grep -q "CONFIG_CMDLINE_PARTITION=y" .config; then
             echo "CONFIG_CMDLINE_PARTITION=y" >> .config
             critical_missing=$((critical_missing + 1))
         fi
         
-        # 检查 MTD_SPLIT_FIRMWARE
         if ! grep -q "CONFIG_MTD_SPLIT_FIRMWARE=y" .config; then
             echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
             critical_missing=$((critical_missing + 1))
         fi
         
-        # 检查 MTD_SPLIT_UIMAGE_FW
         if ! grep -q "CONFIG_MTD_SPLIT_UIMAGE_FW=y" .config; then
             echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
             critical_missing=$((critical_missing + 1))
@@ -2283,31 +2250,26 @@ EOF
     log "  📌 固件前缀: $vendor_prefix"
     log "  📌 发行版名称: $dist_name"
     
-    # 1. 设置 CONFIG_VERSION_DIST
     sed -i '/^CONFIG_VERSION_DIST=/d' .config
     sed -i '/^# CONFIG_VERSION_DIST/d' .config
     echo "CONFIG_VERSION_DIST=\"$dist_name\"" >> .config
     log "    ✅ 设置 CONFIG_VERSION_DIST=\"$dist_name\""
     
-    # 2. 设置 CONFIG_VERSION_REPO
     sed -i '/^CONFIG_VERSION_REPO=/d' .config
     sed -i '/^# CONFIG_VERSION_REPO/d' .config
     echo "CONFIG_VERSION_REPO=\"https://github.com/$SOURCE_REPO_TYPE/$SOURCE_REPO_TYPE.git\"" >> .config
     log "    ✅ 设置 CONFIG_VERSION_REPO"
     
-    # 3. 设置 CONFIG_VERSION_CODE_FILENAME
     sed -i '/^CONFIG_VERSION_CODE_FILENAME=/d' .config
     sed -i '/^# CONFIG_VERSION_CODE_FILENAME/d' .config
     echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"" >> .config
     log "    ✅ 设置 CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\""
     
-    # 4. 设置 CONFIG_VERSION_MANUFACTURER
     sed -i '/^CONFIG_VERSION_MANUFACTURER=/d' .config
     sed -i '/^# CONFIG_VERSION_MANUFACTURER/d' .config
     echo "CONFIG_VERSION_MANUFACTURER=\"$vendor_prefix\"" >> .config
     log "    ✅ 设置 CONFIG_VERSION_MANUFACTURER=\"$vendor_prefix\""
     
-    # 5. 修改 include/version.mk（如果存在）
     if [ -f "include/version.mk" ]; then
         cp include/version.mk include/version.mk.bak
         sed -i "s/VERSION_DIST:=.*/VERSION_DIST:=$dist_name/g" include/version.mk
@@ -2315,9 +2277,9 @@ EOF
         sed -i "s/VERSION_CODE_FILENAME:=.*/VERSION_CODE_FILENAME:=$vendor_prefix/g" include/version.mk
         sed -i "s/VERSION_MANUFACTURER:=.*/VERSION_MANUFACTURER:=$vendor_prefix/g" include/version.mk
         log "    ✅ 修改 include/version.mk"
+        rm -f include/version.mk.bak
     fi
     
-    # 6. 修改 include/image.mk 中的 IMAGE_NAME 定义
     if [ -f "include/image.mk" ]; then
         cp include/image.mk include/image.mk.bak
         sed -i "s/openwrt-/$vendor_prefix-/g" include/image.mk
@@ -2327,9 +2289,9 @@ EOF
         sed -i "s/ImmortalWrt-/$vendor_prefix-/g" include/image.mk
         sed -i "s/LEDE-/$vendor_prefix-/g" include/image.mk
         log "    ✅ 修改 include/image.mk 中的前缀"
+        rm -f include/image.mk.bak
     fi
     
-    # 7. 修改设备定义文件
     local image_mk="target/linux/$TARGET/image/$actual_subtarget.mk"
     if [ -f "$image_mk" ]; then
         cp "$image_mk" "$image_mk.bak"
@@ -2340,18 +2302,18 @@ EOF
         sed -i "s/ImmortalWrt/$vendor_prefix/g" "$image_mk"
         sed -i "s/LEDE/$vendor_prefix/g" "$image_mk"
         log "    ✅ 修改 $image_mk"
+        rm -f "$image_mk.bak"
     fi
     
-    # 8. 修改 generic.mk
     if [ -f "target/linux/$TARGET/image/Makefile" ]; then
         cp "target/linux/$TARGET/image/Makefile" "target/linux/$TARGET/image/Makefile.bak"
         sed -i "s/openwrt-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
         sed -i "s/immortalwrt-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
         sed -i "s/lede-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
         log "    ✅ 修改 target/linux/$TARGET/image/Makefile"
+        rm -f "target/linux/$TARGET/image/Makefile.bak"
     fi
     
-    # 9. LEDE 源码特殊处理：修改 feeds.conf.default 中的默认配置
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "  🔧 LEDE 源码特殊处理..."
         if [ -f "feeds.conf.default" ]; then
@@ -2364,7 +2326,6 @@ EOF
         log "    ✅ LEDE 特殊配置已应用"
     fi
     
-    # 10. 更新配置
     make defconfig > /dev/null 2>&1 || true
     
     log "✅ 固件名称前缀修正完成"
@@ -5026,9 +4987,6 @@ workflow_step15_generate_config() {
     fi
     echo ""
     
-    # ============================================
-    # 智能设备匹配函数（修复权重计算）
-    # ============================================
     find_best_matching_device() {
         local input_device="$1"
         local mk_file="$2"
@@ -5043,19 +5001,12 @@ workflow_step15_generate_config() {
         
         local lower_input=$(echo "$input_device" | tr '[:upper:]' '[:lower:]')
         
-        # 提取输入中的关键词
         local input_base=""
-        if [[ "$lower_input" == *"rax3000m"* ]]; then
-            input_base="rax3000m"
-        elif [[ "$lower_input" == *"ac42u"* ]]; then
-            input_base="ac42u"
-        elif [[ "$lower_input" == *"wndr3800"* ]]; then
-            input_base="wndr3800"
-        else
-            input_base=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
-        fi
+        if [[ "$lower_input" == *"rax3000m"* ]]; then input_base="rax3000m"
+        elif [[ "$lower_input" == *"ac42u"* ]]; then input_base="ac42u"
+        elif [[ "$lower_input" == *"wndr3800"* ]]; then input_base="wndr3800"
+        else input_base=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//'); fi
         
-        # 判断输入是否包含后缀
         local input_has_nand=0
         local input_has_emmc=0
         local input_has_ubootmod=0
@@ -5064,7 +5015,6 @@ workflow_step15_generate_config() {
         if [[ "$lower_input" == *"ubootmod"* ]]; then input_has_ubootmod=1; fi
         
         for device in "${all_devices[@]}"; do
-            # 排除 _common 模板
             if [[ "$device" == *_common* ]]; then
                 continue
             fi
@@ -5072,148 +5022,132 @@ workflow_step15_generate_config() {
             local weight=0
             local lower_device=$(echo "$device" | tr '[:upper:]' '[:lower:]')
             
-            # 完全匹配：权重+200（最高优先级）
             if [ "$lower_input" = "$lower_device" ]; then
                 weight=$((weight + 200))
             fi
             
-            # 输入包含设备名（正向包含）：权重+80
             if [[ "$lower_input" == *"$lower_device"* ]]; then
                 weight=$((weight + 80))
             fi
             
-            # 设备名包含输入（反向包含）：权重+60
             if [[ "$lower_device" == *"$lower_input"* ]]; then
                 weight=$((weight + 60))
             fi
             
-            # 同系列基础名匹配：权重+50
             if [[ "$lower_device" == *"$input_base"* ]]; then
                 weight=$((weight + 50))
             fi
             
-            # 去除后缀后匹配：权重+40
             local input_no_suffix=$(echo "$lower_input" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
             local device_no_suffix=$(echo "$lower_device" | sed 's/-nand$//;s/-emmc$//;s/-sd$//;s/-ubootmod$//')
             if [ "$input_no_suffix" = "$device_no_suffix" ]; then
                 weight=$((weight + 40))
             fi
             
-            # 后缀匹配加分
-            # NAND 后缀匹配
+            if [[ "$lower_input" == *"rax3000m"* ]] && [[ "$lower_device" == *"rax3000m"* ]]; then
+                weight=$((weight + 30))
+            fi
+            
             if [ $input_has_nand -eq 1 ] && [[ "$lower_device" == *"nand"* ]]; then
                 weight=$((weight + 25))
             fi
-            # EMMC 后缀匹配
             if [ $input_has_emmc -eq 1 ] && [[ "$lower_device" == *"emmc"* ]]; then
                 weight=$((weight + 25))
             fi
-            # ubootmod 后缀匹配
             if [ $input_has_ubootmod -eq 1 ] && [[ "$lower_device" == *"ubootmod"* ]]; then
                 weight=$((weight + 25))
             fi
             
-            # 设备名更长（更具体）加分
-            local input_len=${#lower_input}
-            local device_len=${#lower_device}
-            if [ $device_len -gt $input_len ]; then
-                weight=$((weight + 15))
-            fi
-            
-            # 部分单词匹配：权重+10
             local input_parts=($(echo "$lower_input" | tr '_-' ' '))
             local device_parts=($(echo "$lower_device" | tr '_-' ' '))
-            local part_match=0
             for ipart in "${input_parts[@]}"; do
                 for dpart in "${device_parts[@]}"; do
                     if [ "$ipart" = "$dpart" ] && [ ${#ipart} -gt 2 ]; then
-                        part_match=$((part_match + 1))
+                        weight=$((weight + 10))
                     fi
                 done
             done
-            weight=$((weight + part_match * 10))
             
             if [ $weight -gt 0 ]; then
                 results+=("$weight:$device")
             fi
         done
         
-        # 按权重降序排序，取前20个
         if [ ${#results[@]} -gt 0 ]; then
             printf '%s\n' "${results[@]}" | sort -t':' -k1 -rn | head -20
         fi
     }
     
     # ============================================
-    # 分析设备固件格式
+    # 分析设备固件格式（支持模板展开）
     # ============================================
     analyze_device_firmware_format() {
         local device_name="$1"
         local mk_file="$2"
-        
-        local device_block=$(awk "/define Device\/$device_name\$/,/^endef/" "$mk_file" 2>/dev/null)
-        if [ -z "$device_block" ]; then
-            device_block=$(awk "/define Device\/$device_name[[:space:]]/,/^endef/" "$mk_file" 2>/dev/null)
-        fi
-        
-        if [ -z "$device_block" ]; then
+
+        local full_block=""
+        local in_block=0
+        while IFS= read -r line; do
+            if [[ "$line" =~ define[[:space:]]+Device/$device_name ]]; then
+                in_block=1
+                full_block="$line"$'\n'
+                continue
+            fi
+            if [ $in_block -eq 1 ]; then
+                full_block="$full_block$line"$'\n'
+                if [[ "$line" =~ \$\(call[[:space:]]+Device/([a-zA-Z0-9_-]+) ]]; then
+                    local template_name="${BASH_REMATCH[1]}"
+                    local template_block=$(awk "/define Device\/$template_name\$/,/^endef/" "$mk_file" 2>/dev/null)
+                    if [ -n "$template_block" ]; then
+                        full_block="$full_block$template_block"$'\n'
+                    fi
+                fi
+                if [[ "$line" == "endef" ]]; then
+                    break
+                fi
+            fi
+        done < "$mk_file"
+
+        if [ -z "$full_block" ]; then
             echo "unknown"
             return
         fi
-        
+
         local images_def=""
-        if echo "$device_block" | grep -q "IMAGES[[:space:]]*:="; then
-            images_def=$(echo "$device_block" | grep "IMAGES[[:space:]]*:=" | sed 's/.*:= *//')
+        local images_line=$(echo "$full_block" | grep "IMAGES[[:space:]]*:=")
+        if [ -n "$images_line" ]; then
+            images_def=$(echo "$images_line" | sed 's/.*:= *//')
         fi
-        
+
         local has_sysupgrade_bin=0
-        if echo "$device_block" | grep -q "IMAGE/sysupgrade.bin"; then
+        local has_sysupgrade_itb=0
+        local has_factory_bin=0
+        local has_factory_img=0
+
+        echo "$full_block" | grep -q "IMAGE/sysupgrade.bin" && has_sysupgrade_bin=1
+        echo "$full_block" | grep -q "IMAGE/sysupgrade.itb" && has_sysupgrade_itb=1
+        echo "$full_block" | grep -q "IMAGE/factory.bin" && has_factory_bin=1
+        echo "$full_block" | grep -q "IMAGE/factory.img" && has_factory_img=1
+
+        if [ -n "$images_def" ]; then
+            echo "$images_def" | grep -q "sysupgrade.bin" && has_sysupgrade_bin=1
+            echo "$images_def" | grep -q "sysupgrade.itb" && has_sysupgrade_itb=1
+        else
             has_sysupgrade_bin=1
         fi
-        
-        local has_sysupgrade_itb=0
-        if echo "$device_block" | grep -q "IMAGE/sysupgrade.itb"; then
-            has_sysupgrade_itb=1
-        fi
-        
-        local has_factory_bin=0
-        if echo "$device_block" | grep -q "IMAGE/factory.bin"; then
-            has_factory_bin=1
-        fi
-        
-        local has_factory_img=0
-        if echo "$device_block" | grep -q "IMAGE/factory.img"; then
-            has_factory_img=1
-        fi
-        
-        local images_has_bin=0
-        local images_has_itb=0
-        if [ -n "$images_def" ]; then
-            if echo "$images_def" | grep -q "sysupgrade.bin"; then
-                images_has_bin=1
-            fi
-            if echo "$images_def" | grep -q "sysupgrade.itb"; then
-                images_has_itb=1
-            fi
-        else
-            images_has_bin=1
-        fi
-        
+
         local result=""
-        if [ $images_has_bin -eq 1 ] || [ $has_sysupgrade_bin -eq 1 ]; then
+        if [ $has_sysupgrade_bin -eq 1 ]; then
             result="bin"
-        elif [ $images_has_itb -eq 1 ] || [ $has_sysupgrade_itb -eq 1 ]; then
+        elif [ $has_sysupgrade_itb -eq 1 ]; then
             result="itb"
         else
             result="bin"
         fi
-        
+
         echo "$result|$images_def|$has_sysupgrade_bin|$has_sysupgrade_itb|$has_factory_bin|$has_factory_img"
     }
     
-    # ============================================
-    # 查找同系列支持 .bin 的设备
-    # ============================================
     find_bin_compatible_device() {
         local input_device="$1"
         local mk_file="$2"
@@ -5258,7 +5192,6 @@ workflow_step15_generate_config() {
     local all_matches=()
     
     for mkfile in "${mk_files[@]}"; do
-        # 第一步：尝试精确匹配（排除 _common）
         local exact_match=""
         local all_device_defs=$(grep -E "define Device/[a-zA-Z0-9_-]+" "$mkfile" 2>/dev/null)
         
@@ -5280,7 +5213,6 @@ workflow_step15_generate_config() {
             break
         fi
         
-        # 第二步：收集所有权重匹配
         local matches=$(find_best_matching_device "$DEVICE" "$mkfile")
         if [ -n "$matches" ]; then
             while IFS= read -r match; do
@@ -5289,11 +5221,7 @@ workflow_step15_generate_config() {
         fi
     done
     
-    # ============================================
-    # 处理匹配结果
-    # ============================================
     if [ -z "$device_file" ] && [ ${#all_matches[@]} -gt 0 ]; then
-        # 按权重降序排序
         local sorted_matches=($(printf '%s\n' "${all_matches[@]}" | sort -t':' -k1 -rn))
         
         echo ""
@@ -5307,7 +5235,6 @@ workflow_step15_generate_config() {
             local mkf=$(echo "$match" | cut -d':' -f3)
             
             if [ $display_count -lt 20 ]; then
-                # 显示固件格式信息
                 local fmt_info=$(analyze_device_firmware_format "$dev" "$mkf")
                 local fmt_type=$(echo "$fmt_info" | cut -d'|' -f1)
                 local fmt_label=""
@@ -5320,7 +5247,6 @@ workflow_step15_generate_config() {
         echo "----------------------------------------"
         echo ""
         
-        # 选择权重最高的
         local best_match="${sorted_matches[0]}"
         local best_weight=$(echo "$best_match" | cut -d':' -f1)
         mk_device_name=$(echo "$best_match" | cut -d':' -f2)
@@ -5329,7 +5255,6 @@ workflow_step15_generate_config() {
         log "🔧 选择权重最高的设备: $mk_device_name (权重: $best_weight)"
         log "📁 定义文件: $device_file"
         
-        # 显示前5个候选供参考
         if [ ${#sorted_matches[@]} -gt 1 ]; then
             echo ""
             log "💡 其他候选项 (权重降序):"
@@ -5451,7 +5376,6 @@ workflow_step15_generate_config() {
         log "✅ 设备 $mk_device_name 支持 .bin 格式固件，无需转换"
     fi
     
-    # 保存固件格式信息
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         echo "export FIRMWARE_FORMAT_TYPE=\"${FIRMWARE_FORMAT_TYPE:-bin}\"" >> "$BUILD_DIR/build_env.sh"
         echo "export FIRMWARE_HAS_ITB=\"${FIRMWARE_HAS_ITB:-0}\"" >> "$BUILD_DIR/build_env.sh"
