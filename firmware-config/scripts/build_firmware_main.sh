@@ -2,8 +2,18 @@
 #【build_firmware_main.sh-00】
 # OpenWrt 智能固件构建主脚本
 # 对应工作流: firmware-build.yml
-# 版本: 3.1.0
-# 最后更新: 2026-03-14
+# 版本: 3.2.0
+# 最后更新: 2026-04-25
+#
+# 函数定义顺序已与工作流执行顺序对齐：
+#   05 安装基础工具 -> 06 初始空间检查 -> 07 创建构建目录 -> 
+#   08 初始化构建环境 -> 09 添加TurboACC -> 10 配置Feeds -> 
+#   11 安装TurboACC包 -> 12 智能配置生成 -> 13 验证USB配置 -> 
+#   14 USB驱动检查 -> 15 应用配置 -> 16 备份配置(由YAML直接执行) ->
+#   17 修复网络 -> 18 下载依赖 -> 19 集成自定义文件 -> 
+#   20 前置错误检查 -> 21 编译工具链 -> 22 验证工具链 -> 
+#   23 编译前空间检查 -> 24 编译固件 -> 25 检查产物 -> 
+#   28 编译后空间检查 -> 29 编译总结
 #【build_firmware_main.sh-00-end】
 
 #【build_firmware_main.sh-00.5】
@@ -951,9 +961,7 @@ install_turboacc_packages() {
 #【build_firmware_main.sh-10-end】
 
 #【build_firmware_main.sh-11】
-#------------------------------------------------------------------------------
-# 功能开关配置
-#------------------------------------------------------------------------------
+# 功能开关配置（默认值）
 : ${ENABLE_TURBOACC:="true"}
 : ${ENABLE_TCP_BBR:="true"}
 : ${FORCE_ATH10K_CT:="true"}
@@ -1355,7 +1363,7 @@ EOF
         if [ "$sub_name" = "image" ] || [ "$sub_name" = "files" ] || [[ "$sub_name" == patches* ]]; then
             continue
         fi
-        if [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
+        if [ -f "$sub_dir/target.mk" ] || [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
             found_subtarget="$sub_name"
             break
         fi
@@ -3691,7 +3699,7 @@ PYEOF
     mkdir -p "$first_boot_dir"
     
     local first_boot_script="$first_boot_dir/99-custom-files"
-    cat > "$first_boot_script" << 'EOF'
+    cat > "$first_boot_script" << 'FIRSTBOOT_EOF'
 #!/bin/sh
 
 LOG_DIR="/root/logs"
@@ -3928,7 +3936,7 @@ echo "" >> $LOG_FILE
 echo "=== 自定义文件安装脚本执行完成 ===" >> $LOG_FILE
 
 exit 0
-EOF
+FIRSTBOOT_EOF
     
     chmod +x "$first_boot_script"
     log "✅ 创建第一次开机安装脚本: $first_boot_script"
@@ -4224,7 +4232,7 @@ cleanup() {
 #【build_firmware_main.sh-21-end】
 
 # ============================================================================
-# 工作流步骤函数 - 按顺序排列
+# 工作流步骤函数 - 按新的执行顺序排列
 # ============================================================================
 
 #【build_firmware_main.sh-22】
@@ -5669,9 +5677,6 @@ workflow_step23_pre_build_check() {
     
     cd $BUILD_DIR
     
-    # ============================================
-    # 在检查前，确保设备配置存在
-    # ============================================
     log "🔧 确保设备配置存在..."
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
@@ -5680,16 +5685,28 @@ workflow_step23_pre_build_check() {
     fi
     
     # ============================================
-    # 修正 mediatek 平台的子目标
+    # 修正所有平台的子目标
     # ============================================
     local actual_subtarget="$SUBTARGET"
-    if [ "$TARGET" = "mediatek" ]; then
-        if [ -d "target/linux/mediatek/filogic" ]; then
-            actual_subtarget="filogic"
-        elif [ -d "target/linux/mediatek/mt7622" ]; then
-            actual_subtarget="mt7622"
+    log "🔧 查找正确的子目标..."
+    local found_subtarget=""
+    for sub_dir in "target/linux/$TARGET/"*/; do
+        [ -d "$sub_dir" ] || continue
+        local sub_name=$(basename "$sub_dir")
+        if [ "$sub_name" = "image" ] || [ "$sub_name" = "files" ] || [[ "$sub_name" == patches* ]]; then
+            continue
         fi
-        log "🔧 mediatek平台，子目标修正: $SUBTARGET -> $actual_subtarget"
+        if [ -f "$sub_dir/target.mk" ] || [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
+            found_subtarget="$sub_name"
+            break
+        fi
+    done
+
+    if [ -n "$found_subtarget" ]; then
+        actual_subtarget="$found_subtarget"
+        log "  ✅ 找到子目标: $actual_subtarget"
+    else
+        log "  ⚠️ 未找到有效子目标，将使用传入值: $actual_subtarget"
     fi
     
     # ============================================
@@ -5702,7 +5719,6 @@ workflow_step23_pre_build_check() {
     search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${DEVICE}"
     log "🔧 标准格式，期望配置: $expected_config"
     
-    # 检查设备配置是否存在
     local config_exists=0
     if grep -q "^${expected_config}$" .config 2>/dev/null; then
         config_exists=1
@@ -5768,7 +5784,6 @@ workflow_step23_pre_build_check() {
         echo "   ✅ .config 文件存在"
         echo "   📊 大小: $config_size, 行数: $config_lines"
         
-        # 直接使用 DEVICE 变量的值检查
         local device_for_check="$DEVICE"
         local check_pattern=""
         
@@ -7236,9 +7251,7 @@ workflow_step30_build_summary() {
     echo "  禁用IPv6:      ${DISABLE_IPV6:-true}"
     echo ""
     
-    # ============================================
-    # 显示 IPv6 禁用状态详情（全局通用）
-    # ============================================
+    # 显示 IPv6 禁用状态详情
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
         echo "🌐 IPv6 禁用详情（所有源码类型通用）:"
         echo "  - 内核 IPv6 支持: 已禁用"
