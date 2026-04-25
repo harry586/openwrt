@@ -299,7 +299,7 @@ validate_device() {
         fi
     fi
     
-    # 找不到设备，直接报错退出（与04.04版本一致）
+    # 找不到设备，直接报错退出
     error "❌ mk文件中未找到设备: $device_name"
 }
 
