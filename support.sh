@@ -265,20 +265,22 @@ validate_device() {
                             best_match="$dev"
                             found_target="$target_name"
                             
+                            # 修复：正确推导子目标
                             local mk_dir=$(dirname "$mk_file")
                             local parent_dir=$(basename "$mk_dir")
                             if [ "$parent_dir" = "image" ]; then
-                                found_subtarget=$(basename $(dirname "$mk_dir"))
+                                # 直接使用 .mk 文件名作为子目标名 (例如 generic.mk -> generic)
+                                found_subtarget=$(basename "$mk_file" .mk)
                             else
                                 found_subtarget="$parent_dir"
                             fi
-                            
-                            if [ "$found_subtarget" = "$target_name" ] || [ "$found_subtarget" = "image" ]; then
+                            # 如果子目标名刚好等于目标名，尝试在 config 目录中找第一个有效子目标
+                            if [ "$found_subtarget" = "$target_name" ]; then
                                 for sub_dir in "$search_dir/target/linux/$target_name/"*/; do
                                     [ -d "$sub_dir" ] || continue
                                     local sub_name=$(basename "$sub_dir")
                                     if [ "$sub_name" != "image" ] && [ "$sub_name" != "files" ] && [ "$sub_name" != "patches"* ]; then
-                                        if [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
+                                        if [ -f "$sub_dir/target.mk" ] || [ -d "$sub_dir/base-files" ]; then
                                             found_subtarget="$sub_name"
                                             break
                                         fi
