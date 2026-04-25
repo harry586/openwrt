@@ -4961,13 +4961,13 @@ workflow_step14_pre_build_space_check() {
 workflow_step15_generate_config() {
     local extra_packages="$1"
     
-    log "=== 步骤15: 智能配置生成 ==="
+    log "=== 步骤12: 智能配置生成 ==="
     log "当前设备: $DEVICE"
     log "当前目标: $TARGET"
     log "当前子目标: $SUBTARGET"
     
     set -e
-    trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤12 失败，退出代码: $?"; exit 1' ERR
     
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
@@ -5425,7 +5425,7 @@ workflow_step15_generate_config() {
     
     generate_config "$extra_packages" "$correct_device"
     
-    log "✅ 步骤15 完成"
+    log "✅ 步骤12 完成"
 }
 #【build_firmware_main.sh-33-end】
 
@@ -5680,10 +5680,10 @@ workflow_step22_integrate_custom_files() {
 
 #【build_firmware_main.sh-39】
 workflow_step23_pre_build_check() {
-    log "=== 步骤23: 前置错误检查（使用公共函数） ==="
+    log "=== 步骤20: 前置错误检查（使用公共函数） ==="
     
     set -e
-    trap 'echo "❌ 步骤23 失败，退出代码: $?"; exit 1' ERR
+    trap 'echo "❌ 步骤20 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
     
@@ -5694,40 +5694,13 @@ workflow_step23_pre_build_check() {
         log "✅ 加载环境变量: DEVICE=$DEVICE, TARGET=$TARGET"
     fi
     
-    # ============================================
-    # 修正所有平台的子目标
-    # ============================================
-    local actual_subtarget="$SUBTARGET"
-    log "🔧 查找正确的子目标..."
-    local found_subtarget=""
-    for sub_dir in "target/linux/$TARGET/"*/; do
-        [ -d "$sub_dir" ] || continue
-        local sub_name=$(basename "$sub_dir")
-        if [ "$sub_name" = "image" ] || [ "$sub_name" = "files" ] || [[ "$sub_name" == patches* ]]; then
-            continue
-        fi
-        if [ -f "$sub_dir/target.mk" ] || [ -f "$sub_dir/Makefile" ] || [ -d "$sub_dir/base-files" ]; then
-            found_subtarget="$sub_name"
-            break
-        fi
-    done
-
-    if [ -n "$found_subtarget" ]; then
-        actual_subtarget="$found_subtarget"
-        log "  ✅ 找到子目标: $actual_subtarget"
-    else
-        log "  ⚠️ 未找到有效子目标，将使用传入值: $actual_subtarget"
-    fi
-    
-    # ============================================
-    # 根据源码类型确定设备配置格式
-    # ============================================
+    # 直接使用环境变量中的 SUBTARGET，不再进行自动查找
     local expected_config=""
     local search_pattern=""
     
-    expected_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${DEVICE}=y"
-    search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${DEVICE}"
-    log "🔧 标准格式，期望配置: $expected_config"
+    expected_config="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}=y"
+    search_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${DEVICE}"
+    log "🔧 期望配置: $expected_config"
     
     local config_exists=0
     if grep -q "^${expected_config}$" .config 2>/dev/null; then
@@ -5797,7 +5770,7 @@ workflow_step23_pre_build_check() {
         local device_for_check="$DEVICE"
         local check_pattern=""
         
-        check_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${device_for_check}"
+        check_pattern="CONFIG_TARGET_${TARGET}_${SUBTARGET}_DEVICE_${device_for_check}"
         
         if grep -q "^${check_pattern}=y" .config; then
             echo "   ✅ 设备配置正确: $(grep "^${check_pattern}=y" .config | head -1)"
@@ -5954,7 +5927,7 @@ workflow_step23_pre_build_check() {
     fi
     echo "========================================"
     
-    log "✅ 步骤23 完成"
+    log "✅ 步骤20 完成"
 }
 #【build_firmware_main.sh-39-end】
 
