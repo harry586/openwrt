@@ -1,7 +1,7 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
 # 版本: 3.6.0
-# 最后更新: 2026-04-27
+# 最后更新: 2026-04-28
 
 name: OpenWrt 智能固件构建工作流
 
@@ -15,15 +15,96 @@ on:
         type: choice
         default: "immortalwrt"
         options: ["immortalwrt", "openwrt", "lede"]
-      
-      # 预定义设备下拉选择
+
+      # 分隔线
+      sep1:
+        description: "──────────────────────────────"
+        required: false
+        type: string
+        default: ""
+
+      # 版本选择
+      version_selection:
+        description: "🔄 版本选择"
+        required: true
+        type: choice
+        default: "21.02"
+        options: ["23.05", "21.02"]
+      # 配置模式
+      config_mode:
+        description: "⚙️ 配置模式选择"
+        required: true
+        type: choice
+        default: "normal"
+        options: ["base", "normal"]
+
+      # 分隔线
+      sep2:
+        description: "──────────────────────────────"
+        required: false
+        type: string
+        default: ""
+
+      # 预定义设备
       device_name:
         description: "📱 预定义设备（下拉选择）"
         required: false
         type: choice
         default: "ac42u"
         options: ["ac42u", "cmcc_rax3000m-nand", "netgear_wndr3800"]
-      
+
+      # 分隔线
+      sep3:
+        description: "──────────────────────────────"
+        required: false
+        type: string
+        default: ""
+
+      # 补丁选择方式
+      patch_method:
+        description: "🔧 补丁选择方式"
+        required: true
+        type: choice
+        default: "none"
+        options:
+          - "none"               # 不应用任何补丁
+          - "single"             # 单选内置补丁（下方选择）
+          - "custom-list"        # 手动输入多个内置补丁（逗号分隔）
+          - "custom-command"     # 自定义补丁命令（填写下方命令）
+
+      # 单个内置补丁（当 patch_method 为 single 时生效）
+      builtin_patch_single:
+        description: "📌 选择单个内置补丁"
+        required: false
+        type: choice
+        default: "rax3000m-mt76"
+        options:
+          - "rax3000m-mt76"    # RAX3000M - MT76驱动修复
+          - "ac42u-ath10k"     # AC42U - ATH10K固件更新
+          - "wndr3800-led"     # WNDR3800 - LED修复
+          - "usb-power-fix"    # 通用 - USB电源修复
+
+      # 多个内置补丁（当 patch_method 为 custom-list 时生效）
+      builtin_patch_list:
+        description: "📋 多个内置补丁（逗号分隔，可用补丁：rax3000m-mt76, ac42u-ath10k, wndr3800-led, usb-power-fix）"
+        required: false
+        type: string
+        default: ""
+
+      # 自定义补丁命令（当 patch_method 为 custom-command 时生效）
+      custom_patch_command:
+        description: "📝 自定义补丁命令（选择 custom-command 时填写，每行一条命令，支持#注释）"
+        required: false
+        type: string
+        default: ""
+
+      # 分隔线
+      sep4:
+        description: "──────────────────────────────"
+        required: false
+        type: string
+        default: ""
+
       # 手动输入框
       manual_device_name:
         description: "📝 设备名称（使用自定义）"
@@ -40,57 +121,36 @@ on:
         required: false
         type: string
         default: ""
-      
-      # 版本选择
-      version_selection:
-        description: "🔄 版本选择"
-        required: true
-        type: choice
-        default: "21.02"
-        options: ["23.05", "21.02"]
-      config_mode:
-        description: "⚙️ 配置模式选择"
-        required: true
-        type: choice
-        default: "normal"
-        options: ["base", "normal"]
-      extra_packages:
-        description: "额外安装插件 - 格式：用分号;分隔"
+
+      # 分隔线
+      sep5:
+        description: "──────────────────────────────"
         required: false
         type: string
         default: ""
-      
+
       # 自定义禁用插件
       forbidden_packages:
         description: "🚫 自定义禁用插件 - 格式：用空格分隔，默认禁用 vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
         required: false
         type: string
         default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
-      
-#【firmware-build.yml-00.01】
-      # 补丁选择
-      patch_selection:
-        description: "🔧 补丁选择"
-        required: true
-        type: choice
-        default: "auto"
-        options:
-          - "auto"             # 自动匹配设备对应的内置补丁
-          - "none"             # 不应用任何补丁
-          - "rax3000m-mt76"    # 内置：RAX3000M - MT76驱动修复
-          - "ac42u-ath10k"     # 内置：AC42U - ATH10K固件更新
-          - "wndr3800-led"     # 内置：WNDR3800 - LED修复
-          - "usb-power-fix"    # 内置：通用 - USB电源修复
-          - "custom"           # 自定义补丁（填写下方自定义命令）
-      
-      # 自定义补丁命令（选择 custom 时生效，支持多行命令）
-      custom_patch_command:
-        description: "📝 自定义补丁命令（选择custom时填写，每行一条命令，支持#注释）"
+
+      # 分隔线
+      sep6:
+        description: "──────────────────────────────"
         required: false
         type: string
         default: ""
-#【firmware-build.yml-00.01-end】
-      
+
+      # 额外安装插件
+      extra_packages:
+        description: "额外安装插件 - 格式：用分号;分隔"
+        required: false
+        type: string
+        default: ""
+
+      # 启用智能并行优化
       enable_parallel:
         description: "⚡ 启用智能并行优化"
         required: false
@@ -103,14 +163,15 @@ env:
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
   SOURCE_REPO: "${{ github.event.inputs.source_repo }}"
   FORBIDDEN_PACKAGES: "${{ github.event.inputs.forbidden_packages }}"
-#【firmware-build.yml-00.02】
-  PATCH_SELECTION: "${{ github.event.inputs.patch_selection }}"
-#【firmware-build.yml-00.02-end】
+  PATCH_METHOD: "${{ github.event.inputs.patch_method }}"
+  BUILTIN_PATCH_SINGLE: "${{ github.event.inputs.builtin_patch_single }}"
+  BUILTIN_PATCH_LIST: "${{ github.event.inputs.builtin_patch_list }}"
+  CUSTOM_PATCH_COMMAND: "${{ github.event.inputs.custom_patch_command }}"
+#【firmware-build.yml-00-end】
 
 jobs:
   build-firmware:
     runs-on: ubuntu-22.04
-#【firmware-build.yml-00-end】
 
     steps:
 #【firmware-build.yml-01】
@@ -152,7 +213,7 @@ jobs:
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
-          echo "  补丁选择: ${{ github.event.inputs.patch_selection }}"
+          echo "  补丁方式: ${{ github.event.inputs.patch_method }}"
 #【firmware-build.yml-01-end】
 
       #【firmware-build.yml-02】
@@ -326,13 +387,8 @@ jobs:
         run: |
           echo "=== 步骤8.5: 执行设备补丁 ==="
           
-          PATCH_SEL="${{ github.event.inputs.patch_selection }}"
-          echo "补丁选择: $PATCH_SEL"
-          
-          if [ "$PATCH_SEL" = "custom" ]; then
-            echo "📝 自定义补丁命令（多行格式）:"
-            echo "${{ github.event.inputs.custom_patch_command }}"
-          fi
+          PATCH_METHOD="${{ github.event.inputs.patch_method }}"
+          echo "补丁方式: $PATCH_METHOD"
           
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
@@ -346,27 +402,38 @@ jobs:
             SELECTED_BRANCH="${{ github.event.inputs.version_selection }}"
           fi
           
-          if [ "$PATCH_SEL" = "custom" ]; then
-            CUSTOM_CMD_FILE="/tmp/custom_patch_commands.sh"
-            printf '%s\n' "${{ github.event.inputs.custom_patch_command }}" > "$CUSTOM_CMD_FILE"
-            echo "✅ 自定义命令已保存到: $CUSTOM_CMD_FILE"
-            cat -n "$CUSTOM_CMD_FILE"
-            
-            ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-              execute_patches \
-              "custom" \
-              "$DEVICE" \
-              "$SOURCE_REPO_TYPE" \
-              "$SELECTED_BRANCH" \
-              "$CUSTOM_CMD_FILE"
-          else
-            ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-              execute_patches \
-              "$PATCH_SEL" \
-              "$DEVICE" \
-              "$SOURCE_REPO_TYPE" \
-              "$SELECTED_BRANCH"
-          fi
+          case "$PATCH_METHOD" in
+            "none")
+              PATCH_ARG="none"
+              EXTRA_ARG=""
+              ;;
+            "single")
+              PATCH_ARG="${{ github.event.inputs.builtin_patch_single }}"
+              EXTRA_ARG=""
+              ;;
+            "custom-list")
+              PATCH_ARG="custom-list"
+              EXTRA_ARG="${{ github.event.inputs.builtin_patch_list }}"
+              ;;
+            "custom-command")
+              CUSTOM_CMD_FILE="/tmp/custom_patch_commands.sh"
+              printf '%s\n' "${{ github.event.inputs.custom_patch_command }}" > "$CUSTOM_CMD_FILE"
+              PATCH_ARG="custom"
+              EXTRA_ARG="$CUSTOM_CMD_FILE"
+              ;;
+            *)
+              echo "❌ 未知补丁方式: $PATCH_METHOD"
+              exit 1
+              ;;
+          esac
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            execute_patches \
+            "$PATCH_ARG" \
+            "$DEVICE" \
+            "$SOURCE_REPO_TYPE" \
+            "$SELECTED_BRANCH" \
+            "$EXTRA_ARG"
 #【firmware-build.yml-08.5-end】
 
       #【firmware-build.yml-09】
@@ -531,7 +598,6 @@ jobs:
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step14_pre_build_space_check
           
-          # 额外严格空间检查（确保至少有10GB可用）
           AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
           AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
           if [ $AVAILABLE_GB -lt 10 ]; then
@@ -628,5 +694,3 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 #【firmware-build.yml-30-end】
-
-# 工作流文件结束
