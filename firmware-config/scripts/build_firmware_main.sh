@@ -1575,7 +1575,6 @@ EOF
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
-    # 修复：只有当 SUBTARGET 无效（不存在或等于目标名）时才尝试自动查找
     local subtarget_valid=0
     if [ -n "$actual_subtarget" ] && [ "$actual_subtarget" != "$TARGET" ]; then
         if [ -f "target/linux/$TARGET/$actual_subtarget/target.mk" ] || [ -d "target/linux/$TARGET/$actual_subtarget/base-files" ]; then
@@ -6765,7 +6764,165 @@ workflow_step26_check_artifacts() {
         echo "📁 固件文件列表:"
         echo "=========================================="
         
-        # ... [原有固件统计逻辑] ...
+        local sysupgrade_bin_count=0
+        local sysupgrade_itb_count=0
+        local initramfs_count=0
+        local factory_count=0
+        local preloader_count=0
+        local gpt_count=0
+        local fip_count=0
+        local other_count=0
+        
+        local all_files=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" -o -name "*.fip" \) 2>/dev/null | grep -v "sha256sums" | sort)
+        
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            
+            SIZE=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
+            FILE_NAME=$(basename "$file")
+            FILE_PATH=$(echo "$file" | sed 's|^bin/targets/||')
+            
+            if echo "$FILE_NAME" | grep -q "sysupgrade.bin"; then
+                echo "  ✅ $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🚀 刷机用（.bin 格式）"
+                sysupgrade_bin_count=$((sysupgrade_bin_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "sysupgrade.itb"; then
+                echo "  ✅ $FILE_NAME (FIT格式)"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🚀 刷机用（.itb 格式）"
+                sysupgrade_itb_count=$((sysupgrade_itb_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "factory"; then
+                echo "  🏭 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 📦 原厂刷机用"
+                factory_count=$((factory_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "initramfs"; then
+                echo "  🔷 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🆘 恢复用"
+                initramfs_count=$((initramfs_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "preloader"; then
+                echo "  ⚙️ $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🔧 预加载器"
+                preloader_count=$((preloader_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "gpt"; then
+                echo "  💽 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 📋 GPT分区表"
+                gpt_count=$((gpt_count + 1))
+                echo ""
+            elif echo "$FILE_NAME" | grep -q "bl31-uboot.fip" || echo "$FILE_NAME" | grep -q "uboot.fip"; then
+                echo "  🔌 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                echo "    用途: 🔌 BL31 + U-Boot 固件"
+                fip_count=$((fip_count + 1))
+                echo ""
+            else
+                echo "  📄 $FILE_NAME"
+                echo "    大小: $SIZE"
+                echo "    路径: $FILE_PATH"
+                other_count=$((other_count + 1))
+                echo ""
+            fi
+        done <<< "$all_files"
+        
+        echo "=========================================="
+        echo ""
+        echo "📊 固件统计:"
+        echo "----------------------------------------"
+        echo "  ✅ sysupgrade.bin: $sysupgrade_bin_count 个 - 🚀 **刷机用（.bin）**"
+        echo "  ✅ sysupgrade.itb: $sysupgrade_itb_count 个 - 🚀 **刷机用（.itb）**"
+        echo "  🏭 factory镜像: $factory_count 个 - 📦 **原厂刷机用**"
+        echo "  🔷 initramfs恢复: $initramfs_count 个 - 🆘 **恢复用**"
+        echo "  ⚙️ preloader: $preloader_count 个 - 🔧 **引导加载程序**"
+        echo "  💽 GPT分区表: $gpt_count 个 - 📋 **eMMC分区表**"
+        echo "  🔌 BL31/U-Boot: $fip_count 个 - 🔌 **引导固件**"
+        echo "  📦 其他文件: $other_count 个"
+        echo "----------------------------------------"
+        echo ""
+        
+        echo "🔍 ===== 固件大小验证（拒绝小于5MB的无效固件） ====="
+        echo ""
+        
+        local valid_sysupgrade=0
+        local valid_factory=0
+        local firmware_list=()
+        
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            if [[ "$file" == *"sysupgrade.bin" ]] || [[ "$file" == *"sysupgrade.itb" ]] || [[ "$file" == *"factory.img" ]] || [[ "$file" == *"factory.bin" ]]; then
+                local fname=$(basename "$file")
+                local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
+                local fsize_mb=$((fsize_bytes / 1024 / 1024))
+                local fsize_human=$(ls -lh "$file" | awk '{print $5}')
+                
+                local ftype=""
+                if [[ "$fname" == *"sysupgrade"* ]]; then
+                    ftype="sysupgrade"
+                elif [[ "$fname" == *"factory"* ]]; then
+                    ftype="factory"
+                fi
+                
+                firmware_list+=("$ftype:$fname:$fsize_mb:$fsize_human:$file")
+            fi
+        done <<< "$all_files"
+        
+        echo "📋 固件大小验证结果:"
+        echo "----------------------------------------"
+        
+        for firmware in "${firmware_list[@]}"; do
+            IFS=':' read -r ftype fname fsize_mb fsize_human file <<< "$firmware"
+            
+            if [ $fsize_mb -lt 5 ]; then
+                echo "  ❌ $fname"
+                echo "     大小: $fsize_human (${fsize_mb}MB) - 小于5MB，判定为无效固件！"
+                rm -f "$file"
+                echo "     已删除无效固件文件"
+                echo ""
+            else
+                if [ $fsize_mb -lt 10 ]; then
+                    echo "  ⚠️ $fname"
+                    echo "     大小: $fsize_human (${fsize_mb}MB) - 小于10MB，可能不完整"
+                else
+                    echo "  ✅ $fname"
+                    echo "     大小: $fsize_human (${fsize_mb}MB) - 通过验证"
+                fi
+                
+                if [ "$ftype" = "sysupgrade" ]; then
+                    valid_sysupgrade=$((valid_sysupgrade + 1))
+                elif [ "$ftype" = "factory" ]; then
+                    valid_factory=$((valid_factory + 1))
+                fi
+                echo ""
+            fi
+        done
+        
+        echo "----------------------------------------"
+        echo "📊 固件大小验证统计:"
+        echo "  有效 sysupgrade 固件: $valid_sysupgrade 个"
+        echo "  有效 factory 固件: $valid_factory 个"
+        echo ""
+        
+        if [ $valid_sysupgrade -eq 0 ] && [ $valid_factory -eq 0 ]; then
+            echo "❌❌❌ 错误：没有找到任何有效固件（大小≥5MB）❌❌❌"
+            exit 1
+        else
+            echo "✅ 构建产物检查通过，找到 $((valid_sysupgrade + valid_factory)) 个有效固件"
+        fi
         
         echo "✅ 步骤26 完成"
     else
