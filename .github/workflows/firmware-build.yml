@@ -326,18 +326,14 @@ jobs:
         run: |
           echo "=== 步骤8.5: 执行设备补丁 ==="
           
-          # 获取补丁类型
           PATCH_SEL="${{ github.event.inputs.patch_selection }}"
-          
           echo "补丁选择: $PATCH_SEL"
           
-          # 如果是自定义补丁，显示命令内容
           if [ "$PATCH_SEL" = "custom" ]; then
             echo "📝 自定义补丁命令（多行格式）:"
             echo "${{ github.event.inputs.custom_patch_command }}"
           fi
           
-          # 获取当前设备名和源码类型
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
             echo "当前设备: $DEVICE"
@@ -350,19 +346,12 @@ jobs:
             SELECTED_BRANCH="${{ github.event.inputs.version_selection }}"
           fi
           
-          # 传递补丁参数（自定义命令用文件传递避免特殊字符问题）
           if [ "$PATCH_SEL" = "custom" ]; then
-            # 将自定义命令保存到文件
             CUSTOM_CMD_FILE="/tmp/custom_patch_commands.sh"
-            
-            # 使用 printf 写入多行命令（保留换行和特殊字符）
             printf '%s\n' "${{ github.event.inputs.custom_patch_command }}" > "$CUSTOM_CMD_FILE"
-            
             echo "✅ 自定义命令已保存到: $CUSTOM_CMD_FILE"
-            echo "📋 命令内容:"
             cat -n "$CUSTOM_CMD_FILE"
             
-            # 执行补丁（传递文件路径）
             ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
               execute_patches \
               "custom" \
@@ -371,7 +360,6 @@ jobs:
               "$SELECTED_BRANCH" \
               "$CUSTOM_CMD_FILE"
           else
-            # 内置补丁直接传递名称
             ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
               execute_patches \
               "$PATCH_SEL" \
