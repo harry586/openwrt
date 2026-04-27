@@ -106,6 +106,18 @@ if [ -z "$CONFIG_ALREADY_LOADED" ]; then
 fi
 #【build_firmware_main.sh-00.5-end】
 
+#【build_firmware_main.sh-00.6】
+# 检查函数是否存在
+function_exists() {
+    local function_name="$1"
+    if [ -n "$(type -t "$function_name")" ] && [ "$(type -t "$function_name")" = "function" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+#【build_firmware_main.sh-00.6-end】
+
 #【build_firmware_main.sh-01】
 set -e
 
