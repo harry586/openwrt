@@ -331,12 +331,10 @@ jobs:
           
           echo "补丁选择: $PATCH_SEL"
           
-          # 如果是自定义补丁，获取自定义命令
+          # 如果是自定义补丁，显示命令内容
           if [ "$PATCH_SEL" = "custom" ]; then
             echo "📝 自定义补丁命令（多行格式）:"
-            cat << 'CUSTOM_EOF'
-${{ github.event.inputs.custom_patch_command }}
-CUSTOM_EOF
+            echo "${{ github.event.inputs.custom_patch_command }}"
           fi
           
           # 获取当前设备名和源码类型
@@ -357,10 +355,8 @@ CUSTOM_EOF
             # 将自定义命令保存到文件
             CUSTOM_CMD_FILE="/tmp/custom_patch_commands.sh"
             
-            # 使用 cat 写入多行命令（保留原始格式）
-            cat > "$CUSTOM_CMD_FILE" << 'CUSTOM_EOF'
-${{ github.event.inputs.custom_patch_command }}
-CUSTOM_EOF
+            # 使用 printf 写入多行命令（保留换行和特殊字符）
+            printf '%s\n' "${{ github.event.inputs.custom_patch_command }}" > "$CUSTOM_CMD_FILE"
             
             echo "✅ 自定义命令已保存到: $CUSTOM_CMD_FILE"
             echo "📋 命令内容:"
