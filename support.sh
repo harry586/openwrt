@@ -3,8 +3,8 @@
 #【support.sh-01】
 # support.sh - 设备支持管理脚本
 # 位置: 根目录 /support.sh
-# 版本: 3.0.5
-# 功能: 管理支持的设备列表、配置文件、工具链下载
+# 版本: 3.1.0
+# 功能: 管理支持的设备列表、配置文件、工具链下载、设备补丁
 # 特点: 无硬编码，通过调用现有脚本和配置文件实现
 #【support.sh-01-end】
 
@@ -243,13 +243,13 @@ validate_device() {
                         fi
                         
                         local input_len=${#lower_input}
-                        local device_len=${#lower_device}
+                        local device_len=${#lower_dev}
                         if [ $device_len -gt $input_len ]; then
                             weight=$((weight + 20))
                         fi
                         
                         local input_parts=($(echo "$lower_input" | tr '_-' ' '))
-                        local device_parts=($(echo "$lower_device" | tr '_-' ' '))
+                        local device_parts=($(echo "$lower_dev" | tr '_-' ' '))
                         local part_match=0
                         for ipart in "${input_parts[@]}"; do
                             for dpart in "${device_parts[@]}"; do
@@ -841,6 +841,52 @@ full_config_process() {
 }
 #【support.sh-20-end】
 
+#【support.sh-20.01】
+# 执行设备补丁
+execute_device_patches() {
+    local patch_selection="$1"
+    local device_name="$2"
+    local source_type="$3"
+    local branch="$4"
+    local custom_patch_command="$5"
+    
+    log "=== 执行设备补丁 ==="
+    log "补丁选择: $patch_selection"
+    log "设备: $device_name"
+    log "源码类型: $source_type"
+    log "分支: $branch"
+    
+    check_build_main_script
+    
+    "$BUILD_MAIN_SCRIPT" execute_patches "$patch_selection" "$device_name" "$source_type" "$branch" "$custom_patch_command"
+    
+    local exit_code=$?
+    
+    if [ $exit_code -eq 0 ]; then
+        success "设备补丁执行完成"
+        return 0
+    else
+        warn "设备补丁执行可能有问题，但继续执行"
+        return 0
+    fi
+}
+
+# 列出可用的内置补丁
+list_builtin_patches() {
+    local device_name="${1:-*}"
+    local source_type="${2:-*}"
+    local branch="${3:-*}"
+    
+    log "=== 可用内置补丁列表 ==="
+    
+    check_build_main_script
+    
+    "$BUILD_MAIN_SCRIPT" list_patches "$device_name" "$source_type" "$branch"
+    
+    success "补丁列表显示完成"
+}
+#【support.sh-20.01-end】
+
 #【support.sh-21】
 # 显示帮助信息
 show_help() {
@@ -874,6 +920,10 @@ show_help() {
     echo "                           保存源代码信息"
     echo "  pre-build-check           前置错误检查"
     echo "  apply-config             应用配置"
+    echo "  execute-patches <补丁选择> <设备名> <源码类型> <分支> [自定义命令]"
+    echo "                           执行设备补丁"
+    echo "  list-patches [设备名] [源码类型] [分支]"
+    echo "                           列出可用的内置补丁"
     echo ""
     echo "编译器搜索命令 (调用主脚本):"
     echo "  search-compiler [搜索根目录] [目标平台]"
@@ -892,12 +942,21 @@ show_help() {
     echo "  基础模式: firmware-config/config/base.config"
     echo "  设备配置: firmware-config/config/devices/[设备名].config"
     echo ""
+    echo "内置补丁列表:"
+    echo "  rax3000m-mt76: 修复RAX3000M设备MT798x无线驱动Message timeout问题"
+    echo "  ac42u-ath10k:  更新AC42U设备ATH10K无线固件"
+    echo "  wndr3800-led:  修复WNDR3800设备LED指示灯问题"
+    echo "  usb-power-fix: 通用USB电源管理修复"
+    echo ""
     echo "示例:"
     echo "  ./support.sh list-devices"
     echo "  ./support.sh validate-device ac42u"
     echo "  ./support.sh get-sdk-info ipq40xx generic 21.02"
     echo "  ./support.sh full-config ac42u normal /mnt/openwrt-build"
     echo "  ./support.sh initialize-compiler ac42u"
+    echo "  ./support.sh execute-patches auto ac42u immortalwrt openwrt-23.05"
+    echo "  ./support.sh execute-patches rax3000m-mt76 cmcc_rax3000m-nand immortalwrt openwrt-21.02"
+    echo "  ./support.sh list-patches cmcc_rax3000m immortalwrt"
     echo ""
 }
 #【support.sh-21-end】
@@ -1008,6 +1067,17 @@ main() {
         "apply-config")
             apply_config
             ;;
+#【support.sh-22.01】
+        "execute-patches")
+            if [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ]; then
+                error "使用方法: ./support.sh execute-patches <补丁选择> <设备名> <源码类型> <分支> [自定义命令]"
+            fi
+            execute_device_patches "$2" "$3" "$4" "$5" "$6"
+            ;;
+        "list-patches")
+            list_builtin_patches "$2" "$3" "$4"
+            ;;
+#【support.sh-22.01-end】
         "help"|"-h"|"--help"|"")
             show_help
             ;;
