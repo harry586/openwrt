@@ -18,7 +18,7 @@ on:
 
       # 分隔线
       sep1:
-        description: "──────────────────────────────"
+        description: "───────────────"
         required: false
         type: string
         default: ""
