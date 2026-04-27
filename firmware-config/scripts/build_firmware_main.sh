@@ -147,6 +147,7 @@ save_env() {
     echo "export CONFIG_MODE=\"${CONFIG_MODE}\"" >> $ENV_FILE
     echo "export REPO_ROOT=\"${REPO_ROOT}\"" >> $ENV_FILE
     echo "export COMPILER_DIR=\"${COMPILER_DIR}\"" >> $ENV_FILE
+    echo "export SOURCE_REPO_TYPE=\"${SOURCE_REPO_TYPE}\"" >> $ENV_FILE
     
     # 保存配置开关状态
     echo "export ENABLE_TURBOACC=\"${ENABLE_TURBOACC}\"" >> $ENV_FILE
