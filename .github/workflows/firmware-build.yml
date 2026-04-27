@@ -1,7 +1,7 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 3.5.0
-# 最后更新: 2026-04-25
+# 版本: 3.6.0
+# 最后更新: 2026-04-27
 
 name: OpenWrt 智能固件构建工作流
 
@@ -67,6 +67,30 @@ on:
         type: string
         default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
       
+#【firmware-build.yml-00.01】
+      # 补丁选择
+      patch_selection:
+        description: "🔧 补丁选择"
+        required: true
+        type: choice
+        default: "auto"
+        options:
+          - "auto"             # 自动匹配设备对应的内置补丁
+          - "none"             # 不应用任何补丁
+          - "rax3000m-mt76"    # 内置：RAX3000M - MT76驱动修复
+          - "ac42u-ath10k"     # 内置：AC42U - ATH10K固件更新
+          - "wndr3800-led"     # 内置：WNDR3800 - LED修复
+          - "usb-power-fix"    # 内置：通用 - USB电源修复
+          - "custom"           # 自定义补丁（填写下方自定义命令）
+      
+      # 自定义补丁命令（选择 custom 时生效，支持多行命令）
+      custom_patch_command:
+        description: "📝 自定义补丁命令（选择custom时填写，每行一条命令，支持#注释）"
+        required: false
+        type: string
+        default: ""
+#【firmware-build.yml-00.01-end】
+      
       enable_parallel:
         description: "⚡ 启用智能并行优化"
         required: false
@@ -79,6 +103,9 @@ env:
   ENABLE_PARALLEL: "${{ github.event.inputs.enable_parallel }}"
   SOURCE_REPO: "${{ github.event.inputs.source_repo }}"
   FORBIDDEN_PACKAGES: "${{ github.event.inputs.forbidden_packages }}"
+#【firmware-build.yml-00.02】
+  PATCH_SELECTION: "${{ github.event.inputs.patch_selection }}"
+#【firmware-build.yml-00.02-end】
 
 jobs:
   build-firmware:
@@ -125,6 +152,7 @@ jobs:
           echo "  版本: ${{ github.event.inputs.version_selection }}"
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
+          echo "  补丁选择: ${{ github.event.inputs.patch_selection }}"
 #【firmware-build.yml-01-end】
 
       #【firmware-build.yml-02】
@@ -292,6 +320,70 @@ jobs:
             "${{ github.event.inputs.manual_target }}" \
             "${{ github.event.inputs.manual_subtarget }}"
       #【firmware-build.yml-08-end】
+
+#【firmware-build.yml-08.5】
+      - name: "8.5. 执行设备补丁"
+        run: |
+          echo "=== 步骤8.5: 执行设备补丁 ==="
+          
+          # 获取补丁类型
+          PATCH_SEL="${{ github.event.inputs.patch_selection }}"
+          
+          echo "补丁选择: $PATCH_SEL"
+          
+          # 如果是自定义补丁，获取自定义命令
+          if [ "$PATCH_SEL" = "custom" ]; then
+            echo "📝 自定义补丁命令（多行格式）:"
+            cat << 'CUSTOM_EOF'
+${{ github.event.inputs.custom_patch_command }}
+CUSTOM_EOF
+          fi
+          
+          # 获取当前设备名和源码类型
+          if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
+            source /mnt/openwrt-build/build_env.sh
+            echo "当前设备: $DEVICE"
+            echo "源码类型: $SOURCE_REPO_TYPE"
+            echo "分支: $SELECTED_BRANCH"
+          else
+            echo "⚠️ 环境文件不存在，使用工作流参数"
+            DEVICE="$FINAL_DEVICE_NAME"
+            SOURCE_REPO_TYPE="${{ github.event.inputs.source_repo }}"
+            SELECTED_BRANCH="${{ github.event.inputs.version_selection }}"
+          fi
+          
+          # 传递补丁参数（自定义命令用文件传递避免特殊字符问题）
+          if [ "$PATCH_SEL" = "custom" ]; then
+            # 将自定义命令保存到文件
+            CUSTOM_CMD_FILE="/tmp/custom_patch_commands.sh"
+            
+            # 使用 cat 写入多行命令（保留原始格式）
+            cat > "$CUSTOM_CMD_FILE" << 'CUSTOM_EOF'
+${{ github.event.inputs.custom_patch_command }}
+CUSTOM_EOF
+            
+            echo "✅ 自定义命令已保存到: $CUSTOM_CMD_FILE"
+            echo "📋 命令内容:"
+            cat -n "$CUSTOM_CMD_FILE"
+            
+            # 执行补丁（传递文件路径）
+            ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+              execute_patches \
+              "custom" \
+              "$DEVICE" \
+              "$SOURCE_REPO_TYPE" \
+              "$SELECTED_BRANCH" \
+              "$CUSTOM_CMD_FILE"
+          else
+            # 内置补丁直接传递名称
+            ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+              execute_patches \
+              "$PATCH_SEL" \
+              "$DEVICE" \
+              "$SOURCE_REPO_TYPE" \
+              "$SELECTED_BRANCH"
+          fi
+#【firmware-build.yml-08.5-end】
 
       #【firmware-build.yml-09】
       - name: "09. 添加TurboACC支持"
