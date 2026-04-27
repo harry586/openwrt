@@ -827,191 +827,155 @@ execute_patches() {
     local source_type="$3"
     local branch="$4"
     local custom_patch_file="$5"
-    
+
+    # 强制重新加载补丁列表（避免数组丢失）
+    if [ -f "$REPO_ROOT/build-config.conf" ]; then
+        source "$REPO_ROOT/build-config.conf" 2>/dev/null || true
+    fi
+
+    # 调试：输出补丁列表数量，检查是否加载成功
+    log "补丁列表数量: ${#BUILTIN_PATCH_LIST[@]}"
+
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
-    
+
     log "=== 补丁管理系统 ==="
     log "选择补丁: $selected_patch"
     log "设备: $device_name"
     log "源码类型: $source_type"
     log "分支: $branch"
-    
-    # 情况1: 自定义补丁（支持多行命令文件）
+
+    # ---------- 内部辅助：从补丁列表中根据名称取出完整记录 ----------
+    __get_patch_by_name() {
+        local name="$1"
+        for line in "${BUILTIN_PATCH_LIST[@]}"; do
+            IFS='|' read -r dev_pat src_pat br_pat pn pd pf <<< "$line"
+            if [ "$pn" = "$name" ]; then
+                echo "$line"
+                return 0
+            fi
+        done
+        return 1
+    }
+
+    # ---------- 内部辅助：检查单条规则是否匹配当前设备/源码/分支 ----------
+    __match_rule() {
+        local line="$1" dev="$2" src="$3" br="$4"
+        IFS='|' read -r dev_pat src_pat br_pat _ _ _ <<< "$line"
+        local match=1
+        [ "$dev_pat" != "*" ] && [[ "$dev" != $dev_pat ]] && match=0
+        [ "$src_pat" != "*" ] && [ "$src" != "$src_pat" ] && match=0
+        [ "$br_pat" != "*" ] && [ "$br" != "$br_pat" ] && match=0
+        return $(( match == 1 ? 0 : 1 ))
+    }
+
+    # ---------- 情况1：自定义补丁 ----------
     if [ "$selected_patch" = "custom" ]; then
         log "🔧 ===== 执行自定义补丁 ====="
-        
         if [ -z "$custom_patch_file" ] || [ ! -f "$custom_patch_file" ]; then
             log "⚠️ 自定义补丁命令文件不存在或为空"
             return 0
         fi
-        
         log "📋 自定义补丁命令文件: $custom_patch_file"
         log "📄 命令内容:"
         log "----------------------------------------"
-        # 显示命令内容（跳过空行和注释行）
         grep -v '^[[:space:]]*#' "$custom_patch_file" 2>/dev/null | grep -v '^[[:space:]]*$' | while IFS= read -r line; do
             log "  $line"
         done
         log "----------------------------------------"
-        
-        # 创建可执行脚本
+
         local temp_script="/tmp/custom_patch_$$.sh"
         cat > "$temp_script" << 'SCRIPT_HEADER'
 #!/bin/bash
 set -e
-
-# 自定义补丁执行脚本
-# 生成时间: 
 SCRIPT_HEADER
         date '+%Y-%m-%d %H:%M:%S' >> "$temp_script"
         echo "" >> "$temp_script"
-        
-        # 设置构建目录环境
         cat >> "$temp_script" << SCRIPT_ENV
 BUILD_DIR="$BUILD_DIR"
 cd "\$BUILD_DIR" || { echo "❌ 无法进入构建目录: \$BUILD_DIR"; exit 1; }
-
 echo "🔧 开始执行自定义补丁..."
 echo "当前目录: \$(pwd)"
 echo ""
-
-# ============================================
-# 用户自定义命令开始
-# ============================================
 SCRIPT_ENV
-        
-        # 追加用户命令
         cat "$custom_patch_file" >> "$temp_script"
-        
-        # 追加脚本尾部
         cat >> "$temp_script" << 'SCRIPT_FOOTER'
-
-# ============================================
-# 用户自定义命令结束
-# ============================================
-
 echo ""
 echo "✅ 自定义补丁执行完成"
 SCRIPT_FOOTER
-        
         chmod +x "$temp_script"
-        
-        # 执行补丁
-        log "🚀 开始执行自定义补丁..."
-        log "日志文件: /tmp/build-logs/custom_patch.log"
-        
+        log "🚀 开始执行自定义补丁... 日志: /tmp/build-logs/custom_patch.log"
         bash "$temp_script" > /tmp/build-logs/custom_patch.log 2>&1
         local exit_code=$?
-        
         if [ $exit_code -eq 0 ]; then
             log "✅ 自定义补丁执行成功"
         else
             log "⚠️ 自定义补丁执行失败 (退出码: $exit_code)"
             log "最后30行日志:"
-            tail -30 /tmp/build-logs/custom_patch.log | while IFS= read -r line; do
-                log "  $line"
-            done
+            tail -30 /tmp/build-logs/custom_patch.log
         fi
-        
         rm -f "$temp_script"
-        
         log "✅ 自定义补丁处理完成"
         return 0
     fi
-    
-    # 情况2: "none" - 不执行任何补丁
+
+    # ---------- 情况2：none ----------
     if [ "$selected_patch" = "none" ]; then
         log "ℹ️ 未选择补丁，跳过"
         return 0
     fi
-    
-    # 情况3: "auto" - 自动匹配设备对应的内置补丁
+
+    # ---------- 情况3：auto ----------
     if [ "$selected_patch" = "auto" ]; then
         log "🤖 自动匹配设备对应的内置补丁..."
-        
-        local matched_patches=$(match_builtin_patches "$device_name" "$source_type" "$branch")
-        
-        if [ -z "$matched_patches" ]; then
+        local auto_applied=0
+        for line in "${BUILTIN_PATCH_LIST[@]}"; do
+            if __match_rule "$line" "$device_name" "$source_type" "$branch"; then
+                IFS='|' read -r _ _ _ pn pd pf <<< "$line"
+                log "  📌 匹配补丁: $pn - $pd"
+                if function_exists "$pf"; then
+                    "$pf" "$BUILD_DIR" "$device_name" || log "  ⚠️ $pn 执行出现错误"
+                else
+                    log "  ❌ 函数 $pf 不存在，跳过"
+                fi
+                auto_applied=1
+            fi
+        done
+        if [ $auto_applied -eq 0 ]; then
             log "ℹ️ 当前设备无匹配的内置补丁"
-            return 0
         fi
-        
-        log "📋 找到以下匹配的内置补丁:"
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            IFS=':' read -r pname pdesc pfunc <<< "$line"
-            log "  📌 $pname - $pdesc"
-        done <<< "$matched_patches"
-        
-        # 逐个执行匹配的补丁
-        local patch_count=0
-        local fail_count=0
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            IFS=':' read -r pname pdesc pfunc <<< "$line"
-            
-            log "🔧 执行补丁: $pname ($pdesc)"
-            
-            # 检查函数是否存在
-            if function_exists "$pfunc"; then
-                "$pfunc" "$BUILD_DIR" "$device_name"
-                if [ $? -eq 0 ]; then
-                    log "  ✅ 补丁 $pname 执行成功"
-                    patch_count=$((patch_count + 1))
-                else
-                    log "  ⚠️ 补丁 $pname 执行失败"
-                    fail_count=$((fail_count + 1))
-                fi
-            else
-                log "  ❌ 补丁函数 $pfunc 未定义，跳过"
-                fail_count=$((fail_count + 1))
-            fi
-        done <<< "$matched_patches"
-        
-        log "📊 自动补丁执行完成: 成功 $patch_count 个, 失败 $fail_count 个"
         return 0
     fi
-    
-    # 情况4: 指定的内置补丁名称
-    log "🔧 查找内置补丁: $selected_patch"
-    
-    # 验证补丁兼容性
-    local validation_result=$(validate_patch_selection "$selected_patch" "$device_name" "$source_type" "$branch")
-    
-    if echo "$validation_result" | grep -q "❌"; then
-        echo "$validation_result"
-        log "⚠️ 补丁验证失败，跳过"
+
+    # ---------- 情况4：指定的内置补丁 ----------
+    local patch_record=$(__get_patch_by_name "$selected_patch")
+    if [ -z "$patch_record" ]; then
+        log "❌ 错误: 未找到名为 '$selected_patch' 的内置补丁"
         return 0
     fi
-    
-    # 查找并执行补丁
-    for key in "${!BUILTIN_PATCH_MAP[@]}"; do
-        IFS='|' read -r device_pattern source_pattern branch_pattern <<< "$key"
-        IFS='|' read -r pname pdesc pfunc <<< "${BUILTIN_PATCH_MAP[$key]}"
-        
-        if [ "$pname" = "$selected_patch" ]; then
-            log "📋 找到内置补丁: $pname"
-            log "   描述: $pdesc"
-            log "   适用设备: $device_pattern"
-            log "   适用源码: $source_pattern"
-            
-            if function_exists "$pfunc"; then
-                log "🔧 执行补丁函数: $pfunc"
-                "$pfunc" "$BUILD_DIR" "$device_name"
-                if [ $? -eq 0 ]; then
-                    log "✅ 补丁 $pname 执行成功"
-                else
-                    log "⚠️ 补丁 $pname 执行失败，但继续"
-                fi
-            else
-                log "❌ 补丁函数 $pfunc 未定义"
-            fi
-            return 0
+
+    IFS='|' read -r dev_pat src_pat br_pat pn pd pf <<< "$patch_record"
+    log "📋 补丁信息: $pn - $pd"
+    log "   设备要求: $dev_pat"
+    log "   源码要求: $src_pat"
+    log "   分支要求: $br_pat"
+
+    if ! __match_rule "$patch_record" "$device_name" "$source_type" "$branch"; then
+        log "❌ 错误: 补丁 '$selected_patch' 不适用于当前设备/源码组合"
+        return 0
+    fi
+
+    if function_exists "$pf"; then
+        log "🔧 执行补丁函数: $pf"
+        "$pf" "$BUILD_DIR" "$device_name"
+        if [ $? -eq 0 ]; then
+            log "✅ 补丁 $pn 执行成功"
+        else
+            log "⚠️ 补丁 $pn 执行出现错误"
         fi
-    done
-    
-    log "⚠️ 未找到名为 '$selected_patch' 的内置补丁"
+    else
+        log "❌ 补丁函数 $pf 未定义"
+    fi
     return 0
 }
 #【build_firmware_main.sh-08.01.01-end】
