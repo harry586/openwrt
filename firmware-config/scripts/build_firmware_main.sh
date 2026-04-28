@@ -1141,16 +1141,35 @@ check_patch_status_ac42u_ath10k() {
 
 check_patch_status_wndr3800_led() {
     local dts=$(find "$BUILD_DIR/target/linux/ath79" -type f -name "*wndr3800*" 2>/dev/null | head -1)
-    if [ -n "$dts" ]; then
-        if grep -q "default-on\|default-on" "$dts" 2>/dev/null; then
-            echo "   ✅ 设备树中 LED 配置已修改"
-            echo "   💡 生效判断：刷机后设备指示灯正常亮起/闪烁"
+    if [ -z "$dts" ] || [ ! -f "$dts" ]; then
+        echo "   ⚠️ 设备树文件未找到，补丁可能未应用"
+        return 0
+    fi
+
+    # 检查备份文件是否存在（补丁执行时会生成 .bak 文件）
+    local dts_backup="${dts}.bak"
+    if [ -f "$dts_backup" ]; then
+        # 比较当前文件和备份文件的差异
+        if diff -q "$dts" "$dts_backup" >/dev/null 2>&1; then
+            echo "   ⚠️ 设备树文件未被修改，补丁未生效"
         else
-            echo "   ⚠️ 可能未成功修改，请检查 $dts 内容"
+            echo "   ✅ 设备树文件已被修改，补丁已应用"
+            echo "   📄 修改的文件: $dts"
+            echo "   💡 生效判断：刷机后检查 LED 指示灯状态"
+            # 显示 LED 相关的修改行
+            echo "   --- 当前 LED 配置片段 ---"
+            grep -A3 'label.*"power"\|label.*"wlan"\|label.*"led"' "$dts" 2>/dev/null | head -10 | sed 's/^/     /'
+            echo "   --------------------------"
         fi
     else
-        echo "   ⚠️ WNDR3800 设备树文件未找到，补丁可能未应用"
+        # 没有备份文件，尝试直接检查文件内容
+        if grep -q "default-on\|phy0radio" "$dts" 2>/dev/null; then
+            echo "   ✅ 设备树中包含目标 LED 配置，补丁可能已应用"
+        else
+            echo "   ⚠️ 未检测到预期 LED 修改，请手动检查: $dts"
+        fi
     fi
+    return 0
 }
 
 check_patch_status_usb_power_fix() {
