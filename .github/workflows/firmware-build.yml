@@ -21,7 +21,7 @@ on:
         description: "🔄 版本选择"
         required: true
         type: choice
-        default: "23.05"
+        default: "21.02"
         options: ["23.05", "21.02"]
       # 配置模式
       config_mode:
@@ -53,7 +53,7 @@ on:
 
       # 单个内置补丁（当选择“单选内置补丁”时生效）
       builtin_patch_single:
-        description: "📌 选择单个内置补丁"
+        description: "📌 选择单个内置补丁（适用源码：rax3000m-mt76[immortalwrt], ac42u-ath10k[immortalwrt], wndr3800-led[所有]"
         required: false
         type: choice
         default: "none"
@@ -65,7 +65,7 @@ on:
 
       # 多个内置补丁（当选择“手动输入多个内置补丁”时生效）
       builtin_patch_list:
-        description: "📋 多个内置补丁（逗号分隔，可用补丁：rax3000m-mt76, ac42u-ath10k, wndr3800-led）"
+        description: "📋 多个内置补丁（逗号分隔；适用源码同上）"
         required: false
         type: string
         default: ""
