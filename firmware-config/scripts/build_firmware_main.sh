@@ -842,6 +842,9 @@ execute_patches() {
     log "源码类型: $source_type"
     log "分支: $branch"
 
+    # 清空之前的补丁记录文件
+    > /tmp/applied_patches.list
+
     # ---------- 内部辅助：从补丁列表中根据名称取出完整记录 ----------
     __get_patch_by_name() {
         local name="$1"
@@ -866,7 +869,7 @@ execute_patches() {
         return $(( match == 1 ? 0 : 1 ))
     }
 
-    # ---------- 内部辅助：应用单个补丁 ----------
+    # ---------- 内部辅助：应用单个补丁，并记录到列表 ----------
     __apply_patch() {
         local pn="$1"
         local line=$(__get_patch_by_name "$pn")
@@ -883,7 +886,12 @@ execute_patches() {
         if function_exists "$func"; then
             log "🔧 执行补丁函数: $func"
             "$func" "$BUILD_DIR" "$device_name"
-            return $?
+            local rc=$?
+            if [ $rc -eq 0 ]; then
+                # 记录成功应用的补丁
+                echo "$pn" >> /tmp/applied_patches.list
+            fi
+            return $rc
         else
             log "❌ 补丁函数 $func 未定义"
             return 1
@@ -899,7 +907,13 @@ execute_patches() {
             if [ "$dev_pat" = "*" ] && [ "$src_pat" = "*" ] && [ "$br_pat" = "*" ]; then
                 log "  📌 发现通用补丁: $pn - $pd"
                 if function_exists "$pf"; then
-                    "$pf" "$BUILD_DIR" "$device_name" || log "  ⚠️ 通用补丁 $pn 执行出现错误"
+                    "$pf" "$BUILD_DIR" "$device_name"
+                    local rc=$?
+                    if [ $rc -eq 0 ]; then
+                        echo "$pn" >> /tmp/applied_patches.list
+                    else
+                        log "  ⚠️ 通用补丁 $pn 执行出现错误"
+                    fi
                 else
                     log "  ❌ 通用补丁函数 $pf 未定义"
                 fi
@@ -960,6 +974,7 @@ SCRIPT_FOOTER
             local exit_code=$?
             if [ $exit_code -eq 0 ]; then
                 log "✅ 自定义补丁执行成功"
+                echo "custom" >> /tmp/applied_patches.list
             else
                 log "⚠️ 自定义补丁执行失败 (退出码: $exit_code)"
                 log "最后30行日志:"
@@ -1039,6 +1054,115 @@ list_available_patches() {
     fi
 }
 #【build_firmware_main.sh-08.01.02-end】
+
+#【build_firmware_main.sh-08.01.03】
+# 显示补丁状态（供步骤12、步骤26调用）
+show_patch_status() {
+    local patch_list_file="/tmp/applied_patches.list"
+    if [ ! -f "$patch_list_file" ]; then
+        echo "ℹ️ 未找到补丁记录文件，无法显示补丁状态"
+        return 0
+    fi
+
+    local applied=()
+    while IFS= read -r pname; do
+        [ -n "$pname" ] && applied+=("$pname")
+    done < "$patch_list_file"
+
+    if [ ${#applied[@]} -eq 0 ]; then
+        echo "ℹ️ 未应用任何补丁"
+        return 0
+    fi
+
+    echo "🔍 已应用补丁状态汇总："
+    for pname in "${applied[@]}"; do
+        echo ""
+        echo "📌 补丁名称: $pname"
+        # 根据补丁名称调用对应的检查函数
+        case "$pname" in
+            "rax3000m-mt76")
+                check_patch_status_rax3000m_mt76
+                ;;
+            "ac42u-ath10k")
+                check_patch_status_ac42u_ath10k
+                ;;
+            "wndr3800-led")
+                check_patch_status_wndr3800_led
+                ;;
+            "usb-power-fix")
+                check_patch_status_usb_power_fix
+                ;;
+            "custom")
+                echo "   📝 自定义补丁，请手动验证效果"
+                ;;
+            *)
+                echo "   ℹ️ 无专用状态检查，补丁已尝试执行"
+                ;;
+        esac
+    done
+}
+
+# ===== 各补丁状态检查函数 =====
+
+check_patch_status_rax3000m_mt76() {
+    if [ -d "$BUILD_DIR/package/kernel/mt76" ]; then
+        cd "$BUILD_DIR/package/kernel/mt76" 2>/dev/null || return 0
+        local branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "未知")
+        local commit=$(git log -1 --format="%h %s" 2>/dev/null || echo "无信息")
+        local date=$(git log -1 --format="%ci" 2>/dev/null || echo "")
+        echo "   ✅ mt76 源码已更新"
+        echo "   分支   : $branch"
+        echo "   最新提交: $commit"
+        [ -n "$date" ] && echo "   提交时间: $date"
+        cd "$BUILD_DIR" 2>/dev/null || true
+        echo "   💡 生效判断：编译时若无线驱动加载成功且无 'Message timeout' 错误，则补丁生效"
+    else
+        echo "   ⚠️ mt76 源码目录不存在，补丁未应用"
+    fi
+}
+
+check_patch_status_ac42u_ath10k() {
+    local fw_dir="files/lib/firmware/ath10k/QCA9888/hw2.0"
+    if [ -f "$BUILD_DIR/$fw_dir/firmware-ct.bin" ]; then
+        local size=$(ls -lh "$BUILD_DIR/$fw_dir/firmware-ct.bin" | awk '{print $5}')
+        echo "   ✅ CT 固件已预置 ($size)"
+        echo "   💡 生效判断：刷机后无线网卡工作正常（WPA3 等）即为生效"
+    else
+        # 检查 Makefile 是否已修改源
+        local fw_pkg=$(find "$BUILD_DIR/package/firmware" -maxdepth 3 -type d -name "*ath10k*" 2>/dev/null | head -1)
+        if [ -n "$fw_pkg" ] && grep -q "greearb/ath10k-ct-firmware" "$fw_pkg/Makefile" 2>/dev/null; then
+            echo "   ✅ ath10k 固件源已切换至 CT 版本，将在编译时下载"
+            echo "   💡 生效判断：编译时无固件下载错误，刷机后无线正常"
+        else
+            echo "   ⚠️ 未检测到明显的 ath10k 修改，补丁可能未生效"
+        fi
+    fi
+}
+
+check_patch_status_wndr3800_led() {
+    local dts=$(find "$BUILD_DIR/target/linux/ath79" -type f -name "*wndr3800*" 2>/dev/null | head -1)
+    if [ -n "$dts" ]; then
+        if grep -q "default-on\|default-on" "$dts" 2>/dev/null; then
+            echo "   ✅ 设备树中 LED 配置已修改"
+            echo "   💡 生效判断：刷机后设备指示灯正常亮起/闪烁"
+        else
+            echo "   ⚠️ 可能未成功修改，请检查 $dts 内容"
+        fi
+    else
+        echo "   ⚠️ WNDR3800 设备树文件未找到，补丁可能未应用"
+    fi
+}
+
+check_patch_status_usb_power_fix() {
+    local script="files/etc/hotplug.d/usb/10-usb-power"
+    if [ -f "$BUILD_DIR/$script" ]; then
+        echo "   ✅ USB 电源管理修复脚本已生成"
+        echo "   💡 生效判断：刷机后插入 USB 存储设备长时间无自动断开"
+    else
+        echo "   ⚠️ USB 修复脚本未找到，补丁可能未生效"
+    fi
+}
+#【build_firmware_main.sh-08.01.03-end】
 
 #【build_firmware_main.sh-09】
 configure_feeds() {
@@ -1599,6 +1723,7 @@ EOF
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
+    # 修复：只有当 SUBTARGET 无效（不存在或等于目标名）时才尝试自动查找
     local subtarget_valid=0
     if [ -n "$actual_subtarget" ] && [ "$actual_subtarget" != "$TARGET" ]; then
         if [ -f "target/linux/$TARGET/$actual_subtarget/target.mk" ] || [ -d "target/linux/$TARGET/$actual_subtarget/base-files" ]; then
@@ -2568,21 +2693,10 @@ EOF
     log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
     
     # ============================================
-    # 显示 mt76 补丁状态（若已应用）
+    # 显示已应用补丁状态（动态）
     # ============================================
-    if [ -d "package/kernel/mt76" ]; then
-        log "🔍 已应用 mt76 驱动补丁，当前状态:"
-        cd package/kernel/mt76
-        local mt76_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "未知")
-        local mt76_commit=$(git log -1 --format="%h %s" 2>/dev/null || echo "无提交信息")
-        local mt76_date=$(git log -1 --format="%ci" 2>/dev/null || echo "")
-        echo "   分支   : $mt76_branch"
-        echo "   最新提交: $mt76_commit"
-        [ -n "$mt76_date" ] && echo "   提交时间: $mt76_date"
-        cd "$BUILD_DIR"
-    else
-        log "ℹ️ 未检测到 mt76 补丁目录"
-    fi
+    log "🔍 检查已应用补丁状态..."
+    show_patch_status
     
     log "✅ 配置生成完成"
 }
@@ -6947,31 +7061,20 @@ workflow_step26_check_artifacts() {
         else
             echo "✅ 构建产物检查通过，找到 $((valid_sysupgrade + valid_factory)) 个有效固件"
         fi
-        
-        echo "✅ 步骤26 完成"
     else
         echo "❌ 错误: 未找到固件目录"
         exit 1
     fi
 
     # ============================================
-    # 再次显示 mt76 补丁状态
+    # 再次显示已应用补丁最终状态
     # ============================================
     echo ""
-    echo "🔍 mt76 驱动补丁最终状态:"
-    if [ -d "$BUILD_DIR/package/kernel/mt76" ]; then
-        cd "$BUILD_DIR/package/kernel/mt76"
-        local mt76_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "未知")
-        local mt76_commit=$(git log -1 --format="%h %s" 2>/dev/null || echo "无提交信息")
-        local mt76_date=$(git log -1 --format="%ci" 2>/dev/null || echo "")
-        echo "   分支   : $mt76_branch"
-        echo "   最新提交: $mt76_commit"
-        [ -n "$mt76_date" ] && echo "   提交时间: $mt76_date"
-        cd "$BUILD_DIR"
-    else
-        echo "   ⚠️ 未找到 mt76 目录"
-    fi
+    echo "🔍 已应用补丁最终状态:"
+    show_patch_status
     echo ""
+    
+    echo "✅ 步骤26 完成"
 }
 #【build_firmware_main.sh-41-end】
 
