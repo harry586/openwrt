@@ -16,13 +16,6 @@ on:
         default: "immortalwrt"
         options: ["immortalwrt", "openwrt", "lede"]
 
-      # 分隔线
-      sep1:
-        description: "────────────────"
-        required: false
-        type: string
-        default: ""
-
       # 版本选择
       version_selection:
         description: "🔄 版本选择"
@@ -38,13 +31,6 @@ on:
         default: "normal"
         options: ["base", "normal"]
 
-      # 分隔线
-      sep2:
-        description: "──────────────────────────────"
-        required: false
-        type: string
-        default: ""
-
       # 预定义设备
       device_name:
         description: "📱 预定义设备（下拉选择）"
@@ -53,13 +39,6 @@ on:
         default: "ac42u"
         options: ["ac42u", "cmcc_rax3000m-nand", "netgear_wndr3800"]
 
-      # 分隔线
-      sep3:
-        description: "──────────────────────────────"
-        required: false
-        type: string
-        default: ""
-
       # 补丁选择方式
       patch_method:
         description: "🔧 补丁选择方式"
@@ -67,7 +46,7 @@ on:
         type: choice
         default: "none"
         options:
-          - "none"               # 不应用任何补丁
+          - "none"               # 不应用任何补丁（通用补丁也不会应用）
           - "single"             # 单选内置补丁（下方选择）
           - "custom-list"        # 手动输入多个内置补丁（逗号分隔）
           - "custom-command"     # 自定义补丁命令（填写下方命令）
@@ -77,16 +56,16 @@ on:
         description: "📌 选择单个内置补丁"
         required: false
         type: choice
-        default: "rax3000m-mt76"
+        default: "none"
         options:
-          - "rax3000m-mt76"    # RAX3000M - MT76驱动修复
-          - "ac42u-ath10k"     # AC42U - ATH10K固件更新
-          - "wndr3800-led"     # WNDR3800 - LED修复
-          - "usb-power-fix"    # 通用 - USB电源修复
+          - "none"              # 不选择补丁（通用补丁仍会自动应用）
+          - "rax3000m-mt76"     # RAX3000M - MT76驱动修复
+          - "ac42u-ath10k"      # AC42U - ATH10K固件更新
+          - "wndr3800-led"      # WNDR3800 - LED修复
 
       # 多个内置补丁（当 patch_method 为 custom-list 时生效）
       builtin_patch_list:
-        description: "📋 多个内置补丁（逗号分隔，可用补丁：rax3000m-mt76, ac42u-ath10k, wndr3800-led, usb-power-fix）"
+        description: "📋 多个内置补丁（逗号分隔，可用补丁：rax3000m-mt76, ac42u-ath10k, wndr3800-led）"
         required: false
         type: string
         default: ""
@@ -94,13 +73,6 @@ on:
       # 自定义补丁命令（当 patch_method 为 custom-command 时生效）
       custom_patch_command:
         description: "📝 自定义补丁命令（选择 custom-command 时填写，每行一条命令，支持#注释）"
-        required: false
-        type: string
-        default: ""
-
-      # 分隔线
-      sep4:
-        description: "──────────────────────────────"
         required: false
         type: string
         default: ""
@@ -122,26 +94,12 @@ on:
         type: string
         default: ""
 
-      # 分隔线
-      sep5:
-        description: "──────────────────────────────"
-        required: false
-        type: string
-        default: ""
-
       # 自定义禁用插件
       forbidden_packages:
         description: "🚫 自定义禁用插件 - 格式：用空格分隔，默认禁用 vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
         required: false
         type: string
         default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
-
-      # 分隔线
-      sep6:
-        description: "──────────────────────────────"
-        required: false
-        type: string
-        default: ""
 
       # 额外安装插件
       extra_packages:
