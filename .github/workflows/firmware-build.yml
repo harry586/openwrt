@@ -21,7 +21,7 @@ on:
         description: "🔄 版本选择"
         required: true
         type: choice
-        default: "23.05"
+        default: "21.02"
         options: ["23.05", "21.02"]
       # 配置模式
       config_mode:
@@ -39,40 +39,40 @@ on:
         default: "ac42u"
         options: ["ac42u", "cmcc_rax3000m-nand", "netgear_wndr3800"]
 
-      # 补丁选择方式
+      # 补丁选择方式（显示中文）
       patch_method:
         description: "🔧 补丁选择方式"
         required: true
         type: choice
-        default: "none"
+        default: "不应用补丁"
         options:
-          - "none"               # 不应用任何补丁（通用补丁也不会应用）
-          - "single"             # 单选内置补丁（下方选择）
-          - "custom-list"        # 手动输入多个内置补丁（逗号分隔）
-          - "custom-command"     # 自定义补丁命令（填写下方命令）
+          - "不应用补丁"                 # none
+          - "单选内置补丁"               # single
+          - "手动输入多个内置补丁"       # custom-list
+          - "自定义补丁命令"             # custom-command
 
-      # 单个内置补丁（当 patch_method 为 single 时生效）
+      # 单个内置补丁（当选择“单选内置补丁”时生效）
       builtin_patch_single:
         description: "📌 选择单个内置补丁"
         required: false
         type: choice
         default: "none"
         options:
-          - "none"              # 不选择补丁（通用补丁仍会自动应用）
+          - "none"              # 不选择
           - "rax3000m-mt76"     # RAX3000M - MT76驱动修复
           - "ac42u-ath10k"      # AC42U - ATH10K固件更新
           - "wndr3800-led"      # WNDR3800 - LED修复
 
-      # 多个内置补丁（当 patch_method 为 custom-list 时生效）
+      # 多个内置补丁（当选择“手动输入多个内置补丁”时生效）
       builtin_patch_list:
         description: "📋 多个内置补丁（逗号分隔，可用补丁：rax3000m-mt76, ac42u-ath10k, wndr3800-led）"
         required: false
         type: string
         default: ""
 
-      # 自定义补丁命令（当 patch_method 为 custom-command 时生效）
+      # 自定义补丁命令（当选择“自定义补丁命令”时生效）
       custom_patch_command:
-        description: "📝 自定义补丁命令（选择 custom-command 时填写，每行一条命令，支持#注释）"
+        description: "📝 自定义补丁命令（每行一条命令，支持#注释）"
         required: false
         type: string
         default: ""
@@ -360,20 +360,21 @@ jobs:
             SELECTED_BRANCH="${{ github.event.inputs.version_selection }}"
           fi
           
+          # 将中文选项映射为内部英文标识
           case "$PATCH_METHOD" in
-            "none")
+            "不应用补丁")
               PATCH_ARG="none"
               EXTRA_ARG=""
               ;;
-            "single")
+            "单选内置补丁")
               PATCH_ARG="${{ github.event.inputs.builtin_patch_single }}"
               EXTRA_ARG=""
               ;;
-            "custom-list")
+            "手动输入多个内置补丁")
               PATCH_ARG="custom-list"
               EXTRA_ARG="${{ github.event.inputs.builtin_patch_list }}"
               ;;
-            "custom-command")
+            "自定义补丁命令")
               CUSTOM_CMD_FILE="/tmp/custom_patch_commands.sh"
               printf '%s\n' "${{ github.event.inputs.custom_patch_command }}" > "$CUSTOM_CMD_FILE"
               PATCH_ARG="custom"
