@@ -21,7 +21,7 @@ on:
         description: "🔄 版本选择"
         required: true
         type: choice
-        default: "21.02"
+        default: "23.05"
         options: ["23.05", "21.02"]
       # 配置模式
       config_mode:
