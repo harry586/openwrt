@@ -7661,17 +7661,29 @@ workflow_step30_build_summary() {
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
 # 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
+# 增强：精确设备 + 通用基础包 + normal模式插件 + 额外包 + 禁用插件 + 自定义文件
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
     local extra_packages="$2"
+    local config_mode="$3"
     
     log "====================================================="
     log "🚀 启动 Hanwckf-mt798x 独立编译流程"
-    log "   设备: $device_name"
+    log "   输入设备: $device_name"
+    log "   配置模式: ${config_mode:-normal}"
     log "====================================================="
     
+    # 确保 REPO_ROOT 正确
+    REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+    export REPO_ROOT
+    
     cd "$BUILD_DIR" || exit 1
+    
+    # 映射设备名到 Hanwckf 仓库中实际名称（去掉 -nand/-emmc 后缀）
+    local hanwckf_device="$device_name"
+    hanwckf_device=$(echo "$hanwckf_device" | sed 's/-nand$//' | sed 's/-emmc$//')
+    log "   Hanwckf 内部设备名: $hanwckf_device"
     
     # ---------- 1. 清理并克隆 hanwckf 仓库 ----------
     log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
@@ -7681,8 +7693,8 @@ workflow_step_hanwckf_build() {
         exit 1
     }
     
-    # ---------- 2. 复制预置配置 ----------
-    log "⚙️ 应用 MT7981 AX3000 配置..."
+    # ---------- 2. 导入基础配置模板 ----------
+    log "⚙️ 导入 MT7981 AX3000 基础配置模板..."
     if [ -f "defconfig/mt7981-ax3000.config" ]; then
         cp "defconfig/mt7981-ax3000.config" ".config"
     else
@@ -7690,39 +7702,199 @@ workflow_step_hanwckf_build() {
         exit 1
     fi
     
-    # ---------- 3. 追加额外包 ----------
+    # ---------- 3. 裁剪配置：强制只编译目标设备 ----------
+    log "🎯 裁剪配置：仅保留设备 $hanwckf_device"
+    sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
+    sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config
+    sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
+    sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
+    echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
+    
+    make defconfig
+    
+    # ---------- 4. 应用通用基础包（USB/文件系统等，来自 build-config.conf） ----------
+    log "🔌 添加通用基础包 (USB/存储/文件系统)..."
+    # 加载统一配置，确保变量可用
+    if [ -f "$REPO_ROOT/build-config.conf" ]; then
+        source "$REPO_ROOT/build-config.conf"
+    fi
+    
+    # 收集所有需要启用的基础包
+    local all_base_packages=()
+    
+    # USB 基础驱动
+    if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
+        all_base_packages+=("${BASE_USB_PACKAGES[@]}")
+    else
+        all_base_packages+=("kmod-usb-core" "kmod-usb-common" "kmod-usb2" "kmod-usb3" "kmod-usb-storage" "kmod-scsi-core" "block-mount" "usbutils")
+    fi
+    
+    # 扩展 USB 驱动
+    if [ ${#EXTENDED_USB_PACKAGES[@]} -gt 0 ]; then
+        all_base_packages+=("${EXTENDED_USB_PACKAGES[@]}")
+    else
+        all_base_packages+=("kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-generic")
+    fi
+    
+    # 文件系统支持
+    if [ ${#FS_SUPPORT_PACKAGES[@]} -gt 0 ]; then
+        all_base_packages+=("${FS_SUPPORT_PACKAGES[@]}")
+    else
+        all_base_packages+=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3" "kmod-nls-utf8" "kmod-nls-cp936")
+    fi
+    
+    # 去重后写入 .config
+    local added_bases=0
+    for pkg in $(printf '%s\n' "${all_base_packages[@]}" | sort -u); do
+        if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config 2>/dev/null; then
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+            added_bases=$((added_bases + 1))
+        fi
+    done
+    log "✅ 已添加 $added_bases 个基础包"
+    
+    # 可选：TCP BBR
+    if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
+        grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config || echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+        log "✅ 已启用 TCP BBR"
+    fi
+    
+    # ---------- 5. 应用模式插件（normal/base） ----------
+    log "📌 应用模式插件: ${config_mode:-normal}"
+    local mode_config_file="$REPO_ROOT/firmware-config/config/${config_mode:-normal}.config"
+    if [ -f "$mode_config_file" ]; then
+        # 提取模式配置文件中的 CONFIG 行（排除注释和空行）
+        while IFS= read -r line; do
+            # 跳过空行和纯注释行
+            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+            # 只处理 CONFIG_ 开头的行，并确保格式正确
+            if [[ "$line" =~ ^[[:space:]]*CONFIG_ ]]; then
+                # 去除首尾空格
+                line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                # 提取配置名和值
+                local cfg_name=$(echo "$line" | cut -d'=' -f1)
+                local cfg_value=$(echo "$line" | cut -d'=' -f2-)
+                # 跳过已经被禁用列表明确禁用的包（禁用列表稍后处理，但此时先不处理，禁用列表会在后面覆盖）
+                # 直接追加，避免重复
+                if ! grep -q "^${cfg_name}=" .config 2>/dev/null && ! grep -q "^# ${cfg_name} is not set" .config 2>/dev/null; then
+                    echo "$line" >> .config
+                fi
+            fi
+        done < "$mode_config_file"
+        log "✅ 已应用模式配置: $(basename "$mode_config_file")"
+    else
+        log "⚠️ 未找到模式配置文件: $mode_config_file，跳过"
+    fi
+    
+    # ---------- 6. 添加额外用户包 ----------
     if [ -n "$extra_packages" ]; then
+        log "📦 添加额外软件包: $extra_packages"
         IFS=';' read -ra PKGS <<< "$extra_packages"
         for pkg in "${PKGS[@]}"; do
             pkg=$(echo "$pkg" | xargs)
             [ -z "$pkg" ] && continue
             echo "CONFIG_PACKAGE_${pkg}=y" >> .config
         done
-        log "📦 已追加额外包: $extra_packages"
     fi
     
-    # ---------- 4. 更新并安装 feeds ----------
+    # ---------- 7. 应用禁用插件列表（优先级最高） ----------
+    local forbidden_list="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
+    if [ -n "$forbidden_list" ]; then
+        log "🚫 应用禁用插件列表: $forbidden_list"
+        
+        generate_forbidden_packages_list() {
+            local base="$1"
+            local full=()
+            IFS=' ' read -ra BASE_PKGS <<< "$base"
+            for pkg in "${BASE_PKGS[@]}"; do
+                [ -z "$pkg" ] && continue
+                full+=("$pkg")
+                full+=("luci-app-${pkg}")
+                full+=("luci-i18n-${pkg}-zh-cn")
+                full+=("${pkg}-scripts")
+                case "$pkg" in
+                    "ssr-plus")
+                        full+=("shadowsocksr-libev" "shadowsocksr-libev-ssr-local" "shadowsocksr-libev-ssr-redir" "shadowsocksr-libev-ssr-tunnel")
+                        ;;
+                    "passwall")
+                        full+=("shadowsocks-libev-ss-local" "shadowsocks-libev-ss-redir" "shadowsocks-libev-ss-tunnel" "trojan" "trojan-plus" "xray-core" "v2ray-core" "v2ray-plugin" "simple-obfs")
+                        ;;
+                    "vssr")
+                        full+=("shadowsocksr-libev" "v2ray-core" "v2ray-plugin")
+                        ;;
+                    "ddns")
+                        full+=("ddns-scripts" "ddns-scripts_aliyun" "ddns-scripts_dnspod" "ddns-go")
+                        ;;
+                    "qbittorrent")
+                        full+=("qbittorrent-nox" "libtorrent-rasterbar")
+                        ;;
+                    "rclone")
+                        full+=("rclone-ng" "rclone-webui-react")
+                        ;;
+                    "filetransfer")
+                        full+=("vsftpd-alt")
+                        ;;
+                esac
+            done
+            printf '%s\n' "${full[@]}" | sort -u
+        }
+        
+        local full_forbidden=($(generate_forbidden_packages_list "$forbidden_list"))
+        
+        for plugin in "${full_forbidden[@]}"; do
+            [ -z "$plugin" ] && continue
+            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+        done
+        
+        if [ -d "package/feeds" ]; then
+            for plugin in "${full_forbidden[@]}"; do
+                find package/feeds -type d -name "*${plugin}*" -exec rm -rf {} \; 2>/dev/null || true
+            done
+        fi
+        log "✅ 已禁用 ${#full_forbidden[@]} 个相关插件包"
+    fi
+    
+    # ---------- 8. 集成自定义文件 ----------
+    log "📁 集成自定义文件（从 firmware-config/custom-files）..."
+    if [ -f "$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh" ]; then
+        source "$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
+        integrate_custom_files
+    else
+        log "⚠️ 找不到主构建脚本，跳过自定义文件集成"
+    fi
+    
+    # ---------- 9. 更新并安装 feeds ----------
     log "🔄 更新 feeds..."
     ./scripts/feeds update -a
     ./scripts/feeds install -a
     
-    # ---------- 5. 应用配置 ----------
-    log "🛠️ make defconfig..."
+    # ---------- 10. 最终配置确认 ----------
+    log "🛠️ 最终配置确认 (make defconfig)..."
     make defconfig
     
-    # ---------- 6. 编译固件 ----------
-    log "🏗️ 开始编译（使用多线程）..."
+    log "📋 当前选中的设备："
+    grep "CONFIG_TARGET_mediatek_filogic_DEVICE_" .config | grep "=y"
+    log "📦 额外启用包数量: $(grep -c "^CONFIG_PACKAGE_.*=y" .config)"
+    log "🚫 禁用包数量: $(grep -c "^# CONFIG_PACKAGE_.* is not set" .config)"
+    
+    # ---------- 11. 编译 ----------
+    log "🏗️ 开始编译..."
     make -j$(nproc) V=s || {
         log "❌ 编译失败"
         exit 1
     }
     
-    # ---------- 7. 检查产物 ----------
+    # ---------- 12. 检查产物 ----------
     log "🔍 检查构建产物..."
     local target_dir="bin/targets/mediatek/filogic"
     if [ -d "$target_dir" ]; then
         log "✅ 固件目录: $target_dir"
-        ls -lh "$target_dir"/*.bin 2>/dev/null || log "⚠️ 未找到 .bin 固件"
+        echo ""
+        echo "📦 生成的固件文件："
+        ls -lh "$target_dir"/*sysupgrade* 2>/dev/null || true
+        ls -lh "$target_dir"/*factory* 2>/dev/null || true
     else
         log "❌ 未找到目标目录 $target_dir"
     fi
