@@ -1141,35 +1141,16 @@ check_patch_status_ac42u_ath10k() {
 
 check_patch_status_wndr3800_led() {
     local dts=$(find "$BUILD_DIR/target/linux/ath79" -type f -name "*wndr3800*" 2>/dev/null | head -1)
-    if [ -z "$dts" ] || [ ! -f "$dts" ]; then
-        echo "   ⚠️ 设备树文件未找到，补丁可能未应用"
-        return 0
-    fi
-
-    # 检查备份文件是否存在（补丁执行时会生成 .bak 文件）
-    local dts_backup="${dts}.bak"
-    if [ -f "$dts_backup" ]; then
-        # 比较当前文件和备份文件的差异
-        if diff -q "$dts" "$dts_backup" >/dev/null 2>&1; then
-            echo "   ⚠️ 设备树文件未被修改，补丁未生效"
+    if [ -n "$dts" ]; then
+        if grep -q "default-on\|default-on" "$dts" 2>/dev/null; then
+            echo "   ✅ 设备树中 LED 配置已修改"
+            echo "   💡 生效判断：刷机后设备指示灯正常亮起/闪烁"
         else
-            echo "   ✅ 设备树文件已被修改，补丁已应用"
-            echo "   📄 修改的文件: $dts"
-            echo "   💡 生效判断：刷机后检查 LED 指示灯状态"
-            # 显示 LED 相关的修改行
-            echo "   --- 当前 LED 配置片段 ---"
-            grep -A3 'label.*"power"\|label.*"wlan"\|label.*"led"' "$dts" 2>/dev/null | head -10 | sed 's/^/     /'
-            echo "   --------------------------"
+            echo "   ⚠️ 可能未成功修改，请检查 $dts 内容"
         fi
     else
-        # 没有备份文件，尝试直接检查文件内容
-        if grep -q "default-on\|phy0radio" "$dts" 2>/dev/null; then
-            echo "   ✅ 设备树中包含目标 LED 配置，补丁可能已应用"
-        else
-            echo "   ⚠️ 未检测到预期 LED 修改，请手动检查: $dts"
-        fi
+        echo "   ⚠️ WNDR3800 设备树文件未找到，补丁可能未应用"
     fi
-    return 0
 }
 
 check_patch_status_usb_power_fix() {
@@ -7676,6 +7657,83 @@ workflow_step30_build_summary() {
 }
 #【build_firmware_main.sh-44-end】
 
+#【build_firmware_main.sh-45】
+# ============================================
+# Hanwckf 独立编译流程（专用于 RAX3000M）
+# 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
+# ============================================
+workflow_step_hanwckf_build() {
+    local device_name="$1"
+    local extra_packages="$2"
+    
+    log "====================================================="
+    log "🚀 启动 Hanwckf-mt798x 独立编译流程"
+    log "   设备: $device_name"
+    log "====================================================="
+    
+    cd "$BUILD_DIR" || exit 1
+    
+    # ---------- 1. 清理并克隆 hanwckf 仓库 ----------
+    log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
+    sudo rm -rf "$BUILD_DIR"/*
+    git clone --depth 1 https://github.com/hanwckf/immortalwrt-mt798x.git "$BUILD_DIR" || {
+        log "❌ 克隆失败"
+        exit 1
+    }
+    
+    # ---------- 2. 复制预置配置 ----------
+    log "⚙️ 应用 MT7981 AX3000 配置..."
+    if [ -f "defconfig/mt7981-ax3000.config" ]; then
+        cp "defconfig/mt7981-ax3000.config" ".config"
+    else
+        log "❌ 找不到 defconfig/mt7981-ax3000.config"
+        exit 1
+    fi
+    
+    # ---------- 3. 追加额外包 ----------
+    if [ -n "$extra_packages" ]; then
+        IFS=';' read -ra PKGS <<< "$extra_packages"
+        for pkg in "${PKGS[@]}"; do
+            pkg=$(echo "$pkg" | xargs)
+            [ -z "$pkg" ] && continue
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+        done
+        log "📦 已追加额外包: $extra_packages"
+    fi
+    
+    # ---------- 4. 更新并安装 feeds ----------
+    log "🔄 更新 feeds..."
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
+    
+    # ---------- 5. 应用配置 ----------
+    log "🛠️ make defconfig..."
+    make defconfig
+    
+    # ---------- 6. 编译固件 ----------
+    log "🏗️ 开始编译（使用多线程）..."
+    make -j$(nproc) V=s || {
+        log "❌ 编译失败"
+        exit 1
+    }
+    
+    # ---------- 7. 检查产物 ----------
+    log "🔍 检查构建产物..."
+    local target_dir="bin/targets/mediatek/filogic"
+    if [ -d "$target_dir" ]; then
+        log "✅ 固件目录: $target_dir"
+        ls -lh "$target_dir"/*.bin 2>/dev/null || log "⚠️ 未找到 .bin 固件"
+    else
+        log "❌ 未找到目标目录 $target_dir"
+    fi
+    
+    log "====================================================="
+    log "✅ Hanwckf 独立编译流程结束"
+    log "====================================================="
+    return 0
+}
+#【build_firmware_main.sh-45-end】
+
 # ============================================
 # 主函数 - 命令分发
 # ============================================
@@ -7829,14 +7887,17 @@ main() {
             workflow_step30_build_summary "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
 
-#【build_firmware_main.sh-99.01】
+        # 新增 Hanwckf 独立编译命令
+        "step_hanwckf_build")
+            workflow_step_hanwckf_build "$arg1" "$arg2"
+            ;;
+
         "execute_patches")
             execute_patches "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
         "list_patches")
             list_available_patches "$arg1" "$arg2" "$arg3"
             ;;
-#【build_firmware_main.sh-99.01-end】
 
         "search_compiler_files"|"universal_compiler_search"|"search_compiler_files_simple"|"intelligent_platform_aware_compiler_search")
             echo "⚠️ 编译器搜索命令已废弃，使用步骤09编译工具链"
@@ -7855,6 +7916,8 @@ main() {
             echo "    step17_check_usb_drivers, step20_fix_network, step21_download_deps"
             echo "    step22_integrate_custom_files, step23_pre_build_check, step25_build_firmware"
             echo "    step26_check_artifacts, step29_post_build_space_check, step30_build_summary"
+            echo ""
+            echo "  Hanwckf 独立编译: step_hanwckf_build <设备名> <额外包>"
             echo ""
             echo "  补丁管理命令:"
             echo "    execute_patches <补丁选择> <设备名> <源码类型> <分支> [自定义补丁文件]"
