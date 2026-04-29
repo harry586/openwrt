@@ -7710,40 +7710,35 @@ workflow_step_hanwckf_build() {
     sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
     echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
     
-    make defconfig
+    # 改用 olddefconfig 保留我们刚刚添加的设备配置
+    make olddefconfig
     
     # ---------- 4. 应用通用基础包（USB/文件系统等，来自 build-config.conf） ----------
     log "🔌 添加通用基础包 (USB/存储/文件系统)..."
-    # 加载统一配置，确保变量可用
     if [ -f "$REPO_ROOT/build-config.conf" ]; then
         source "$REPO_ROOT/build-config.conf"
     fi
     
-    # 收集所有需要启用的基础包
     local all_base_packages=()
     
-    # USB 基础驱动
     if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
         all_base_packages+=("${BASE_USB_PACKAGES[@]}")
     else
         all_base_packages+=("kmod-usb-core" "kmod-usb-common" "kmod-usb2" "kmod-usb3" "kmod-usb-storage" "kmod-scsi-core" "block-mount" "usbutils")
     fi
     
-    # 扩展 USB 驱动
     if [ ${#EXTENDED_USB_PACKAGES[@]} -gt 0 ]; then
         all_base_packages+=("${EXTENDED_USB_PACKAGES[@]}")
     else
         all_base_packages+=("kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-generic")
     fi
     
-    # 文件系统支持
     if [ ${#FS_SUPPORT_PACKAGES[@]} -gt 0 ]; then
         all_base_packages+=("${FS_SUPPORT_PACKAGES[@]}")
     else
         all_base_packages+=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3" "kmod-nls-utf8" "kmod-nls-cp936")
     fi
     
-    # 去重后写入 .config
     local added_bases=0
     for pkg in $(printf '%s\n' "${all_base_packages[@]}" | sort -u); do
         if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config 2>/dev/null; then
@@ -7753,7 +7748,6 @@ workflow_step_hanwckf_build() {
     done
     log "✅ 已添加 $added_bases 个基础包"
     
-    # 可选：TCP BBR
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
         grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config || echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         log "✅ 已启用 TCP BBR"
@@ -7763,18 +7757,11 @@ workflow_step_hanwckf_build() {
     log "📌 应用模式插件: ${config_mode:-normal}"
     local mode_config_file="$REPO_ROOT/firmware-config/config/${config_mode:-normal}.config"
     if [ -f "$mode_config_file" ]; then
-        # 提取模式配置文件中的 CONFIG 行（排除注释和空行）
         while IFS= read -r line; do
-            # 跳过空行和纯注释行
             [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-            # 只处理 CONFIG_ 开头的行，并确保格式正确
             if [[ "$line" =~ ^[[:space:]]*CONFIG_ ]]; then
-                # 去除首尾空格
                 line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                # 提取配置名和值
                 local cfg_name=$(echo "$line" | cut -d'=' -f1)
-                # 跳过已经被禁用列表明确禁用的包（禁用列表稍后处理，但此时先不处理，禁用列表会在后面覆盖）
-                # 直接追加，避免重复
                 if ! grep -q "^${cfg_name}=" .config 2>/dev/null && ! grep -q "^# ${cfg_name} is not set" .config 2>/dev/null; then
                     echo "$line" >> .config
                 fi
@@ -7859,7 +7846,6 @@ workflow_step_hanwckf_build() {
     log "📁 集成自定义文件（从 firmware-config/custom-files）..."
     local main_script="$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
     if [ -f "$main_script" ] && [ -x "$main_script" ]; then
-        # 用命令方式调用，不会影响当前 shell
         "$main_script" integrate_custom_files
     else
         log "⚠️ 找不到或无法执行主构建脚本，跳过自定义文件集成"
@@ -7871,11 +7857,11 @@ workflow_step_hanwckf_build() {
     ./scripts/feeds install -a
     
     # ---------- 10. 最终配置确认 ----------
-    log "🛠️ 最终配置确认 (make defconfig)..."
-    make defconfig
+    log "🛠️ 最终配置确认 (make olddefconfig)..."
+    make olddefconfig
     
     log "📋 当前选中的设备："
-    grep "CONFIG_TARGET_mediatek_filogic_DEVICE_" .config | grep "=y"
+    grep "CONFIG_TARGET_mediatek_filogic_DEVICE_" .config | grep "=y" || log "⚠️ 未找到目标设备配置，请检查设备名是否正确"
     log "📦 额外启用包数量: $(grep -c "^CONFIG_PACKAGE_.*=y" .config)"
     log "🚫 禁用包数量: $(grep -c "^# CONFIG_PACKAGE_.* is not set" .config)"
     
