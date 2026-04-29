@@ -7661,7 +7661,7 @@ workflow_step30_build_summary() {
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
 # 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
-# 彻底修复交互式配置卡死：用 yes "" 自动回答所有提示
+# 修复：动态解析目标平台与子目标，不再硬编码产物目录
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7684,7 +7684,7 @@ workflow_step_hanwckf_build() {
     export DEBIAN_FRONTEND=noninteractive
     export YESCONFIG=1
     
-    # 映射设备名
+    # 映射设备名到 Hanwckf 仓库中实际名称（去掉 -nand/-emmc 后缀）
     local hanwckf_device="$device_name"
     hanwckf_device=$(echo "$hanwckf_device" | sed 's/-nand$//' | sed 's/-emmc$//')
     log "   Hanwckf 内部设备名: $hanwckf_device"
@@ -7707,11 +7707,20 @@ workflow_step_hanwckf_build() {
     fi
     
     log "🎯 裁剪配置：仅保留设备 $hanwckf_device"
+    # 首先根据 defconfig 实际内容识别目标与子目标（动态方式）
+    local target=$(grep "^CONFIG_TARGET_[a-z0-9_]*=y" .config | grep -v "DEVICE\|MULTI\|BOARD" | head -1 | cut -d'=' -f1 | cut -d'_' -f2-)
+    local subtarget=$(grep "^CONFIG_TARGET_${target}_[a-z0-9_]*=y" .config | head -1 | cut -d'=' -f1 | cut -d'_' -f3-)
+    # 如果未能动态获取，则回退到已知的 mt7981
+    : ${subtarget:=mt7981}
+    
+    # 强制启用目标平台和子目标
+    sed -i "/^# CONFIG_TARGET_${target} is not set/c\CONFIG_TARGET_${target}=y" .config
+    sed -i "/^# CONFIG_TARGET_${target}_${subtarget} is not set/c\CONFIG_TARGET_${target}_${subtarget}=y" .config
+    
+    # 精简设备配置
     sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
-    sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config
-    sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
-    sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
-    echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
+    sed -i "/^CONFIG_TARGET_${target}_${subtarget}_DEVICE_/d" .config
+    echo "CONFIG_TARGET_${target}_${subtarget}_DEVICE_${hanwckf_device}=y" >> .config
     
     # ---------- 3. 添加通用基础包 ----------
     log "🔌 添加通用基础包 (USB/存储/文件系统)..."
@@ -7836,34 +7845,83 @@ workflow_step_hanwckf_build() {
     ./scripts/feeds install -a
     ./scripts/feeds install luci-base luci-lib-base luci-i18n-base-zh-cn 2>/dev/null || true
     
-    # ---------- 9. 最终配置确认（用 yes "" 自动回答所有提示） ----------
+    # ---------- 9. 最终配置确认 ----------
     log "🛠️ 最终配置确认 (自动回答所有提示)..."
     yes "" | TERM=dumb make olddefconfig 2>/dev/null || {
         log "⚠️ olddefconfig 失败，尝试 defconfig..."
         yes "" | TERM=dumb make defconfig 2>/dev/null || log "⚠️ defconfig 也有问题，但继续编译"
     }
     
+    # 二次动态提取实际的目标/子目标（olddefconfig 后已稳定）
+    target=$(grep "^CONFIG_TARGET_[a-z0-9_]*=y" .config | grep -v "DEVICE\|MULTI\|BOARD" | head -1 | cut -d'=' -f1 | cut -d'_' -f2-)
+    subtarget=$(grep "^CONFIG_TARGET_${target}_[a-z0-9_]*=y" .config | head -1 | cut -d'=' -f1 | cut -d'_' -f3-)
+    : ${subtarget:=generic}
+    log "📋 动态平台: $target/$subtarget"
+    
     log "📋 当前选中的设备："
-    grep "CONFIG_TARGET_mediatek_filogic_DEVICE_" .config | grep "=y" || log "⚠️ 未找到目标设备配置"
+    grep "CONFIG_TARGET_${target}_${subtarget}_DEVICE_" .config | grep "=y" || log "⚠️ 未找到目标设备配置"
     log "📦 启用包数量: $(grep -c "^CONFIG_PACKAGE_.*=y" .config)"
     log "🚫 禁用包数量: $(grep -c "^# CONFIG_PACKAGE_.* is not set" .config)"
     
-    # ---------- 10. 编译（单线程） ----------
+    # ---------- 10. 编译并保存日志 ----------
     log "🏗️ 开始编译（单线程模式）..."
-    yes "" | make -j1 V=s 2>&1 || {
-        log "❌ 编译失败"
-        exit 1
-    }
+    local build_log="$BUILD_DIR/build.log"
+    yes "" | make -j1 V=s 2>&1 | tee "$build_log"
+    local exit_code=${PIPESTATUS[0]}
+    if [ $exit_code -ne 0 ]; then
+        log "❌ 编译失败 (退出码: $exit_code)"
+    else
+        log "✅ 编译完成"
+    fi
     
-    # ---------- 11. 产物检查 ----------
-    log "🔍 检查构建产物..."
-    local target_dir="bin/targets/mediatek/filogic"
+    # ---------- 11. 产物检查（动态路径） ----------
+    local target_dir="bin/targets/${target}/${subtarget}"
+    log "🔍 检查构建产物: $target_dir"
     if [ -d "$target_dir" ]; then
         log "✅ 固件目录: $target_dir"
         ls -lh "$target_dir"/*sysupgrade* 2>/dev/null || true
         ls -lh "$target_dir"/*factory* 2>/dev/null || true
     else
-        log "❌ 未找到目标目录"
+        log "❌ 未找到目标目录 $target_dir"
+        # 尝试自动发现实际产物的位置
+        log "📁 搜索所有可能的固件文件..."
+        find bin/targets -name "*.bin" -o -name "*.img" 2>/dev/null | head -20 || true
+    fi
+    
+    # ---------- 12. 强制错误分析（无论成功失败） ----------
+    log "🔍 运行编译后错误分析..."
+    local report_dir="$REPO_ROOT/error-reports"
+    mkdir -p "$report_dir"
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local report_file="$report_dir/hanwckf-error-${timestamp}.txt"
+    
+    {
+        echo "================================================================="
+        echo "🔍 Hanwckf 编译错误分析报告"
+        echo "时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "平台: $target/$subtarget"
+        echo "================================================================="
+        if [ -f "$build_log" ]; then
+            echo "📄 编译日志: $build_log（大小: $(ls -lh "$build_log" | awk '{print $5}'))"
+            echo "================================================================="
+            echo "❌ 错误/警告摘要:"
+            grep -E "make.*Error|failed|FAILED|Patch failed|Hunk FAILED|Broken pipe|No space left" "$build_log" | tail -30
+            echo ""
+            echo "⚠️ 警告计数:"
+            grep -c "warning:" "$build_log" 2>/dev/null || echo 0
+        else
+            echo "❌ 编译日志文件不存在"
+        fi
+        echo "================================================================="
+    } | tee "$report_file"
+    
+    log "📄 错误分析报告已保存至: $report_file"
+    
+    if [ $exit_code -ne 0 ]; then
+        log "====================================================="
+        log "❌ Hanwckf 编译流程失败，错误详情请查看: $build_log"
+        log "====================================================="
+        return 1
     fi
     
     log "====================================================="
