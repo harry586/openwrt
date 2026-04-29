@@ -7661,7 +7661,7 @@ workflow_step30_build_summary() {
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
 # 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
-# 修复编译卡死：先写配置，最后只运行一次 make defconfig
+# 彻底修复交互式配置卡死：用 yes "" 自动回答所有提示
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7679,8 +7679,10 @@ workflow_step_hanwckf_build() {
     
     cd "$BUILD_DIR" || exit 1
     
-    # 哑终端，避免交互
+    # 禁用一切交互
     export TERM=dumb
+    export DEBIAN_FRONTEND=noninteractive
+    export YESCONFIG=1
     
     # 映射设备名
     local hanwckf_device="$device_name"
@@ -7695,7 +7697,7 @@ workflow_step_hanwckf_build() {
         exit 1
     }
     
-    # ---------- 2. 导入模板并裁剪（不运行 make） ----------
+    # ---------- 2. 导入模板并裁剪 ----------
     log "⚙️ 导入基础配置模板..."
     if [ -f "defconfig/mt7981-ax3000.config" ]; then
         cp "defconfig/mt7981-ax3000.config" ".config"
@@ -7828,16 +7830,18 @@ workflow_step_hanwckf_build() {
         log "⚠️ 找不到主构建脚本，跳过自定义文件集成"
     fi
     
-    # ---------- 8. 更新并安装 Feeds（所有配置写完后一次性安装） ----------
+    # ---------- 8. 更新并安装 Feeds ----------
     log "🔄 更新 feeds..."
     ./scripts/feeds update -a
     ./scripts/feeds install -a
-    # 强制安装基础 LuCI，消除后续依赖警告
     ./scripts/feeds install luci-base luci-lib-base luci-i18n-base-zh-cn 2>/dev/null || true
     
-    # ---------- 9. 最终一次性配置确认 ----------
-    log "🛠️ 最终配置确认 (make defconfig)..."
-    TERM=dumb make defconfig
+    # ---------- 9. 最终配置确认（用 yes "" 自动回答所有提示） ----------
+    log "🛠️ 最终配置确认 (自动回答所有提示)..."
+    yes "" | TERM=dumb make olddefconfig 2>/dev/null || {
+        log "⚠️ olddefconfig 失败，尝试 defconfig..."
+        yes "" | TERM=dumb make defconfig 2>/dev/null || log "⚠️ defconfig 也有问题，但继续编译"
+    }
     
     log "📋 当前选中的设备："
     grep "CONFIG_TARGET_mediatek_filogic_DEVICE_" .config | grep "=y" || log "⚠️ 未找到目标设备配置"
@@ -7846,7 +7850,7 @@ workflow_step_hanwckf_build() {
     
     # ---------- 10. 编译（单线程） ----------
     log "🏗️ 开始编译（单线程模式）..."
-    make -j1 V=s || {
+    yes "" | make -j1 V=s 2>&1 || {
         log "❌ 编译失败"
         exit 1
     }
