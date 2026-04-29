@@ -7773,7 +7773,6 @@ workflow_step_hanwckf_build() {
                 line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
                 # 提取配置名和值
                 local cfg_name=$(echo "$line" | cut -d'=' -f1)
-                local cfg_value=$(echo "$line" | cut -d'=' -f2-)
                 # 跳过已经被禁用列表明确禁用的包（禁用列表稍后处理，但此时先不处理，禁用列表会在后面覆盖）
                 # 直接追加，避免重复
                 if ! grep -q "^${cfg_name}=" .config 2>/dev/null && ! grep -q "^# ${cfg_name} is not set" .config 2>/dev/null; then
@@ -7856,13 +7855,14 @@ workflow_step_hanwckf_build() {
         log "✅ 已禁用 ${#full_forbidden[@]} 个相关插件包"
     fi
     
-    # ---------- 8. 集成自定义文件 ----------
+    # ---------- 8. 集成自定义文件（通过命令调用，避免 source 递归） ----------
     log "📁 集成自定义文件（从 firmware-config/custom-files）..."
-    if [ -f "$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh" ]; then
-        source "$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
-        integrate_custom_files
+    local main_script="$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
+    if [ -f "$main_script" ] && [ -x "$main_script" ]; then
+        # 用命令方式调用，不会影响当前 shell
+        "$main_script" integrate_custom_files
     else
-        log "⚠️ 找不到主构建脚本，跳过自定义文件集成"
+        log "⚠️ 找不到或无法执行主构建脚本，跳过自定义文件集成"
     fi
     
     # ---------- 9. 更新并安装 feeds ----------
@@ -8090,6 +8090,8 @@ main() {
             echo "    step26_check_artifacts, step29_post_build_space_check, step30_build_summary"
             echo ""
             echo "  Hanwckf 独立编译: step_hanwckf_build <设备名> <额外包>"
+            echo ""
+            echo "  单独函数: integrate_custom_files"
             echo ""
             echo "  补丁管理命令:"
             echo "    execute_patches <补丁选择> <设备名> <源码类型> <分支> [自定义补丁文件]"
