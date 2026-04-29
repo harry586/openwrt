@@ -1,7 +1,8 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 3.6.0
-# 最后更新: 2026-04-28
+# 版本: 3.7.0
+# 最后更新: 2026-04-29
+# 新增：RAX3000M 自动走 Hanwckf 独立编译流程
 
 name: OpenWrt 智能固件构建工作流
 
@@ -53,13 +54,12 @@ on:
 
       # 单个内置补丁（当选择“单选内置补丁”时生效）
       builtin_patch_single:
-        description: "📌 选择单个内置补丁（适用源码：rax3000m-mt76[immortalwrt], ac42u-ath10k[immortalwrt], wndr3800-led[所有]"
+        description: "📌 选择单个内置补丁（ac42u-ath10k, wndr3800-led）"
         required: false
         type: choice
         default: "none"
         options:
           - "none"              # 不选择
-          - "rax3000m-mt76"     # RAX3000M - MT76驱动修复
           - "ac42u-ath10k"      # AC42U - ATH10K固件更新
           - "wndr3800-led"      # WNDR3800 - LED修复
 
@@ -125,6 +125,7 @@ env:
   BUILTIN_PATCH_SINGLE: "${{ github.event.inputs.builtin_patch_single }}"
   BUILTIN_PATCH_LIST: "${{ github.event.inputs.builtin_patch_list }}"
   CUSTOM_PATCH_COMMAND: "${{ github.event.inputs.custom_patch_command }}"
+  IS_HANWCKF: "false"  # 默认不是，后续步骤会动态设置
 #【firmware-build.yml-00-end】
 
 jobs:
@@ -172,6 +173,15 @@ jobs:
           echo "  模式: ${{ github.event.inputs.config_mode }}"
           echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
           echo "  补丁方式: ${{ github.event.inputs.patch_method }}"
+
+          # 判断是否为 RAX3000M 设备
+          if echo "$FINAL_DEVICE_NAME" | grep -qi "rax3000m"; then
+            echo "IS_HANWCKF=true" >> $GITHUB_ENV
+            echo "✅ 检测到 RAX3000M 设备，将使用 Hanwckf 独立编译流程"
+          else
+            echo "IS_HANWCKF=false" >> $GITHUB_ENV
+            echo "ℹ️ 非 RAX3000M 设备，使用标准编译流程"
+          fi
 #【firmware-build.yml-01-end】
 
       #【firmware-build.yml-02】
@@ -326,8 +336,21 @@ jobs:
             step07_create_build_dir
       #【firmware-build.yml-07-end】
 
+      #【firmware-build.yml-08-hanwckf】
+      - name: "Hanwckf 独立编译（仅 RAX3000M）"
+        if: env.IS_HANWCKF == 'true'
+        run: |
+          echo "=== 🚀 Hanwckf 独立编译流程 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step_hanwckf_build \
+            "$FINAL_DEVICE_NAME" \
+            "${{ github.event.inputs.extra_packages }}"
+      #【firmware-build.yml-08-hanwckf-end】
+
       #【firmware-build.yml-08】
       - name: "08. 初始化构建环境（混合模式：优先使用手动输入）"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤08: 初始化构建环境（混合模式） ==="
           
@@ -342,6 +365,7 @@ jobs:
 
 #【firmware-build.yml-08.5】
       - name: "8.5. 执行设备补丁"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤8.5: 执行设备补丁 ==="
           
@@ -397,6 +421,7 @@ jobs:
 
       #【firmware-build.yml-09】
       - name: "09. 添加TurboACC支持"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤09: 添加TurboACC支持 ==="
           
@@ -406,6 +431,7 @@ jobs:
 
       #【firmware-build.yml-10】
       - name: "10. 配置Feeds"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤10: 配置Feeds ==="
           
@@ -415,7 +441,7 @@ jobs:
 
       #【firmware-build.yml-11】
       - name: "11. 安装TurboACC包"
-        if: github.event.inputs.config_mode == 'normal'
+        if: env.IS_HANWCKF != 'true' && github.event.inputs.config_mode == 'normal'
         run: |
           echo "=== 步骤11: 安装TurboACC包 ==="
           
@@ -425,6 +451,7 @@ jobs:
 
       #【firmware-build.yml-12】
       - name: "12. 智能配置生成【修复版】"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤12: 智能配置生成【修复版】 ==="
           
@@ -435,6 +462,7 @@ jobs:
 
       #【firmware-build.yml-13】
       - name: "13. 验证USB配置"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤13: 验证USB配置 ==="
           
@@ -444,6 +472,7 @@ jobs:
 
       #【firmware-build.yml-14】
       - name: "14. USB驱动完整性检查"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤14: USB驱动完整性检查 ==="
           
@@ -453,6 +482,7 @@ jobs:
 
       #【firmware-build.yml-15】
       - name: "15. 应用配置并显示详细信息"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤15: 应用配置并显示详细信息 ==="
           
@@ -470,6 +500,7 @@ jobs:
 
       #【firmware-build.yml-16】
       - name: "16. 备份配置文件"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤16: 备份配置文件 ==="
           
@@ -496,6 +527,7 @@ jobs:
 
       #【firmware-build.yml-17】
       - name: "17. 修复网络环境"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤17: 修复网络环境 ==="
           
@@ -505,6 +537,7 @@ jobs:
 
       #【firmware-build.yml-18】
       - name: "18. 下载依赖包"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤18: 下载依赖包 ==="
           
@@ -514,6 +547,7 @@ jobs:
 
       #【firmware-build.yml-19】
       - name: "19. 集成自定义文件"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤19: 集成自定义文件 ==="
           
@@ -523,6 +557,7 @@ jobs:
 
       #【firmware-build.yml-20】
       - name: "20. 前置错误检查"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤20: 前置错误检查 ==="
           
@@ -532,6 +567,7 @@ jobs:
 
       #【firmware-build.yml-21】
       - name: "21. 编译源码自带工具链"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤21: 编译源码自带工具链 ==="
           
@@ -542,6 +578,7 @@ jobs:
 
       #【firmware-build.yml-22】
       - name: "22. 验证工具链编译结果"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤22: 验证工具链编译结果 ==="
           
@@ -551,6 +588,7 @@ jobs:
 
       #【firmware-build.yml-23】
       - name: "23. 编译前空间检查"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤23: 编译前空间检查 ==="
           
@@ -567,6 +605,7 @@ jobs:
 
       #【firmware-build.yml-24】
       - name: "24. 编译固件"
+        if: env.IS_HANWCKF != 'true'
         run: |
           echo "=== 步骤24: 编译固件 ==="
           
@@ -576,7 +615,7 @@ jobs:
       #【firmware-build.yml-24-end】
 
       #【firmware-build.yml-25】
-      - name: "25. 检查构建产物"
+      - name: "25. 检查构建产物（Hanwckf 或标准流程均执行）"
         if: success()
         run: |
           echo "=== 步骤25: 检查构建产物 ==="
