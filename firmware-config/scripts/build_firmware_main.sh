@@ -7662,6 +7662,7 @@ workflow_step30_build_summary() {
 # Hanwckf 独立编译流程（专用于 RAX3000M）
 # 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
 # 增强：精确设备 + 通用基础包 + normal模式插件 + 额外包 + 禁用插件 + 自定义文件
+# 修复编译卡死：先安装feeds再调配置，使用单线程编译
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7680,7 +7681,7 @@ workflow_step_hanwckf_build() {
     
     cd "$BUILD_DIR" || exit 1
     
-    # 修复 olddefconfig 在无终端环境下的错误 (Error opening terminal)
+    # 修复无终端环境下的 olddefconfig 错误
     export TERM=dumb
     
     # 映射设备名到 Hanwckf 仓库中实际名称（去掉 -nand/-emmc 后缀）
@@ -7696,7 +7697,16 @@ workflow_step_hanwckf_build() {
         exit 1
     }
     
-    # ---------- 2. 导入基础配置模板 ----------
+    # ---------- 2. 更新并安装全部 Feeds（必须最先执行，确保所有依赖包索引就绪） ----------
+    log "🔄 更新 feeds..."
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
+    
+    # 确保基础 LuCI 包存在，避免后续依赖缺失
+    log "🔧 强制安装基础 LuCI 组件..."
+    ./scripts/feeds install luci-base luci-lib-base luci-i18n-base-zh-cn 2>/dev/null || true
+    
+    # ---------- 3. 导入基础配置模板并裁剪设备 ----------
     log "⚙️ 导入 MT7981 AX3000 基础配置模板..."
     if [ -f "defconfig/mt7981-ax3000.config" ]; then
         cp "defconfig/mt7981-ax3000.config" ".config"
@@ -7705,7 +7715,6 @@ workflow_step_hanwckf_build() {
         exit 1
     fi
     
-    # ---------- 3. 裁剪配置：强制只编译目标设备 ----------
     log "🎯 裁剪配置：仅保留设备 $hanwckf_device"
     sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
     sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config
@@ -7713,10 +7722,9 @@ workflow_step_hanwckf_build() {
     sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
     echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
     
-    # 使用 TERM=dumb 绕过终端问题
     TERM=dumb make olddefconfig
     
-    # ---------- 4. 应用通用基础包（USB/文件系统等，来自 build-config.conf） ----------
+    # ---------- 4. 添加通用基础包（USB/文件系统等） ----------
     log "🔌 添加通用基础包 (USB/存储/文件系统)..."
     if [ -f "$REPO_ROOT/build-config.conf" ]; then
         source "$REPO_ROOT/build-config.conf"
@@ -7854,12 +7862,7 @@ workflow_step_hanwckf_build() {
         log "⚠️ 找不到或无法执行主构建脚本，跳过自定义文件集成"
     fi
     
-    # ---------- 9. 更新并安装 feeds ----------
-    log "🔄 更新 feeds..."
-    ./scripts/feeds update -a
-    ./scripts/feeds install -a
-    
-    # ---------- 10. 最终配置确认 ----------
+    # ---------- 9. 最终配置确认 ----------
     log "🛠️ 最终配置确认 (make olddefconfig)..."
     TERM=dumb make olddefconfig
     
@@ -7868,14 +7871,14 @@ workflow_step_hanwckf_build() {
     log "📦 额外启用包数量: $(grep -c "^CONFIG_PACKAGE_.*=y" .config)"
     log "🚫 禁用包数量: $(grep -c "^# CONFIG_PACKAGE_.* is not set" .config)"
     
-    # ---------- 11. 编译 ----------
-    log "🏗️ 开始编译..."
-    make -j$(nproc) V=s || {
+    # ---------- 10. 编译（单线程避免 CI 环境下并发卡死） ----------
+    log "🏗️ 开始编译（单线程模式）..."
+    make -j1 V=s || {
         log "❌ 编译失败"
         exit 1
     }
     
-    # ---------- 12. 检查产物 ----------
+    # ---------- 11. 检查产物 ----------
     log "🔍 检查构建产物..."
     local target_dir="bin/targets/mediatek/filogic"
     if [ -d "$target_dir" ]; then
