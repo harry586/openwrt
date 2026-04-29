@@ -7680,6 +7680,9 @@ workflow_step_hanwckf_build() {
     
     cd "$BUILD_DIR" || exit 1
     
+    # 修复 olddefconfig 在无终端环境下的错误 (Error opening terminal)
+    export TERM=dumb
+    
     # 映射设备名到 Hanwckf 仓库中实际名称（去掉 -nand/-emmc 后缀）
     local hanwckf_device="$device_name"
     hanwckf_device=$(echo "$hanwckf_device" | sed 's/-nand$//' | sed 's/-emmc$//')
@@ -7710,8 +7713,8 @@ workflow_step_hanwckf_build() {
     sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
     echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
     
-    # 改用 olddefconfig 保留我们刚刚添加的设备配置
-    make olddefconfig
+    # 使用 TERM=dumb 绕过终端问题
+    TERM=dumb make olddefconfig
     
     # ---------- 4. 应用通用基础包（USB/文件系统等，来自 build-config.conf） ----------
     log "🔌 添加通用基础包 (USB/存储/文件系统)..."
@@ -7858,7 +7861,7 @@ workflow_step_hanwckf_build() {
     
     # ---------- 10. 最终配置确认 ----------
     log "🛠️ 最终配置确认 (make olddefconfig)..."
-    make olddefconfig
+    TERM=dumb make olddefconfig
     
     log "📋 当前选中的设备："
     grep "CONFIG_TARGET_mediatek_filogic_DEVICE_" .config | grep "=y" || log "⚠️ 未找到目标设备配置，请检查设备名是否正确"
