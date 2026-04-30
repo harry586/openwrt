@@ -7313,22 +7313,25 @@ quick_error_check() {
         step_patterns["步骤30: 编译总结"]="*"
         
         local total_step_errors=0
+        # 修正后的错误模式：保留 error: 和 fatal:，但过滤掉无害的标志
         local error_patterns=(
-            "致命错误:make:.*Error [0-9]+|Error 2|Error 1"
-            "构建失败:ERROR:.*failed to build"
+            "致命编译错误:make.*\\*\\*\\*.*Error [0-9]+|make.*\\*\\*\\*.*Build failed"
+            "构建失败:ERROR:.*failed to build|Build failed"
             "设备匹配问题:匹配设备.*->|未精确匹配|设备配置可能不正确|环境文件不存在|DEVICE.*为空|无法.*获取平台信息"
-            "源码克隆失败:克隆.*失败|fatal:.*clone"
-            "补丁失败:Patch failed|Hunk FAILED"
-            "编译错误:error:|undefined reference|implicit declaration"
+            "源码克隆失败:克隆.*失败|fatal:.*clone|fatal: unable to access"
+            "补丁失败:Patch failed.*Hunk FAILED|Hunk FAILED.*Patch failed"
+            "未定义引用:undefined reference to"
+            "致命错误行(error 且非忽略):error:(?!.*[Ii]gnored)(?!.*treating warnings as errors)"
+            "致命错误行(fatal 非非仓库):fatal:(?!.*not a git repository)"
             "下载失败:Download failed|curl.*error [0-9]|wget.*error|404 Not Found|401 Unauthorized"
             "认证问题:403 Forbidden|Authentication failed"
             "Broken pipe:Broken pipe"
-            "磁盘空间不足:No space left"
+            "磁盘空间不足:No space left on device"
             "权限问题:Permission denied"
-            "Feeds问题:feeds.*Error|feeds.*fatal|Unable to fetch"
-            "Git错误:fatal:|error:.*git"
-            "autoreconf失败:autoreconf.*failed|aclocal.*failed"
-            "库缺失:was not found|No package.*found|E:.*Unable to locate"
+            "Feeds致命错误:feeds.*fatal|Unable to fetch|feeds.*Error"
+            "Git致命错误:fatal:.*remote error|fatal:.*unable to access"
+            "autoreconf致命失败:autoreconf.*failed.*exit status|aclocal.*failed.*exit status"
+            "库缺失:No package.*found|E:.*Unable to locate package"
             "符号链接问题:Too many levels of symbolic links"
         )
         
@@ -7523,7 +7526,7 @@ quick_error_check() {
             if echo "$all_logs_list" | xargs grep -l "No space left" 2>/dev/null | grep -q .; then
                 echo "   🔧 磁盘空间不足: 清理磁盘空间"
             fi
-            if echo "$all_logs_list" | xargs grep -l "Patch failed\|Hunk FAILED" 2>/dev/null | grep -q .; then
+            if echo "$all_logs_list" | xargs grep -l "Patch failed.*Hunk FAILED\|Hunk FAILED.*Patch failed" 2>/dev/null | grep -q .; then
                 echo "   🔧 补丁失败: 删除失败的补丁文件"
             fi
             if echo "$all_logs_list" | xargs grep -l "无法.*获取平台信息\|环境文件不存在\|DEVICE.*为空\|mk文件中未找到" 2>/dev/null | grep -q .; then
