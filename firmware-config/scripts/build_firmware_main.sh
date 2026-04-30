@@ -7926,29 +7926,6 @@ export COMPILER_DIR="$BUILD_DIR"
 EOF
     chmod +x "$BUILD_DIR/build_env.sh"
     
-    # ---------- 15. 强制错误分析 ----------
-    log "🔍 运行编译后错误分析..."
-    local report_dir="$REPO_ROOT/error-reports"
-    mkdir -p "$report_dir"
-    local timestamp=$(date +%Y%m%d_%H%M%S)
-    local report_file="$report_dir/hanwckf-error-${timestamp}.txt"
-    
-    {
-        echo "================================================================="
-        echo "🔍 Hanwckf 编译错误分析报告"
-        echo "时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "平台: $target / $subtarget"
-        echo "================================================================="
-        if [ -f "$build_log" ]; then
-            echo "📄 编译日志: $build_log ($(ls -lh "$build_log" | awk '{print $5}'))"
-            echo "❌ 错误/警告摘要:"
-            grep -E "make.*Error|failed|FAILED|Patch failed|Hunk FAILED|Download failed" "$build_log" | tail -30 || true
-            echo "⚠️ 警告计数: $(grep -c "warning:" "$build_log" 2>/dev/null || echo 0)"
-        fi
-        echo "================================================================="
-    } | tee "$report_file"
-    log "📄 错误分析报告: $report_file"
-    
     if [ $exit_code -ne 0 ]; then
         log "❌ Hanwckf 编译流程失败"
         return 1
