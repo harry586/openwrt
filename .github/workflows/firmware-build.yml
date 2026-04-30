@@ -614,15 +614,16 @@ jobs:
             "${{ env.ENABLE_PARALLEL }}"
       #【firmware-build.yml-24-end】
 
-      #【firmware-build.yml-25】
+#【firmware-build.yml-25】
       - name: "25. 检查构建产物（Hanwckf 或标准流程均执行）"
-        if: success()
+        if: always()
         run: |
           echo "=== 步骤25: 检查构建产物 ==="
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step26_check_artifacts
       #【firmware-build.yml-25-end】
+      
 
 #【firmware-build.yml-26】
       - name: "26. 上传固件"
