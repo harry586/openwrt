@@ -7354,8 +7354,7 @@ workflow_step30_build_summary() {
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
 # 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
-# 增强：精确设备 + 通用基础包 + normal模式插件 + 额外包 + 禁用插件 + 自定义文件
-# 关键修复：编译前安装 libtool + 编译工具链 + 预下载 + 错误自动诊断
+# 关键修复：强制验证并安装 libtool，解决 autoreconf 失败问题
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7547,27 +7546,42 @@ workflow_step_hanwckf_build() {
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
 
-    # ---------- 🔧 关键修复：安装 libtool 解决 autoreconf 失败 ----------
-    log "🔧 安装缺失的编译依赖：libtool..."
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq libtool libtool-bin
+    # ---------- 🔧 关键修复：强制安装并验证 libtool ----------
+    log "🔧 强制安装缺失的编译依赖：libtool（包含 libltdl-dev）..."
+    sudo apt-get clean && sudo apt-get update -qq
+    sudo apt-get install -y -qq libtool libtool-bin libltdl-dev
+
+    # 验证安装是否成功
+    if [ ! -f "/usr/bin/libtool" ]; then
+        log "❌ 致命错误：libtool 仍然没有安装成功！请检查构建环境的软件源。"
+        exit 1
+    fi
+    # 确保 aclocal 能找到 libtool.m4
+    if [ ! -f "/usr/share/aclocal/libtool.m4" ]; then
+        log "⚠️ libtool.m4 未在标准位置找到，尝试重新配置 aclocal..."
+        sudo aclocal
+    fi
+    log "✅ libtool 已成功安装并验证。"
 
     # ---------- 10. 预下载所有源码包（通用下载，自动重试） ----------
     log "📦 预下载所有依赖源码包（使用通用下载流程）..."
     download_dependencies
 
     # ---------- 11. 编译固件 ----------
-    log "🏗️ 开始编译固件..."
+    # 设置环境变量，即使编译失败，quick_error_check 也能使用
+    export TARGET="mediatek"
+    export SUBTARGET="mt7981"
+    log "🏗️ 开始编译固件 (TARGET=$TARGET, SUBTARGET=$SUBTARGET)..."
     if ! make -j1 V=s 2>&1 | tee build.log; then
         log "❌ 编译遇到错误（非零退出），正在自动分析原因..."
-        quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt"
+        quick_error_check "$BUILD_DIR" "$TARGET" "build.log" "/tmp/quick-error-check-hanwckf.txt"
         log "📄 错误报告已保存: /tmp/quick-error-check-hanwckf.txt"
         exit 1
     fi
 
     # ---------- 12. 检查产物并写入环境变量 ----------
     log "🔍 检查构建产物..."
-    local target_dir="bin/targets/mediatek/mt7981"
+    local target_dir="bin/targets/$TARGET/$SUBTARGET"
     local factory_bin=$(ls "$target_dir"/*factory.bin 2>/dev/null | head -1)
     local sysupgrade_bin=$(ls "$target_dir"/*sysupgrade.bin 2>/dev/null | head -1)
 
@@ -7579,15 +7593,16 @@ workflow_step_hanwckf_build() {
         if [ -f "$BUILD_DIR/build_env.sh" ]; then
             sed -i '/^export TARGET=/d' "$BUILD_DIR/build_env.sh" 2>/dev/null || true
             sed -i '/^export SUBTARGET=/d' "$BUILD_DIR/build_env.sh" 2>/dev/null || true
-            echo "export TARGET=\"mediatek\"" >> "$BUILD_DIR/build_env.sh"
-            echo "export SUBTARGET=\"mt7981\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export TARGET=\"$TARGET\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export SUBTARGET=\"$SUBTARGET\"" >> "$BUILD_DIR/build_env.sh"
         else
-            echo "export TARGET=\"mediatek\"" > "$BUILD_DIR/build_env.sh"
-            echo "export SUBTARGET=\"mt7981\"" >> "$BUILD_DIR/build_env.sh"
+            echo "#!/bin/bash" > "$BUILD_DIR/build_env.sh"
+            echo "export TARGET=\"$TARGET\"" >> "$BUILD_DIR/build_env.sh"
+            echo "export SUBTARGET=\"$SUBTARGET\"" >> "$BUILD_DIR/build_env.sh"
         fi
         if [ -n "$GITHUB_ENV" ]; then
-            echo "TARGET=mediatek" >> $GITHUB_ENV
-            echo "SUBTARGET=mt7981" >> $GITHUB_ENV
+            echo "TARGET=$TARGET" >> $GITHUB_ENV
+            echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
         fi
     else
         log "❌ 未找到任何有效固件，编译可能已失败"
