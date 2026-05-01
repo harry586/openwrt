@@ -7134,7 +7134,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 增强版（精确定位非零原因）
+# 全流程错误检查函数 - 增强版（精准扼要定位非零原因）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7147,150 +7147,90 @@ quick_error_check() {
         return 1
     }
 
+    # 读取 Hanwckf 流程写入的环境文件
     if [ -f "$build_dir/build_env.sh" ]; then
-        source "$build_dir/build_env.sh"
+        # 读取环境文件中的变量到当前 shell
+        while IFS='=' read -r key value; do
+            if [[ "$key" == "export TARGET" ]] || [[ "$key" == "export SUBTARGET" ]] || [[ "$key" == "export SOURCE_REPO_TYPE" ]] || [[ "$key" == "export DEVICE" ]]; then
+                var_name=$(echo "$key" | sed 's/export //')
+                var_value=$(echo "$value" | sed 's/\"//g')
+                declare "$var_name=$var_value"
+            fi
+        done < "$build_dir/build_env.sh"
     fi
 
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 增强版（精确定位非零原因）"
+        echo "🔍 全流程错误检查 - 精简版（快速定位非零原因）"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
-        echo "目标平台: $target_platform"
+        echo "目标平台: ${TARGET:-$target_platform}"
         echo "完整目标: ${TARGET:-$target_platform}/${SUBTARGET:-generic}"
         echo "源码类型: ${SOURCE_REPO_TYPE:-unknown}"
-        echo "源码分支: ${SELECTED_BRANCH:-unknown}"
         echo "输入设备: ${DEVICE:-unknown}"
         echo "================================================================="
 
-        # 收集所有日志
-        declare -A log_sources
-        for pattern in "build.log" "build_step"*.log "download.log"; do
-            for f in "$build_dir/"$pattern; do
-                if [ -f "$f" ]; then
-                    log_sources["$f"]="构建目录"
-                fi
-            done
-        done
-        if [ -d "/tmp/build-logs" ]; then
-            for f in /tmp/build-logs/*.log; do
-                [ -f "$f" ] && log_sources["$f"]="临时日志目录"
-            done
-        fi
-
-        if [ ${#log_sources[@]} -eq 0 ]; then
-            echo "⚠️ 未找到任何日志文件"
+        if [ ! -f "$log_file" ]; then
+            echo "❌ 主日志文件 $log_file 不存在，无法分析。"
             return 1
         fi
 
-        echo "📄 找到 ${#log_sources[@]} 个日志文件"
-        echo ""
-
-        # ---------- 0. 固件状态 ----------
-        echo "🔍 步骤26: 固件生成状态检查"
-        echo "----------------------------------------"
+        # ----- 1. 固件状态 -----
         local full_target="${TARGET:-$target_platform}"
         local full_subtarget="${SUBTARGET:-generic}"
-        local target_dir="bin/targets/$full_target/$full_subtarget"
-        [ -d "$target_dir" ] || target_dir=$(find bin/targets -type d -name "*$full_target*" 2>/dev/null | head -1)
-
+        local target_dir="$build_dir/bin/targets/$full_target/$full_subtarget"
+        echo "🔍 固件生成状态检查 ($target_dir):"
         if [ -d "$target_dir" ]; then
-            local found_fw=0
-            while IFS= read -r file; do
-                [ -z "$file" ] && continue
-                local fname=$(basename "$file")
-                case "$fname" in
-                    *initramfs*|*.manifest|*sha256sums*) continue ;;
-                esac
-                local fsize=$(ls -lh "$file" | awk '{print $5}')
-                local fhash=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
-                found_fw=$((found_fw + 1))
-                echo "✅ $fname ($fsize) sha256:$fhash"
-            done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | sort)
-            [ $found_fw -eq 0 ] && echo "❌ 目录存在但未找到固件文件"
+            find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) ! -name "*initramfs*" -exec ls -lh {} \; 2>/dev/null || echo "❌ 未找到标准固件文件。"
         else
-            echo "❌ 目标目录不存在: $target_dir"
+            echo "❌ 目标目录不存在，固件生成失败。"
         fi
         echo "----------------------------------------"
+
+        # ----- 2. 精准错误定位 -----
         echo ""
+        echo "🔍 关键错误定位 (仅显示致命错误，忽略正常编译警告)："
+        
+        # a) 查找 make 报错的具体目标，这是最准确的错误指示
+        local make_errors=$(grep -E 'make\[[0-9]+\]: \*\*\* \[.*\] Error' "$log_file" | tail -5)
+        # b) 查找 autoreconf 失败
+        local autoreconf_errors=$(grep -E 'autoreconf.*failed|aclocal.*error|libtool.m4.*does not exist' "$log_file" | tail -5)
+        # c) 查找编译错误 (error:)
+        local compile_errors=$(grep -E '^.*error:' "$log_file" | grep -v 'Wno-error' | tail -5)
 
-        # ---------- 1. 精确错误定位 ----------
-        echo "🔍 精确错误定位（从日志中提取关键错误行）："
-        echo "----------------------------------------"
-        local error_lines_file="/tmp/error_lines.txt"
-        > "$error_lines_file"
-
-        # 多级错误匹配，带上下文
-        for logfile in "${!log_sources[@]}"; do
-            local logname=$(basename "$logfile")
-            # 严重错误：make Error
-            grep -n -E "make\[[0-9]+\]: \*\*\* \[.*\] Error" "$logfile" 2>/dev/null | while IFS= read -r line; do
-                echo "[严重] ${logname}:${line}" >> "$error_lines_file"
-            done
-            # 编译错误
-            grep -n -E "error:|undefined reference|fatal error" "$logfile" 2>/dev/null | while IFS= read -r line; do
-                echo "[编译] ${logname}:${line}" >> "$error_lines_file"
-            done
-            # 下载失败
-            grep -n -E "Download failed|Failed to download|curl.*error|wget.*error|404 Not Found|401 Unauthorized" "$logfile" 2>/dev/null | while IFS= read -r line; do
-                echo "[下载] ${logname}:${line}" >> "$error_lines_file"
-            done
-            # 补丁失败
-            grep -n -E "Patch failed|Hunk FAILED" "$logfile" 2>/dev/null | while IFS= read -r line; do
-                echo "[补丁] ${logname}:${line}" >> "$error_lines_file"
-            done
-        done
-
-        if [ -s "$error_lines_file" ]; then
-            echo "📌 关键错误摘要（每行格式：日志文件:行号:内容）："
-            head -30 "$error_lines_file"
-            if [ $(wc -l < "$error_lines_file") -gt 30 ]; then
-                echo "   ... 共 $(wc -l < "$error_lines_file") 处错误，完整列表见 $error_lines_file"
-            fi
+        if [ -n "$make_errors" ]; then
+            echo "🚨 致命构建错误 (make Error):"
+            echo "$make_errors"
+        elif [ -n "$autoreconf_errors" ]; then
+            echo "🚨 配置错误 (autoreconf/libtool):"
+            echo "$autoreconf_errors"
+            echo "💡 修复建议: 运行 'sudo apt-get install libtool libtool-bin'"
+        elif [ -n "$compile_errors" ]; then
+            echo "🚨 编译错误 (GCC/CC1):"
+            echo "$compile_errors"
         else
-            echo "✅ 未发现明确错误行（非零退出可能是 make 发现依赖缺失）"
+            echo "✅ 未在日志中发现致命错误，非零退出可能由资源耗尽或超时引起。"
         fi
-
-        # ---------- 2. 缺失依赖分析 ----------
-        echo ""
-        echo "🔍 缺失依赖扫描（关键字 'does not exist'）："
         echo "----------------------------------------"
-        local missing_deps=$(grep -h "does not exist" "$build_dir"/build.log 2>/dev/null | sort -u)
-        if [ -n "$missing_deps" ]; then
-            echo "$missing_deps"
-            echo "💡 这些依赖在 feeds 安装时缺失，可能导致部分包编译失败"
-        else
-            echo "✅ 未发现依赖缺失"
-        fi
 
-        # ---------- 3. 结论 ----------
+        # ----- 3. 结论 -----
         echo ""
         echo "================================================================="
         echo "📊 非零退出原因诊断："
-        echo "================================================================="
-        if [ -s "$error_lines_file" ]; then
-            local err_count=$(wc -l < "$error_lines_file")
-            echo "   共发现 $err_count 条关键错误，最可能的原因是："
-            if grep -q "下载" "$error_lines_file"; then
-                echo "   - 网络下载失败（404/401/curl error），建议检查下载源"
-            fi
-            if grep -q "编译" "$error_lines_file"; then
-                echo "   - 编译错误（error:fatal error），请查看具体错误行"
-            fi
-            if grep -q "严重" "$error_lines_file"; then
-                echo "   - make 错误导致某个目标构建失败"
-            fi
-            if grep -q "补丁" "$error_lines_file"; then
-                echo "   - 补丁应用失败，内核或包补丁不匹配"
-            fi
-        elif grep -q "does not exist" "$build_dir"/build.log 2>/dev/null; then
-            echo "   - 缺少依赖包，部分包未安装成功"
+        if [ -n "$make_errors" ]; then
+            echo "   - 构建系统错误，请查看上方 'make Error' 信息。"
+            echo "   - 这意味着某个依赖或编译目标构建失败。"
+        elif [ -n "$autoreconf_errors" ]; then
+            echo "   - 构建环境缺少 'libtool'，导致 autoreconf 失败。"
+            echo "   - 报错信息: $autoreconf_errors"
+        elif [ -n "$compile_errors" ]; then
+            echo "   - 源代码编译失败，请查看上方 'GCC/CC1' 错误。"
         else
-            echo "   - 未捕获到明显错误，可能是资源耗尽或超时"
+            echo "   - 未捕获到明确错误，可能是资源耗尽或超时。"
         fi
         echo ""
-        echo "💡 建议查看完整日志: $(cd "$build_dir" && pwd)/build.log"
+        echo "💡 完整日志: $build_dir/build.log"
         echo "================================================================="
 
     } | tee "$output_file"
@@ -7414,7 +7354,8 @@ workflow_step30_build_summary() {
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
 # 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
-# 关键修复：编译固件前先编译工具链，解决头文件缺失和libtool依赖问题
+# 增强：精确设备 + 通用基础包 + normal模式插件 + 额外包 + 禁用插件 + 自定义文件
+# 关键修复：编译前安装 libtool + 编译工具链 + 预下载 + 错误自动诊断
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7606,21 +7547,14 @@ workflow_step_hanwckf_build() {
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
 
-    # ---------- 10. 预下载所有源码包 ----------
+    # ---------- 🔧 关键修复：安装 libtool 解决 autoreconf 失败 ----------
+    log "🔧 安装缺失的编译依赖：libtool..."
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq libtool libtool-bin
+
+    # ---------- 10. 预下载所有源码包（通用下载，自动重试） ----------
     log "📦 预下载所有依赖源码包（使用通用下载流程）..."
     download_dependencies
-
-    # ---------- 🆕 关键修复：先编译工具链，再编译固件 ----------
-    log "🔧 编译交叉编译工具链（修复头文件缺失和libtool依赖）..."
-    if [ ! -f "staging_dir/toolchain-aarch64_cortex-a53_gcc-8.4.0_musl/bin/aarch64-openwrt-linux-musl-gcc" ]; then
-        make toolchain/compile -j1 V=s || {
-            log "❌ 工具链编译失败，无法继续"
-            exit 1
-        }
-        log "✅ 工具链编译完成"
-    else
-        log "✅ 工具链已存在，跳过编译"
-    fi
 
     # ---------- 11. 编译固件 ----------
     log "🏗️ 开始编译固件..."
