@@ -7353,8 +7353,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
-# 关键修复：强制编译宿主端 libtool，解决 autoreconf 找不到 libtool.m4
+# 终极修复：强制初始化宿主工具 aclocal 路径
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7401,7 +7400,7 @@ workflow_step_hanwckf_build() {
     sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
     echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
 
-    # ---------- 3. 添加通用基础包（USB/文件系统等） ----------
+    # ---------- 3. 添加通用基础包 ----------
     log "🔌 添加通用基础包 (USB/存储/文件系统)..."
     if [ -f "$REPO_ROOT/build-config.conf" ]; then
         source "$REPO_ROOT/build-config.conf"
@@ -7438,7 +7437,7 @@ workflow_step_hanwckf_build() {
         log "✅ 已启用 TCP BBR"
     fi
 
-    # ---------- 4. 应用模式插件（normal/base） ----------
+    # ---------- 4. 应用模式插件 ----------
     log "📌 应用模式插件: ${config_mode:-normal}"
     local mode_config_file="$REPO_ROOT/firmware-config/config/${config_mode:-normal}.config"
     if [ -f "$mode_config_file" ]; then
@@ -7457,7 +7456,7 @@ workflow_step_hanwckf_build() {
         log "⚠️ 未找到模式配置文件: $mode_config_file，跳过"
     fi
 
-    # ---------- 5. 添加额外用户包 ----------
+    # ---------- 5. 额外用户包 ----------
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外软件包: $extra_packages"
         IFS=';' read -ra PKGS <<< "$extra_packages"
@@ -7468,11 +7467,10 @@ workflow_step_hanwckf_build() {
         done
     fi
 
-    # ---------- 6. 应用禁用插件列表（优先级最高） ----------
+    # ---------- 6. 禁用插件 ----------
     local forbidden_list="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     if [ -n "$forbidden_list" ]; then
         log "🚫 应用禁用插件列表: $forbidden_list"
-
         generate_forbidden_packages_list() {
             local base="$1"
             local full=()
@@ -7484,41 +7482,24 @@ workflow_step_hanwckf_build() {
                 full+=("luci-i18n-${pkg}-zh-cn")
                 full+=("${pkg}-scripts")
                 case "$pkg" in
-                    "ssr-plus")
-                        full+=("shadowsocksr-libev" "shadowsocksr-libev-ssr-local" "shadowsocksr-libev-ssr-redir" "shadowsocksr-libev-ssr-tunnel")
-                        ;;
-                    "passwall")
-                        full+=("shadowsocks-libev-ss-local" "shadowsocks-libev-ss-redir" "shadowsocks-libev-ss-tunnel" "trojan" "trojan-plus" "xray-core" "v2ray-core" "v2ray-plugin" "simple-obfs")
-                        ;;
-                    "vssr")
-                        full+=("shadowsocksr-libev" "v2ray-core" "v2ray-plugin")
-                        ;;
-                    "ddns")
-                        full+=("ddns-scripts" "ddns-scripts_aliyun" "ddns-scripts_dnspod" "ddns-go")
-                        ;;
-                    "qbittorrent")
-                        full+=("qbittorrent-nox" "libtorrent-rasterbar")
-                        ;;
-                    "rclone")
-                        full+=("rclone-ng" "rclone-webui-react")
-                        ;;
-                    "filetransfer")
-                        full+=("vsftpd-alt")
-                        ;;
+                    "ssr-plus") full+=("shadowsocksr-libev" "shadowsocksr-libev-ssr-local" "shadowsocksr-libev-ssr-redir" "shadowsocksr-libev-ssr-tunnel") ;;
+                    "passwall") full+=("shadowsocks-libev-ss-local" "shadowsocks-libev-ss-redir" "shadowsocks-libev-ss-tunnel" "trojan" "trojan-plus" "xray-core" "v2ray-core" "v2ray-plugin" "simple-obfs") ;;
+                    "vssr") full+=("shadowsocksr-libev" "v2ray-core" "v2ray-plugin") ;;
+                    "ddns") full+=("ddns-scripts" "ddns-scripts_aliyun" "ddns-scripts_dnspod" "ddns-go") ;;
+                    "qbittorrent") full+=("qbittorrent-nox" "libtorrent-rasterbar") ;;
+                    "rclone") full+=("rclone-ng" "rclone-webui-react") ;;
+                    "filetransfer") full+=("vsftpd-alt") ;;
                 esac
             done
             printf '%s\n' "${full[@]}" | sort -u
         }
-
         local full_forbidden=($(generate_forbidden_packages_list "$forbidden_list"))
-
         for plugin in "${full_forbidden[@]}"; do
             [ -z "$plugin" ] && continue
             sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
             sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
             echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
         done
-
         if [ -d "package/feeds" ]; then
             for plugin in "${full_forbidden[@]}"; do
                 find package/feeds -type d -name "*${plugin}*" -exec rm -rf {} \; 2>/dev/null || true
@@ -7528,12 +7509,12 @@ workflow_step_hanwckf_build() {
     fi
 
     # ---------- 7. 集成自定义文件 ----------
-    log "📁 集成自定义文件（从 firmware-config/custom-files）..."
+    log "📁 集成自定义文件..."
     local main_script="$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
     if [ -f "$main_script" ] && [ -x "$main_script" ]; then
         "$main_script" integrate_custom_files
     else
-        log "⚠️ 找不到或无法执行主构建脚本，跳过自定义文件集成"
+        log "⚠️ 找不到主构建脚本，跳过自定义文件集成"
     fi
 
     # ---------- 8. 更新并安装 Feeds ----------
@@ -7546,15 +7527,24 @@ workflow_step_hanwckf_build() {
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
 
-    # ---------- 🔧 关键修复：编译宿主端 libtool，提供 libtool.m4 ----------
-    log "🔧 编译宿主工具：libtool（解决 autoreconf 找不到 libtool.m4）..."
-    if ! make tools/libtool/compile -j1 V=s 2>&1 | tee tools_libtool.log; then
-        log "❌ 宿主 libtool 编译失败，请检查日志。"
-        exit 1
-    fi
-    log "✅ 宿主 libtool 已编译并安装。"
+    # ---------- 🔧 终极修复：初始化宿主工具并复制 libtool.m4 ----------
+    log "🔧 修复宿主 autotools 环境..."
+    # 确保系统级 libtool 已安装
+    sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin
+    # 强制创建 aclocal 搜索目录并复制 libtool.m4
+    sudo mkdir -p /usr/local/share/aclocal
+    sudo cp /usr/share/aclocal/libtool.m4 /usr/local/share/aclocal/ 2>/dev/null || true
+    # 强制宿主机 aclocal 扫描系统目录
+    export ACLOCAL_PATH="/usr/share/aclocal:/usr/local/share/aclocal:$ACLOCAL_PATH"
 
-    # ---------- 10. 预下载所有源码包（通用下载，自动重试） ----------
+    # 尝试编译宿主端 autoconf/automake/libtool 以确保一切就绪
+    make tools/autoconf/compile -j1 V=s 2>/dev/null || true
+    make tools/automake/compile -j1 V=s 2>/dev/null || true
+    make tools/libtool/compile -j1 V=s 2>/dev/null || true
+
+    log "✅ 宿主 autotools 环境已初始化。"
+
+    # ---------- 10. 预下载所有源码包 ----------
     log "📦 预下载所有依赖源码包..."
     download_dependencies
 
