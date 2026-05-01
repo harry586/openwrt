@@ -7414,7 +7414,7 @@ workflow_step30_build_summary() {
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
 # 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
-# 增强：通用预下载 + 基础包 + 模式插件 + 额外包 + 禁用插件 + 自定义文件 + 错误分析
+# 关键修复：编译固件前先编译工具链，解决头文件缺失和libtool依赖问题
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7606,12 +7606,24 @@ workflow_step_hanwckf_build() {
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
 
-    # ---------- 10. 预下载所有源码包（调用通用下载函数，自动重试） ----------
+    # ---------- 10. 预下载所有源码包 ----------
     log "📦 预下载所有依赖源码包（使用通用下载流程）..."
     download_dependencies
 
-    # ---------- 11. 编译（带自动错误分析） ----------
-    log "🏗️ 开始编译（单线程，避免并发问题）..."
+    # ---------- 🆕 关键修复：先编译工具链，再编译固件 ----------
+    log "🔧 编译交叉编译工具链（修复头文件缺失和libtool依赖）..."
+    if [ ! -f "staging_dir/toolchain-aarch64_cortex-a53_gcc-8.4.0_musl/bin/aarch64-openwrt-linux-musl-gcc" ]; then
+        make toolchain/compile -j1 V=s || {
+            log "❌ 工具链编译失败，无法继续"
+            exit 1
+        }
+        log "✅ 工具链编译完成"
+    else
+        log "✅ 工具链已存在，跳过编译"
+    fi
+
+    # ---------- 11. 编译固件 ----------
+    log "🏗️ 开始编译固件..."
     if ! make -j1 V=s 2>&1 | tee build.log; then
         log "❌ 编译遇到错误（非零退出），正在自动分析原因..."
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt"
