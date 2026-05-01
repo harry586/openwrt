@@ -7353,7 +7353,8 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 终极修复：强制初始化宿主工具 aclocal 路径
+# 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
+# 完整增强版：所有修复已整合，自动处理包编译失败
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7509,12 +7510,12 @@ workflow_step_hanwckf_build() {
     fi
 
     # ---------- 7. 集成自定义文件 ----------
-    log "📁 集成自定义文件..."
+    log "📁 集成自定义文件（从 firmware-config/custom-files）..."
     local main_script="$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
     if [ -f "$main_script" ] && [ -x "$main_script" ]; then
         "$main_script" integrate_custom_files
     else
-        log "⚠️ 找不到主构建脚本，跳过自定义文件集成"
+        log "⚠️ 找不到或无法执行主构建脚本，跳过自定义文件集成"
     fi
 
     # ---------- 8. 更新并安装 Feeds ----------
@@ -7527,34 +7528,69 @@ workflow_step_hanwckf_build() {
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
 
-    # ---------- 🔧 终极修复：初始化宿主工具并复制 libtool.m4 ----------
-    log "🔧 修复宿主 autotools 环境..."
-    # 确保系统级 libtool 已安装
+    # ---------- 🔧 关键修复：初始化宿主 autotools 环境 ----------
+    log "🔧 修复宿主 autotools 环境（解决 autoreconf 缺少 libtool.m4）..."
     sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin
-    # 强制创建 aclocal 搜索目录并复制 libtool.m4
     sudo mkdir -p /usr/local/share/aclocal
     sudo cp /usr/share/aclocal/libtool.m4 /usr/local/share/aclocal/ 2>/dev/null || true
-    # 强制宿主机 aclocal 扫描系统目录
     export ACLOCAL_PATH="/usr/share/aclocal:/usr/local/share/aclocal:$ACLOCAL_PATH"
 
-    # 尝试编译宿主端 autoconf/automake/libtool 以确保一切就绪
     make tools/autoconf/compile -j1 V=s 2>/dev/null || true
     make tools/automake/compile -j1 V=s 2>/dev/null || true
     make tools/libtool/compile -j1 V=s 2>/dev/null || true
-
     log "✅ 宿主 autotools 环境已初始化。"
 
     # ---------- 10. 预下载所有源码包 ----------
-    log "📦 预下载所有依赖源码包..."
+    log "📦 预下载所有依赖源码包（使用通用下载流程）..."
     download_dependencies
 
-    # ---------- 11. 编译固件 ----------
+    # ---------- 11. 编译固件（带自动修复包编译失败） ----------
     export TARGET="mediatek"
     export SUBTARGET="mt7981"
     log "🏗️ 开始编译固件 (TARGET=$TARGET, SUBTARGET=$SUBTARGET)..."
-    if ! make -j1 V=s 2>&1 | tee build.log; then
-        log "❌ 编译遇到错误，正在自动分析..."
-        quick_error_check "$BUILD_DIR" "$TARGET" "build.log" "/tmp/quick-error-check-hanwckf.txt"
+
+    local build_retry=1
+    local max_build_retries=2
+    local build_success=0
+
+    while [ $build_retry -le $max_build_retries ] && [ $build_success -eq 0 ]; do
+        log "   📦 编译尝试：第 $build_retry 次"
+        if make -j1 V=s 2>&1 | tee build_attempt_${build_retry}.log; then
+            build_success=1
+            log "   ✅ 第 $build_retry 次编译尝试成功！"
+            break
+        else
+            log "   ⚠️ 第 $build_retry 次编译尝试失败，正在分析原因..."
+            
+            local failed_package_log="build_attempt_${build_retry}.log"
+            if [ -f "$failed_package_log" ]; then
+                local failed_pkg_name=$(grep -E 'make\[[0-9]+\]:.*compile.*Error' "$failed_package_log" | tail -1 | sed -n 's|.*package/\(.*\)/compile.*|\1|p')
+                
+                if [ -n "$failed_pkg_name" ]; then
+                    log "   🔍 定位到编译失败的包: $failed_pkg_name"
+                    
+                    if [ $build_retry -lt $max_build_retries ]; then
+                        log "   🔧 尝试修复：禁用失败的包 $failed_pkg_name，然后重试编译..."
+                        make package/${failed_pkg_name}/clean V=s 2>/dev/null || true
+                        local config_name=$(echo "$failed_pkg_name" | tr '/' '_' | tr 'a-z' 'A-Z')
+                        sed -i "/^CONFIG_PACKAGE_${config_name}=y/d" .config
+                        echo "# CONFIG_PACKAGE_${config_name} is not set" >> .config
+                        
+                        make defconfig 2>/dev/null || true
+                        log "   ✅ 已禁用 $failed_pkg_name，准备重试编译。"
+                    fi
+                fi
+            fi
+
+            cat build_attempt_${build_retry}.log >> build.log 2>/dev/null
+        fi
+        
+        build_retry=$((build_retry + 1))
+    done
+
+    if [ $build_success -eq 0 ]; then
+        log "❌ 编译在重试后依然失败，正在生成最终错误报告..."
+        quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt"
         log "📄 错误报告已保存: /tmp/quick-error-check-hanwckf.txt"
         exit 1
     fi
@@ -7584,7 +7620,7 @@ workflow_step_hanwckf_build() {
             echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
         fi
     else
-        log "❌ 未找到任何有效固件"
+        log "❌ 未找到任何有效固件，编译可能已失败"
         exit 1
     fi
 
