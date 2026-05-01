@@ -7354,7 +7354,7 @@ workflow_step30_build_summary() {
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
 # 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
-# 关键修复：强制验证并安装 libtool，解决 autoreconf 失败问题
+# 关键修复：强制编译宿主端 libtool，解决 autoreconf 找不到 libtool.m4
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7546,34 +7546,24 @@ workflow_step_hanwckf_build() {
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
 
-    # ---------- 🔧 关键修复：强制安装并验证 libtool ----------
-    log "🔧 强制安装缺失的编译依赖：libtool（包含 libltdl-dev）..."
-    sudo apt-get clean && sudo apt-get update -qq
-    sudo apt-get install -y -qq libtool libtool-bin libltdl-dev
-
-    # 验证安装是否成功
-    if [ ! -f "/usr/bin/libtool" ]; then
-        log "❌ 致命错误：libtool 仍然没有安装成功！请检查构建环境的软件源。"
+    # ---------- 🔧 关键修复：编译宿主端 libtool，提供 libtool.m4 ----------
+    log "🔧 编译宿主工具：libtool（解决 autoreconf 找不到 libtool.m4）..."
+    if ! make tools/libtool/compile -j1 V=s 2>&1 | tee tools_libtool.log; then
+        log "❌ 宿主 libtool 编译失败，请检查日志。"
         exit 1
     fi
-    # 确保 aclocal 能找到 libtool.m4
-    if [ ! -f "/usr/share/aclocal/libtool.m4" ]; then
-        log "⚠️ libtool.m4 未在标准位置找到，尝试重新配置 aclocal..."
-        sudo aclocal
-    fi
-    log "✅ libtool 已成功安装并验证。"
+    log "✅ 宿主 libtool 已编译并安装。"
 
     # ---------- 10. 预下载所有源码包（通用下载，自动重试） ----------
-    log "📦 预下载所有依赖源码包（使用通用下载流程）..."
+    log "📦 预下载所有依赖源码包..."
     download_dependencies
 
     # ---------- 11. 编译固件 ----------
-    # 设置环境变量，即使编译失败，quick_error_check 也能使用
     export TARGET="mediatek"
     export SUBTARGET="mt7981"
     log "🏗️ 开始编译固件 (TARGET=$TARGET, SUBTARGET=$SUBTARGET)..."
     if ! make -j1 V=s 2>&1 | tee build.log; then
-        log "❌ 编译遇到错误（非零退出），正在自动分析原因..."
+        log "❌ 编译遇到错误，正在自动分析..."
         quick_error_check "$BUILD_DIR" "$TARGET" "build.log" "/tmp/quick-error-check-hanwckf.txt"
         log "📄 错误报告已保存: /tmp/quick-error-check-hanwckf.txt"
         exit 1
@@ -7589,7 +7579,6 @@ workflow_step_hanwckf_build() {
         log "✅ 固件生成成功！"
         ls -lh "$target_dir"/*factory* "$target_dir"/*sysupgrade* 2>/dev/null || true
 
-        # 写入平台信息，供后续步骤使用
         if [ -f "$BUILD_DIR/build_env.sh" ]; then
             sed -i '/^export TARGET=/d' "$BUILD_DIR/build_env.sh" 2>/dev/null || true
             sed -i '/^export SUBTARGET=/d' "$BUILD_DIR/build_env.sh" 2>/dev/null || true
@@ -7605,7 +7594,7 @@ workflow_step_hanwckf_build() {
             echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
         fi
     else
-        log "❌ 未找到任何有效固件，编译可能已失败"
+        log "❌ 未找到任何有效固件"
         exit 1
     fi
 
