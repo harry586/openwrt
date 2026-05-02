@@ -7353,7 +7353,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 终极稳定版：修复 apt 错误，软链接解决 libtool.m4 缺失
+# 终极修复：通过 ACLOCAL_PATH 环境变量根治 libtool.m4 问题
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7361,7 +7361,7 @@ workflow_step_hanwckf_build() {
     local config_mode="$3"
 
     log "====================================================="
-    log "🚀 启动 Hanwckf-mt798x 独立编译流程（终极稳定版）"
+    log "🚀 启动 Hanwckf-mt798x 独立编译流程（终极修复版）"
     log "   输入设备: $device_name"
     log "   配置模式: ${config_mode:-normal}"
     log "====================================================="
@@ -7376,13 +7376,13 @@ workflow_step_hanwckf_build() {
     hanwckf_device=$(echo "$hanwckf_device" | sed 's/-nand$//' | sed 's/-emmc$//')
     log "   Hanwckf 内部设备名: $hanwckf_device"
 
-    # ---------- 0. 安装编译必备工具（修正包名，允许部分失败） ----------
+    # ---------- 0. 安装必备工具 ----------
     log "🔧 安装编译必备工具..."
     sudo apt-get update -qq && sudo apt-get install -y -qq \
         build-essential git wget curl unzip gawk gettext \
         python3 python3-distutils file rsync \
         libncurses-dev zlib1g-dev libssl-dev libelf-dev \
-        bison flex cpio squashfs-tools debianutils 2>/dev/null || true
+        bison flex cpio squashfs-tools libtool libtool-bin 2>/dev/null || true
 
     # ---------- 1. 克隆 ----------
     log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
@@ -7404,7 +7404,6 @@ workflow_step_hanwckf_build() {
     # ---------- 3. 锁定唯一设备 ----------
     log "🎯 锁定设备：$hanwckf_device"
     sed -i '/^CONFIG_TARGET_x86_64/d' .config
-    sed -i '/^# CONFIG_TARGET_x86_64/d' .config
     sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config
     sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
     sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
@@ -7455,20 +7454,6 @@ workflow_step_hanwckf_build() {
     ./scripts/feeds update -a
     ./scripts/feeds install -a
 
-    # ---------- 🔧 最轻量修复：为宿主编译工具提供 libtool.m4 ----------
-    log "🔧 补充宿主构建环境所需的 libtool.m4..."
-    sudo apt-get install -y -qq libtool 2>/dev/null || true
-    mkdir -p staging_dir/host/share/aclocal
-    # 优先尝试从系统里复制，如果找不到则尝试创建一个空的占位文件（可行性不高，最好用系统的）
-    if [ -f /usr/share/aclocal/libtool.m4 ]; then
-        ln -sf /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/libtool.m4
-    else
-        # 最终尝试：通过 libtoolize 生成
-        libtoolize --copy --force 2>/dev/null || true
-        cp ./libtool.m4 staging_dir/host/share/aclocal/libtool.m4 2>/dev/null || touch staging_dir/host/share/aclocal/libtool.m4
-    fi
-    log "✅ libtool.m4 已修复"
-
     # ---------- 9. 最终配置确认 ----------
     log "🛠️ make defconfig..."
     make defconfig
@@ -7477,8 +7462,10 @@ workflow_step_hanwckf_build() {
     log "📦 预下载依赖包..."
     download_dependencies
 
-    # ---------- 11. 编译 ----------
+    # ---------- 11. 编译（通过 ACLOCAL_PATH 环境变量修复 libtool.m4） ----------
     log "🏗️ 开始编译..."
+    # 关键修复：显式指定 aclocal 搜索路径，包含系统的 aclocal 目录
+    export ACLOCAL_PATH="/usr/share/aclocal:/usr/local/share/aclocal:/usr/share/libtool/m4"
     if ! make -j1 V=s 2>&1 | tee build.log; then
         log "❌ 编译失败，正在分析..."
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt"
@@ -7496,7 +7483,6 @@ workflow_step_hanwckf_build() {
     if [ -n "$factory_bin" ] || [ -n "$sysupgrade_bin" ]; then
         log "✅ 固件生成成功！"
         ls -lh "$target_dir"/*sysupgrade* "$target_dir"/*factory* 2>/dev/null || true
-
         echo "export TARGET=\"$TARGET\"" > "$BUILD_DIR/build_env.sh"
         echo "export SUBTARGET=\"$SUBTARGET\"" >> "$BUILD_DIR/build_env.sh"
         [ -n "$GITHUB_ENV" ] && echo "TARGET=$TARGET" >> $GITHUB_ENV && echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
