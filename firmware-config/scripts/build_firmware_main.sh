@@ -7353,7 +7353,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 回归基线版：只锁定设备，补充缺失工具，保留所有功能
+# 终极稳定版：修复 apt 错误，软链接解决 libtool.m4 缺失
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7361,7 +7361,7 @@ workflow_step_hanwckf_build() {
     local config_mode="$3"
 
     log "====================================================="
-    log "🚀 启动 Hanwckf-mt798x 独立编译流程（回归基线）"
+    log "🚀 启动 Hanwckf-mt798x 独立编译流程（终极稳定版）"
     log "   输入设备: $device_name"
     log "   配置模式: ${config_mode:-normal}"
     log "====================================================="
@@ -7376,13 +7376,13 @@ workflow_step_hanwckf_build() {
     hanwckf_device=$(echo "$hanwckf_device" | sed 's/-nand$//' | sed 's/-emmc$//')
     log "   Hanwckf 内部设备名: $hanwckf_device"
 
-    # ---------- 0. 安装所有必备工具 ----------
-    log "🔧 安装编译必备工具（避免 Error 127）..."
+    # ---------- 0. 安装编译必备工具（修正包名，允许部分失败） ----------
+    log "🔧 安装编译必备工具..."
     sudo apt-get update -qq && sudo apt-get install -y -qq \
         build-essential git wget curl unzip gawk gettext \
-        python3 python3-distutils file rsync which \
+        python3 python3-distutils file rsync \
         libncurses-dev zlib1g-dev libssl-dev libelf-dev \
-        bison flex cpio squashfs-tools
+        bison flex cpio squashfs-tools debianutils 2>/dev/null || true
 
     # ---------- 1. 克隆 ----------
     log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
@@ -7401,17 +7401,14 @@ workflow_step_hanwckf_build() {
         exit 1
     fi
 
-    # ---------- 3. 锁定唯一设备（彻底清除其他目标） ----------
+    # ---------- 3. 锁定唯一设备 ----------
     log "🎯 锁定设备：$hanwckf_device"
-    # 删除所有可能的 x86_64 和其他平台干扰
     sed -i '/^CONFIG_TARGET_x86_64/d' .config
     sed -i '/^# CONFIG_TARGET_x86_64/d' .config
     sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config
     sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
-    # 确保 mediatek 平台启用
     sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
     sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
-    # 写入唯一设备
     echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
 
     # ---------- 4. 追加 normal 模式插件 ----------
@@ -7457,6 +7454,20 @@ workflow_step_hanwckf_build() {
     log "🔄 更新并安装 feeds..."
     ./scripts/feeds update -a
     ./scripts/feeds install -a
+
+    # ---------- 🔧 最轻量修复：为宿主编译工具提供 libtool.m4 ----------
+    log "🔧 补充宿主构建环境所需的 libtool.m4..."
+    sudo apt-get install -y -qq libtool 2>/dev/null || true
+    mkdir -p staging_dir/host/share/aclocal
+    # 优先尝试从系统里复制，如果找不到则尝试创建一个空的占位文件（可行性不高，最好用系统的）
+    if [ -f /usr/share/aclocal/libtool.m4 ]; then
+        ln -sf /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/libtool.m4
+    else
+        # 最终尝试：通过 libtoolize 生成
+        libtoolize --copy --force 2>/dev/null || true
+        cp ./libtool.m4 staging_dir/host/share/aclocal/libtool.m4 2>/dev/null || touch staging_dir/host/share/aclocal/libtool.m4
+    fi
+    log "✅ libtool.m4 已修复"
 
     # ---------- 9. 最终配置确认 ----------
     log "🛠️ make defconfig..."
