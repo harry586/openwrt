@@ -7353,7 +7353,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 终极修复：通过 ACLOCAL_PATH 环境变量根治 libtool.m4 问题
+# 终极版：纯净环境 + 主动移除不兼容包 sysfsutils
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7361,7 +7361,7 @@ workflow_step_hanwckf_build() {
     local config_mode="$3"
 
     log "====================================================="
-    log "🚀 启动 Hanwckf-mt798x 独立编译流程（终极修复版）"
+    log "🚀 启动 Hanwckf-mt798x 独立编译流程（终极版）"
     log "   输入设备: $device_name"
     log "   配置模式: ${config_mode:-normal}"
     log "====================================================="
@@ -7371,6 +7371,10 @@ workflow_step_hanwckf_build() {
 
     cd "$BUILD_DIR" || exit 1
     export TERM=dumb
+
+    # 提前设置目标平台，确保错误分析可用
+    export TARGET="mediatek"
+    export SUBTARGET="mt7981"
 
     local hanwckf_device="$device_name"
     hanwckf_device=$(echo "$hanwckf_device" | sed 's/-nand$//' | sed 's/-emmc$//')
@@ -7454,28 +7458,32 @@ workflow_step_hanwckf_build() {
     ./scripts/feeds update -a
     ./scripts/feeds install -a
 
-    # ---------- 9. 最终配置确认 ----------
+    # ---------- 9. 最终配置确认并物理移除不兼容包 ----------
     log "🛠️ make defconfig..."
+    make defconfig
+
+    # 最终极保险：彻底删除已知不兼容的包源码，防止make去编译它
+    log "🗑️ 移除不兼容的 sysfsutils 源码，避免编译干扰..."
+    rm -rf package/libs/sysfsutils
+    # 同时在.config中彻底清除它的痕迹
+    sed -i '/SYSFSUTILS/d' .config
     make defconfig
 
     # ---------- 10. 预下载 ----------
     log "📦 预下载依赖包..."
     download_dependencies
 
-    # ---------- 11. 编译（通过 ACLOCAL_PATH 环境变量修复 libtool.m4） ----------
+    # ---------- 11. 编译 ----------
     log "🏗️ 开始编译..."
-    # 关键修复：显式指定 aclocal 搜索路径，包含系统的 aclocal 目录
-    export ACLOCAL_PATH="/usr/share/aclocal:/usr/local/share/aclocal:/usr/share/libtool/m4"
+    export ACLOCAL_PATH="/usr/share/aclocal:/usr/share/libtool/m4"
     if ! make -j1 V=s 2>&1 | tee build.log; then
         log "❌ 编译失败，正在分析..."
-        quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt"
+        quick_error_check "$BUILD_DIR" "$TARGET" "build.log" "/tmp/quick-error-check-hanwckf.txt"
         exit 1
     fi
 
     # ---------- 12. 检查产物 ----------
     log "🔍 检查产物..."
-    export TARGET="mediatek"
-    export SUBTARGET="mt7981"
     local target_dir="bin/targets/$TARGET/$SUBTARGET"
     local factory_bin=$(ls "$target_dir"/*factory.bin 2>/dev/null | head -1)
     local sysupgrade_bin=$(ls "$target_dir"/*sysupgrade.bin 2>/dev/null | head -1)
