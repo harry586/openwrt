@@ -40,10 +40,11 @@ config dnsmasq
 	option leasefile '/tmp/dhcp.leases'
 	option localservice '1'
 	option ednspacket_max '1232'
-	option noresolv '1'
 	option cachesize '10000'
-	list server '127.0.0.1#6053'
 	option sequential_ip '1'
+	option domainneeded '0'
+	list server '127.0.0.1#6053'
+	option noresolv '1'
 
 config dhcp 'lan'
 	option interface 'lan'
@@ -61,19 +62,22 @@ config dhcp 'wan'
 	option leasetime '12h'
 
 config host
-	option name 'DELL-min-pc-wifi'
+	option name 'min-DELL-pc-wifi'
 	option dns '1'
 	option mac '7c:67:a2:99:f8:d6'
+	list tag 'family'
 
 config host
 	option name 'harry586-iPad'
 	option dns '1'
 	option mac '5c:96:9d:99:a4:85'
+	list tag 'family'
 
 config host
-	option name 'MI8-min'
+	option name 'min-MI8'
 	option dns '1'
 	option mac 'a4:50:46:eb:02:0a'
+	list tag 'family'
 
 config host
 	option name 'Yeelight-LED-01'
@@ -105,46 +109,43 @@ config host
 	option name 'kaicheng-pc'
 	option dns '1'
 	option mac 'ac:ed:5c:77:35:e4'
+	list tag 'family'
 
 config host
-	option name 'MI10-min'
+	option name 'min-MI10'
 	option dns '1'
 	option mac '22:DC:C1:F5:05:68'
+	list tag 'family'
 
 config host
 	option name 'huawei-P40-pro'
 	option dns '1'
 	option mac 'e0:e0:fc:09:25:16'
+	list tag 'family'
 
 config host
 	option name 'huawei-pad'
 	option dns '1'
 	option mac '00:94:ec:72:6f:f7'
+	list tag 'family'
 
 config host
-	option name 'hezi'
-	option dns '1'
-	option mac '00:9e:c8:8a:cd:b6'
-
-config host
-	option name 'new-computer'
+	option name 'kai-computer'
 	option dns '1'
 	option mac '84:14:4D:BE:AF:41'
+	list tag 'family'
 
 config host
-	option name 'K60U'
+	option name 'min-K60U'
 	option dns '1'
 	option mac 'CC:EB:5E:F2:B3:42'
+	list tag 'family'
 
 config host
-	option name 'apple-ruimin'
-	option dns '1'
-	option mac 'c0:2c:5c:26:80:e1'
-
-config host
-	option name 'oppo-ma'
+	option name 'ma-oppo'
 	option dns '1'
 	option mac '00:ca:e0:32:59:e7'
+	list tag 'family'
 
 config host
 	option name 'mi-clean'
@@ -157,24 +158,9 @@ config host
 	option mac 'EC:4D:3E:91:B8:D6'
 
 config host
-	option name 'kaicheng-01'
-	option dns '1'
-	option mac '38:8f:30:e2:2e:96'
-
-config host
-	option name 'newmine-wifi'
+	option name 'min-newmine-wifi'
 	option dns '1'
 	option mac '00:13:EF:3F:26:93'
-
-config host
-	option name 'ruimindi'
-	option dns '1'
-	option mac 'c0:17:54:09:0e:60'
-
-config host
-	option name 'kc2025'
-	option dns '1'
-	option mac '00:0a:f5:a1:47:38'
 
 config host
 	option name 'asus-rt-acrh17'
@@ -182,25 +168,53 @@ config host
 	option mac '26:4B:FE:DD:B1:54'
 
 config host
-	option name '3800'
-	option dns '1'
-	option mac 'C2:04:15:9B:36:64'
-
-config host
-	option name 'wifi6'
+	option name 'min-wifi6'
 	option dns '1'
 	option mac '68:8F:C9:A2:5F:7B'
 
 config host
-	option name 'yeelink-light-min'
+	option name 'min-xisanqu-yeelight-light'
+	option dns '1'
 	option mac '04:CF:8C:8E:95:37'
 
 config host
-	option name 'yeelink-light-kc'
+	option name 'kai-xisanqu-yeelink-light'
+	option dns '1'
 	option mac '04:CF:8C:8E:B9:EF'
 
 config host
-	option name 'yeelink-light-xw'
+	option name 'ba-san-xingW21-5G'
+	option dns '1'
+	option mac '9C:5F:B0:65:72:1A'
+	list tag 'family'
+
+config host
+	option name 'ma-W2019'
+	option dns '1'
+	option mac '10:98:C3:1C:34:F9'
+	list tag 'family'
+
+config host
+	option name 'rui-iPhone'
+	option dns '1'
+	option mac '7A:59:46:34:9B:44'
+	list tag 'family'
+
+config host
+	option name 'kai-HONOR-300'
+	option dns '1'
+	option mac '24:AE:CC:B2:73:1F'
+	list tag 'family'
+
+config host
+	option name 'min-Mi-10-Ultra'
+	option dns '1'
+	option mac '7C:2A:DB:64:7F:C9'
+	list tag 'family'
+
+config host
+	option name 'rui-xisanqu-yeelink-light'
+	option dns '1'
 	option mac '04:CF:8C:8E:A5:46'
 EOF
 }
