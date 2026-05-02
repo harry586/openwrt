@@ -7353,7 +7353,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 最终纯净版：彻底清理环境，只保留纯 OpenWrt 编译流程
+# 极致精简版：锁定设备，所有插件由模板和 normal.config 决定
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7361,7 +7361,7 @@ workflow_step_hanwckf_build() {
     local config_mode="$3"
 
     log "====================================================="
-    log "🚀 启动 Hanwckf-mt798x 独立编译流程（纯净版）"
+    log "🚀 启动 Hanwckf-mt798x 独立编译流程（极致精简版）"
     log "   输入设备: $device_name"
     log "   配置模式: ${config_mode:-normal}"
     log "====================================================="
@@ -7384,7 +7384,7 @@ workflow_step_hanwckf_build() {
         exit 1
     }
 
-    # ---------- 2. 导入基础配置模板并裁剪设备 ----------
+    # ---------- 2. 导入模板 ----------
     log "⚙️ 导入 MT7981 AX3000 基础配置模板..."
     if [ -f "defconfig/mt7981-ax3000.config" ]; then
         cp "defconfig/mt7981-ax3000.config" ".config"
@@ -7393,70 +7393,20 @@ workflow_step_hanwckf_build() {
         exit 1
     fi
 
-    log "🎯 裁剪配置：仅保留设备 $hanwckf_device"
-    sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
-    sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config
-    sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
-    sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
+    # ---------- 3. 锁定唯一设备 ----------
+    log "🎯 锁定设备：$hanwckf_device"
+    sed -i '/^CONFIG_TARGET_.*_DEVICE_.*=y/d' .config
     echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
 
-    # ---------- 3. 添加通用基础包 ----------
-    log "🔌 添加通用基础包 (USB/存储/文件系统)..."
-    if [ -f "$REPO_ROOT/build-config.conf" ]; then
-        source "$REPO_ROOT/build-config.conf"
-    fi
-
-    local all_base_packages=()
-    if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
-        all_base_packages+=("${BASE_USB_PACKAGES[@]}")
-    else
-        all_base_packages+=("kmod-usb-core" "kmod-usb-common" "kmod-usb2" "kmod-usb3" "kmod-usb-storage" "kmod-scsi-core" "block-mount" "usbutils")
-    fi
-    if [ ${#EXTENDED_USB_PACKAGES[@]} -gt 0 ]; then
-        all_base_packages+=("${EXTENDED_USB_PACKAGES[@]}")
-    else
-        all_base_packages+=("kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-generic")
-    fi
-    if [ ${#FS_SUPPORT_PACKAGES[@]} -gt 0 ]; then
-        all_base_packages+=("${FS_SUPPORT_PACKAGES[@]}")
-    else
-        all_base_packages+=("kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3" "kmod-nls-utf8" "kmod-nls-cp936")
-    fi
-
-    local added_bases=0
-    for pkg in $(printf '%s\n' "${all_base_packages[@]}" | sort -u); do
-        if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config 2>/dev/null; then
-            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-            added_bases=$((added_bases + 1))
-        fi
-    done
-    log "✅ 已添加 $added_bases 个基础包"
-
-    if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
-        grep -q "^CONFIG_PACKAGE_kmod-tcp-bbr=y" .config || echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
-        log "✅ 已启用 TCP BBR"
-    fi
-
-    # ---------- 4. 应用模式插件 ----------
-    log "📌 应用模式插件: ${config_mode:-normal}"
-    local mode_config_file="$REPO_ROOT/firmware-config/config/${config_mode:-normal}.config"
+    # ---------- 4. 追加 normal 模式插件 ----------
+    log "📌 追加 normal 模式插件..."
+    local mode_config_file="$REPO_ROOT/firmware-config/config/normal.config"
     if [ -f "$mode_config_file" ]; then
-        while IFS= read -r line; do
-            [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-            if [[ "$line" =~ ^[[:space:]]*CONFIG_ ]]; then
-                line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-                local cfg_name=$(echo "$line" | cut -d'=' -f1)
-                if ! grep -q "^${cfg_name}=" .config 2>/dev/null && ! grep -q "^# ${cfg_name} is not set" .config 2>/dev/null; then
-                    echo "$line" >> .config
-                fi
-            fi
-        done < "$mode_config_file"
-        log "✅ 已应用模式配置: $(basename "$mode_config_file")"
-    else
-        log "⚠️ 未找到模式配置文件: $mode_config_file，跳过"
+        grep -E '^CONFIG_PACKAGE_' "$mode_config_file" >> .config
+        log "✅ 已追加 normal.config 中的插件"
     fi
 
-    # ---------- 5. 额外用户包 ----------
+    # ---------- 5. 添加额外用户包 ----------
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外软件包: $extra_packages"
         IFS=';' read -ra PKGS <<< "$extra_packages"
@@ -7470,119 +7420,66 @@ workflow_step_hanwckf_build() {
     # ---------- 6. 禁用插件 ----------
     local forbidden_list="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     if [ -n "$forbidden_list" ]; then
-        log "🚫 应用禁用插件列表: $forbidden_list"
-        generate_forbidden_packages_list() {
-            local base="$1"
-            local full=()
-            IFS=' ' read -ra BASE_PKGS <<< "$base"
-            for pkg in "${BASE_PKGS[@]}"; do
-                [ -z "$pkg" ] && continue
-                full+=("$pkg")
-                full+=("luci-app-${pkg}")
-                full+=("luci-i18n-${pkg}-zh-cn")
-                full+=("${pkg}-scripts")
-                case "$pkg" in
-                    "ssr-plus") full+=("shadowsocksr-libev" "shadowsocksr-libev-ssr-local" "shadowsocksr-libev-ssr-redir" "shadowsocksr-libev-ssr-tunnel") ;;
-                    "passwall") full+=("shadowsocks-libev-ss-local" "shadowsocks-libev-ss-redir" "shadowsocks-libev-ss-tunnel" "trojan" "trojan-plus" "xray-core" "v2ray-core" "v2ray-plugin" "simple-obfs") ;;
-                    "vssr") full+=("shadowsocksr-libev" "v2ray-core" "v2ray-plugin") ;;
-                    "ddns") full+=("ddns-scripts" "ddns-scripts_aliyun" "ddns-scripts_dnspod" "ddns-go") ;;
-                    "qbittorrent") full+=("qbittorrent-nox" "libtorrent-rasterbar") ;;
-                    "rclone") full+=("rclone-ng" "rclone-webui-react") ;;
-                    "filetransfer") full+=("vsftpd-alt") ;;
-                esac
-            done
-            printf '%s\n' "${full[@]}" | sort -u
-        }
-        local full_forbidden=($(generate_forbidden_packages_list "$forbidden_list"))
-        for plugin in "${full_forbidden[@]}"; do
-            [ -z "$plugin" ] && continue
-            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+        log "🚫 禁用不需要的插件: $forbidden_list"
+        IFS=' ' read -ra BASE_PKGS <<< "$forbidden_list"
+        for pkg in "${BASE_PKGS[@]}"; do
+            [ -z "$pkg" ] && continue
+            sed -i "/^CONFIG_PACKAGE_${pkg}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_luci-app-${pkg}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_luci-i18n-${pkg}-zh-cn=y/d" .config
         done
-        if [ -d "package/feeds" ]; then
-            for plugin in "${full_forbidden[@]}"; do
-                find package/feeds -type d -name "*${plugin}*" -exec rm -rf {} \; 2>/dev/null || true
-            done
-        fi
-        log "✅ 已禁用 ${#full_forbidden[@]} 个相关插件包"
     fi
 
     # ---------- 7. 集成自定义文件 ----------
-    log "📁 集成自定义文件（从 firmware-config/custom-files）..."
+    log "📁 集成自定义文件..."
     local main_script="$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
     if [ -f "$main_script" ] && [ -x "$main_script" ]; then
         "$main_script" integrate_custom_files
-    else
-        log "⚠️ 找不到或无法执行主构建脚本，跳过自定义文件集成"
     fi
 
-    # ---------- 🧹 彻底清理环境，回归纯净 ----------
-    log "🧹 彻底清理构建环境（回归纯净）..."
-    # 从源码树中移除所有不被 git 跟踪的文件，确保环境绝对纯净
-    git clean -fdx 2>/dev/null || true
-    # 恢复我们的 .config (git clean 会删掉它)
-    mv /tmp/.config.hanwckf_backup .config 2>/dev/null || true
-    log "✅ 环境已彻底清理"
-
-    # ---------- 8. 更新并安装 Feeds ----------
-    log "🔄 更新 feeds..."
+    # ---------- 8. Feeds 安装 ----------
+    log "🔄 更新并安装 feeds..."
     ./scripts/feeds update -a
     ./scripts/feeds install -a
-    ./scripts/feeds install luci-base luci-lib-base luci-i18n-base-zh-cn 2>/dev/null || true
 
     # ---------- 9. 最终配置确认 ----------
-    log "🛠️ 最终配置确认 (make defconfig)..."
+    log "🛠️ make defconfig..."
     TERM=dumb make defconfig
 
-    # ---------- 10. 预下载所有源码包 ----------
-    log "📦 预下载所有依赖源码包..."
+    # ---------- 10. 预下载 ----------
+    log "📦 预下载依赖包..."
     download_dependencies
 
-    # ---------- 11. 编译固件（纯 OpenWrt 标准流程） ----------
-    export TARGET="mediatek"
-    export SUBTARGET="mt7981"
-    log "🏗️ 开始编译固件 (TARGET=$TARGET, SUBTARGET=$SUBTARGET)..."
-    # 使用标准的 make world
+    # ---------- 11. 编译 ----------
+    log "🏗️ 开始编译..."
     if ! make -j1 V=s 2>&1 | tee build.log; then
-        local make_ret=${PIPESTATUS[0]}
-        log "❌ 编译遇到错误（make 退出码: $make_ret），正在自动分析原因..."
-        quick_error_check "$BUILD_DIR" "$TARGET" "build.log" "/tmp/quick-error-check-hanwckf.txt"
-        log "📄 错误报告已保存: /tmp/quick-error-check-hanwckf.txt"
+        log "❌ 编译失败，正在分析..."
+        quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt"
         exit 1
     fi
 
-    # ---------- 12. 检查产物并写入环境变量 ----------
-    log "🔍 检查构建产物..."
+    # ---------- 12. 检查产物 ----------
+    log "🔍 检查产物..."
+    export TARGET="mediatek"
+    export SUBTARGET="mt7981"
     local target_dir="bin/targets/$TARGET/$SUBTARGET"
     local factory_bin=$(ls "$target_dir"/*factory.bin 2>/dev/null | head -1)
     local sysupgrade_bin=$(ls "$target_dir"/*sysupgrade.bin 2>/dev/null | head -1)
 
     if [ -n "$factory_bin" ] || [ -n "$sysupgrade_bin" ]; then
         log "✅ 固件生成成功！"
-        ls -lh "$target_dir"/*factory* "$target_dir"/*sysupgrade* 2>/dev/null || true
+        ls -lh "$target_dir"/*sysupgrade* "$target_dir"/*factory* 2>/dev/null || true
 
-        if [ -f "$BUILD_DIR/build_env.sh" ]; then
-            sed -i '/^export TARGET=/d' "$BUILD_DIR/build_env.sh" 2>/dev/null || true
-            sed -i '/^export SUBTARGET=/d' "$BUILD_DIR/build_env.sh" 2>/dev/null || true
-            echo "export TARGET=\"$TARGET\"" >> "$BUILD_DIR/build_env.sh"
-            echo "export SUBTARGET=\"$SUBTARGET\"" >> "$BUILD_DIR/build_env.sh"
-        else
-            echo "#!/bin/bash" > "$BUILD_DIR/build_env.sh"
-            echo "export TARGET=\"$TARGET\"" >> "$BUILD_DIR/build_env.sh"
-            echo "export SUBTARGET=\"$SUBTARGET\"" >> "$BUILD_DIR/build_env.sh"
-        fi
-        if [ -n "$GITHUB_ENV" ]; then
-            echo "TARGET=$TARGET" >> $GITHUB_ENV
-            echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-        fi
+        echo "export TARGET=\"$TARGET\"" > "$BUILD_DIR/build_env.sh"
+        echo "export SUBTARGET=\"$SUBTARGET\"" >> "$BUILD_DIR/build_env.sh"
+        [ -n "$GITHUB_ENV" ] && echo "TARGET=$TARGET" >> $GITHUB_ENV && echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
     else
-        log "❌ 未找到任何有效固件，编译可能已失败"
+        log "❌ 未找到固件"
         exit 1
     fi
 
     log "====================================================="
-    log "✅ Hanwckf 独立编译流程结束"
+    log "✅ Hanwckf 编译完成"
     log "====================================================="
     return 0
 }
