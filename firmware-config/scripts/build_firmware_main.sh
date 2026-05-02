@@ -7353,8 +7353,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
-# 完整修复版：强制重置 libtool + 主动禁用不兼容包
+# 终极修复：物理删除不兼容包，不再干预宿主工具
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7524,35 +7523,14 @@ workflow_step_hanwckf_build() {
     ./scripts/feeds install -a
     ./scripts/feeds install luci-base luci-lib-base luci-i18n-base-zh-cn 2>/dev/null || true
 
-    # ---------- 9. 最终配置确认并强制禁用不兼容包 ----------
+    # ---------- 9. 最终配置确认 + 物理删除问题包 ----------
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
 
-    # 主动禁用已知的、会因版本问题编译失败的包
-    local build_incompatible_packages="SYSFSUTILS"
-    log "🔧 主动禁用构建不兼容包: $build_incompatible_packages"
-    for pkg in $build_incompatible_packages; do
-        sed -i "/^CONFIG_PACKAGE_${pkg}=y/d" .config
-        echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-    done
-    TERM=dumb make defconfig
-
-    # ---------- 🔧 强制修复宿主 autotools 环境 ----------
-    log "🔧 强制重置宿主 autotools 环境..."
-    sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin
-    sudo mkdir -p /usr/local/share/aclocal
-    sudo cp /usr/share/aclocal/libtool.m4 /usr/local/share/aclocal/ 2>/dev/null || true
-    export ACLOCAL_PATH="/usr/share/aclocal:/usr/local/share/aclocal:$ACLOCAL_PATH"
-
-    # 彻底清理宿主工具中的 libtool
-    rm -f staging_dir/host/bin/libtool staging_dir/host/bin/libtoolize
-    rm -rf staging_dir/host/share/libtool staging_dir/host/share/aclocal/libtool.m4
-    make tools/libtool/clean 2>/dev/null || true
-
-    make tools/autoconf/compile -j1 V=s 2>/dev/null || true
-    make tools/automake/compile -j1 V=s 2>/dev/null || true
-    make tools/libtool/compile -j1 V=s 2>/dev/null || true
-    log "✅ 宿主 autotools 环境已强制重置。"
+    log "🗑️ 物理删除已知不兼容的源码包（避免 libtool 版本冲突）..."
+    # 直接删除包目录，即使.config里有它，make也会跳过
+    rm -rf package/libs/sysfsutils
+    log "✅ 已删除 sysfsutils"
 
     # ---------- 10. 预下载所有源码包 ----------
     log "📦 预下载所有依赖源码包（使用通用下载流程）..."
