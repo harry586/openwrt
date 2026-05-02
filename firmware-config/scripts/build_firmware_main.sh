@@ -7353,7 +7353,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 极致精简版：锁定设备，所有插件由模板和 normal.config 决定
+# 回归基线版：只锁定设备，补充缺失工具，保留所有功能
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7361,7 +7361,7 @@ workflow_step_hanwckf_build() {
     local config_mode="$3"
 
     log "====================================================="
-    log "🚀 启动 Hanwckf-mt798x 独立编译流程（极致精简版）"
+    log "🚀 启动 Hanwckf-mt798x 独立编译流程（回归基线）"
     log "   输入设备: $device_name"
     log "   配置模式: ${config_mode:-normal}"
     log "====================================================="
@@ -7375,6 +7375,14 @@ workflow_step_hanwckf_build() {
     local hanwckf_device="$device_name"
     hanwckf_device=$(echo "$hanwckf_device" | sed 's/-nand$//' | sed 's/-emmc$//')
     log "   Hanwckf 内部设备名: $hanwckf_device"
+
+    # ---------- 0. 安装所有必备工具 ----------
+    log "🔧 安装编译必备工具（避免 Error 127）..."
+    sudo apt-get update -qq && sudo apt-get install -y -qq \
+        build-essential git wget curl unzip gawk gettext \
+        python3 python3-distutils file rsync which \
+        libncurses-dev zlib1g-dev libssl-dev libelf-dev \
+        bison flex cpio squashfs-tools
 
     # ---------- 1. 克隆 ----------
     log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
@@ -7393,9 +7401,17 @@ workflow_step_hanwckf_build() {
         exit 1
     fi
 
-    # ---------- 3. 锁定唯一设备 ----------
+    # ---------- 3. 锁定唯一设备（彻底清除其他目标） ----------
     log "🎯 锁定设备：$hanwckf_device"
-    sed -i '/^CONFIG_TARGET_.*_DEVICE_.*=y/d' .config
+    # 删除所有可能的 x86_64 和其他平台干扰
+    sed -i '/^CONFIG_TARGET_x86_64/d' .config
+    sed -i '/^# CONFIG_TARGET_x86_64/d' .config
+    sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config
+    sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
+    # 确保 mediatek 平台启用
+    sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
+    sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
+    # 写入唯一设备
     echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
 
     # ---------- 4. 追加 normal 模式插件 ----------
@@ -7444,7 +7460,7 @@ workflow_step_hanwckf_build() {
 
     # ---------- 9. 最终配置确认 ----------
     log "🛠️ make defconfig..."
-    TERM=dumb make defconfig
+    make defconfig
 
     # ---------- 10. 预下载 ----------
     log "📦 预下载依赖包..."
