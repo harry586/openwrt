@@ -7353,7 +7353,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 终极修复：只复制 libtool.m4，不手动编译宿主工具
+# 最终纯净版：彻底清理环境，只保留纯 OpenWrt 编译流程
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7361,7 +7361,7 @@ workflow_step_hanwckf_build() {
     local config_mode="$3"
 
     log "====================================================="
-    log "🚀 启动 Hanwckf-mt798x 独立编译流程"
+    log "🚀 启动 Hanwckf-mt798x 独立编译流程（纯净版）"
     log "   输入设备: $device_name"
     log "   配置模式: ${config_mode:-normal}"
     log "====================================================="
@@ -7517,50 +7517,37 @@ workflow_step_hanwckf_build() {
         log "⚠️ 找不到或无法执行主构建脚本，跳过自定义文件集成"
     fi
 
+    # ---------- 🧹 彻底清理环境，回归纯净 ----------
+    log "🧹 彻底清理构建环境（回归纯净）..."
+    # 从源码树中移除所有不被 git 跟踪的文件，确保环境绝对纯净
+    git clean -fdx 2>/dev/null || true
+    # 恢复我们的 .config (git clean 会删掉它)
+    mv /tmp/.config.hanwckf_backup .config 2>/dev/null || true
+    log "✅ 环境已彻底清理"
+
     # ---------- 8. 更新并安装 Feeds ----------
     log "🔄 更新 feeds..."
     ./scripts/feeds update -a
     ./scripts/feeds install -a
     ./scripts/feeds install luci-base luci-lib-base luci-i18n-base-zh-cn 2>/dev/null || true
 
-    # ---------- 🔧 关键修复：只复制 libtool.m4，不编译宿主工具 ----------
-    log "🔧 为宿主 aclocal 提供 libtool.m4 文件..."
-    # 确保系统级 libtool 已安装
-    sudo apt-get update -qq && sudo apt-get install -y -qq libtool
-    # 创建目标目录
-    mkdir -p staging_dir/host/share/aclocal
-    # 直接复制系统 libtool.m4 到宿主工具搜索路径
-    if [ -f /usr/share/aclocal/libtool.m4 ]; then
-        cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/
-        log "✅ 已复制 libtool.m4 到宿主环境"
-    else
-        log "⚠️ /usr/share/aclocal/libtool.m4 不存在，尝试其他路径..."
-        cp /usr/share/libtool/m4/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev/null || true
-        cp /usr/local/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev/null || true
-    fi
-    # 验证文件存在
-    if [ -f staging_dir/host/share/aclocal/libtool.m4 ]; then
-        log "✅ libtool.m4 已就位"
-    else
-        log "❌ 无法找到 libtool.m4，autoreconf 可能失败"
-    fi
-
     # ---------- 9. 最终配置确认 ----------
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
 
     # ---------- 10. 预下载所有源码包 ----------
-    log "📦 预下载所有依赖源码包（使用通用下载流程）..."
+    log "📦 预下载所有依赖源码包..."
     download_dependencies
 
-    # ---------- 11. 编译固件 ----------
+    # ---------- 11. 编译固件（纯 OpenWrt 标准流程） ----------
     export TARGET="mediatek"
     export SUBTARGET="mt7981"
     log "🏗️ 开始编译固件 (TARGET=$TARGET, SUBTARGET=$SUBTARGET)..."
+    # 使用标准的 make world
     if ! make -j1 V=s 2>&1 | tee build.log; then
         local make_ret=${PIPESTATUS[0]}
         log "❌ 编译遇到错误（make 退出码: $make_ret），正在自动分析原因..."
-        quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt"
+        quick_error_check "$BUILD_DIR" "$TARGET" "build.log" "/tmp/quick-error-check-hanwckf.txt"
         log "📄 错误报告已保存: /tmp/quick-error-check-hanwckf.txt"
         exit 1
     fi
