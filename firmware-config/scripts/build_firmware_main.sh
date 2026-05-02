@@ -7353,7 +7353,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 终极修复：物理删除不兼容包，不再干预宿主工具
+# 终极修复：只复制 libtool.m4，不手动编译宿主工具
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7523,14 +7523,31 @@ workflow_step_hanwckf_build() {
     ./scripts/feeds install -a
     ./scripts/feeds install luci-base luci-lib-base luci-i18n-base-zh-cn 2>/dev/null || true
 
-    # ---------- 9. 最终配置确认 + 物理删除问题包 ----------
+    # ---------- 🔧 关键修复：只复制 libtool.m4，不编译宿主工具 ----------
+    log "🔧 为宿主 aclocal 提供 libtool.m4 文件..."
+    # 确保系统级 libtool 已安装
+    sudo apt-get update -qq && sudo apt-get install -y -qq libtool
+    # 创建目标目录
+    mkdir -p staging_dir/host/share/aclocal
+    # 直接复制系统 libtool.m4 到宿主工具搜索路径
+    if [ -f /usr/share/aclocal/libtool.m4 ]; then
+        cp /usr/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/
+        log "✅ 已复制 libtool.m4 到宿主环境"
+    else
+        log "⚠️ /usr/share/aclocal/libtool.m4 不存在，尝试其他路径..."
+        cp /usr/share/libtool/m4/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev/null || true
+        cp /usr/local/share/aclocal/libtool.m4 staging_dir/host/share/aclocal/ 2>/dev/null || true
+    fi
+    # 验证文件存在
+    if [ -f staging_dir/host/share/aclocal/libtool.m4 ]; then
+        log "✅ libtool.m4 已就位"
+    else
+        log "❌ 无法找到 libtool.m4，autoreconf 可能失败"
+    fi
+
+    # ---------- 9. 最终配置确认 ----------
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
-
-    log "🗑️ 物理删除已知不兼容的源码包（避免 libtool 版本冲突）..."
-    # 直接删除包目录，即使.config里有它，make也会跳过
-    rm -rf package/libs/sysfsutils
-    log "✅ 已删除 sysfsutils"
 
     # ---------- 10. 预下载所有源码包 ----------
     log "📦 预下载所有依赖源码包（使用通用下载流程）..."
