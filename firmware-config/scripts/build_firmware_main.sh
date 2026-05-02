@@ -2691,6 +2691,36 @@ EOF
     
     log "✅ 固件名称前缀修正完成"
     log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
+
+    # ---------- MT7981 (RAX3000M) 无线稳定性修复 ----------
+    if [[ "$correct_device" == *"rax3000m"* ]] || [[ "$correct_device" == *"RAX3000M"* ]]; then
+        log "📡 为 RAX3000M (MT7981) 应用无线稳定性修复（路径一）..."
+        
+        # 1. 禁用 WED (Wi-Fi Ethernet Datapath) 硬件加速，避免 mt7915e 断连
+        cat >> .config << 'EOF'
+# 禁用 WED 硬件加速，修复无线崩溃问题
+# CONFIG_PACKAGE_kmod-mt76-wed is not set
+# CONFIG_PACKAGE_kmod-mt76x02-wed is not set
+EOF
+        # 删除可能存在的启用行，避免冲突
+        sed -i '/^CONFIG_PACKAGE_kmod-mt76.*wed=y/d' .config || true
+        sed -i 's/^CONFIG_PACKAGE_kmod-mt76-wed=y/# CONFIG_PACKAGE_kmod-mt76-wed is not set/' .config || true
+        sed -i 's/^CONFIG_PACKAGE_kmod-mt76x02-wed=y/# CONFIG_PACKAGE_kmod-mt76x02-wed is not set/' .config || true
+        
+        # 2. 强制启用必要的无线加密模块（确保 WPA3 等可用）
+        cat >> .config << 'EOF'
+CONFIG_PACKAGE_kmod-crypto-aead=y
+CONFIG_PACKAGE_kmod-crypto-ccm=y
+CONFIG_PACKAGE_kmod-crypto-gcm=y
+CONFIG_PACKAGE_kmod-crypto-sha256=y
+CONFIG_PACKAGE_kmod-crypto-sha512=y
+EOF
+        
+        log "✅ WED 已禁用，无线加密模块已补全"
+        
+        # 清理补丁可能遗留的标记文件
+        rm -f /tmp/rax3000m_wed_disable.flag
+    fi
     
     # ============================================
     # 显示已应用补丁状态（动态）
@@ -3633,56 +3663,29 @@ download_dependencies() {
         log "创建依赖包目录: dl"
     fi
     
+    # 使用 -name 条件，不加括号
     local existing_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "现有依赖包数量: $existing_deps 个"
     
-    log "开始下载依赖包（最多重试3次）..."
-    local retry=1
-    local max_retries=3
-    local download_success=0
+    log "开始下载依赖包..."
+    make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
     
-    while [ $retry -le $max_retries ] && [ $download_success -eq 0 ]; do
-        log "📥 第 $retry 次下载尝试..."
-        # 输出重定向到日志
-        make -j1 download V=s 2>&1 | tee download.log
-        local exit_code=${PIPESTATUS[0]}
-        
-        if [ $exit_code -eq 0 ]; then
-            log "✅ 下载完成（第 $retry 次尝试）"
-            download_success=1
-            break
-        fi
-        
-        log "⚠️ 下载失败（退出码: $exit_code），分析失败原因..."
-        # 提取下载失败的具体包
-        grep -E "ERROR|Failed|404|401|curl.*error|wget.*error" download.log 2>/dev/null | head -20 | while read line; do
-            log "  ❌ $line"
-        done
-        
-        if [ $retry -lt $max_retries ]; then
-            log "🔧 清理失败的下载缓存后重试..."
-            # 删除下载失败的临时文件，避免下次又跳过
-            grep -E "ERROR|Failed|404" download.log 2>/dev/null | grep -oP 'dl/[^\s]+' | sort -u | while read failed_file; do
-                [ -f "$failed_file" ] && rm -f "$failed_file"
-            done
-        fi
-        
-        retry=$((retry + 1))
-    done
-    
-    if [ $download_success -eq 0 ]; then
-        log "❌ 下载依赖包失败（已重试 $max_retries 次）"
-        # 列出仍然缺失的包
-        grep -E "ERROR|Failed|404" download.log 2>/dev/null | head -10 | while read line; do
-            log "  ❌ $line"
-        done
-        # 不直接中断，部分包可能在编译时还能下载
-        log "⚠️ 继续编译，部分包可能会在编译时下载"
-    fi
-    
+    # 使用 -name 条件，不加括号
     local downloaded_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "下载后依赖包数量: $downloaded_deps 个"
-    log "✅ 依赖包下载阶段结束"
+    
+    if [ $downloaded_deps -gt $existing_deps ]; then
+        log "✅ 成功下载了 $((downloaded_deps - existing_deps)) 个新依赖包"
+    else
+        log "ℹ️ 没有下载新的依赖包"
+    fi
+    
+    if grep -q "ERROR|Failed|404" download.log 2>/dev/null; then
+        log "⚠️ 下载过程中发现错误:"
+        grep -E "ERROR|Failed|404" download.log | head -10
+    fi
+    
+    log "✅ 依赖包下载完成"
 }
 #【build_firmware_main.sh-17-end】
 
@@ -7147,16 +7150,8 @@ quick_error_check() {
         return 1
     }
 
-    # 读取 Hanwckf 流程写入的环境文件
     if [ -f "$build_dir/build_env.sh" ]; then
-        # 读取环境文件中的变量到当前 shell
-        while IFS='=' read -r key value; do
-            if [[ "$key" == "export TARGET" ]] || [[ "$key" == "export SUBTARGET" ]] || [[ "$key" == "export SOURCE_REPO_TYPE" ]] || [[ "$key" == "export DEVICE" ]]; then
-                var_name=$(echo "$key" | sed 's/export //')
-                var_value=$(echo "$value" | sed 's/\"//g')
-                declare "$var_name=$var_value"
-            fi
-        done < "$build_dir/build_env.sh"
+        source "$build_dir/build_env.sh"
     fi
 
     {
@@ -7172,11 +7167,15 @@ quick_error_check() {
         echo "================================================================="
 
         if [ ! -f "$log_file" ]; then
-            echo "❌ 主日志文件 $log_file 不存在，无法分析。"
-            return 1
+            # 尝试从构建目录找最新日志
+            log_file=$(ls -t "$build_dir"/build_attempt_*.log "$build_dir"/build.log 2>/dev/null | head -1)
+            [ -z "$log_file" ] && {
+                echo "❌ 主日志文件不存在，无法分析。"
+                return 1
+            }
         fi
 
-        # ----- 1. 固件状态 -----
+        # 固件状态
         local full_target="${TARGET:-$target_platform}"
         local full_subtarget="${SUBTARGET:-generic}"
         local target_dir="$build_dir/bin/targets/$full_target/$full_subtarget"
@@ -7188,15 +7187,12 @@ quick_error_check() {
         fi
         echo "----------------------------------------"
 
-        # ----- 2. 精准错误定位 -----
+        # 关键错误定位
         echo ""
         echo "🔍 关键错误定位 (仅显示致命错误，忽略正常编译警告)："
-        
-        # a) 查找 make 报错的具体目标，这是最准确的错误指示
+
         local make_errors=$(grep -E 'make\[[0-9]+\]: \*\*\* \[.*\] Error' "$log_file" | tail -5)
-        # b) 查找 autoreconf 失败
         local autoreconf_errors=$(grep -E 'autoreconf.*failed|aclocal.*error|libtool.m4.*does not exist' "$log_file" | tail -5)
-        # c) 查找编译错误 (error:)
         local compile_errors=$(grep -E '^.*error:' "$log_file" | grep -v 'Wno-error' | tail -5)
 
         if [ -n "$make_errors" ]; then
@@ -7214,7 +7210,7 @@ quick_error_check() {
         fi
         echo "----------------------------------------"
 
-        # ----- 3. 结论 -----
+        # 结论
         echo ""
         echo "================================================================="
         echo "📊 非零退出原因诊断："
@@ -7223,14 +7219,13 @@ quick_error_check() {
             echo "   - 这意味着某个依赖或编译目标构建失败。"
         elif [ -n "$autoreconf_errors" ]; then
             echo "   - 构建环境缺少 'libtool'，导致 autoreconf 失败。"
-            echo "   - 报错信息: $autoreconf_errors"
         elif [ -n "$compile_errors" ]; then
             echo "   - 源代码编译失败，请查看上方 'GCC/CC1' 错误。"
         else
             echo "   - 未捕获到明确错误，可能是资源耗尽或超时。"
         fi
         echo ""
-        echo "💡 完整日志: $build_dir/build.log"
+        echo "💡 完整日志: $build_dir/build.log (或其他 attempt 日志)"
         echo "================================================================="
 
     } | tee "$output_file"
@@ -7349,162 +7344,6 @@ workflow_step30_build_summary() {
     return 0
 }
 #【build_firmware_main.sh-44-end】
-
-#【build_firmware_main.sh-45】
-# ============================================
-# Hanwckf 独立编译流程（专用于 RAX3000M）
-# 终极版：纯净环境 + 主动移除不兼容包 sysfsutils
-# ============================================
-workflow_step_hanwckf_build() {
-    local device_name="$1"
-    local extra_packages="$2"
-    local config_mode="$3"
-
-    log "====================================================="
-    log "🚀 启动 Hanwckf-mt798x 独立编译流程（终极版）"
-    log "   输入设备: $device_name"
-    log "   配置模式: ${config_mode:-normal}"
-    log "====================================================="
-
-    REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-    export REPO_ROOT
-
-    cd "$BUILD_DIR" || exit 1
-    export TERM=dumb
-
-    # 提前设置目标平台，确保错误分析可用
-    export TARGET="mediatek"
-    export SUBTARGET="mt7981"
-
-    local hanwckf_device="$device_name"
-    hanwckf_device=$(echo "$hanwckf_device" | sed 's/-nand$//' | sed 's/-emmc$//')
-    log "   Hanwckf 内部设备名: $hanwckf_device"
-
-    # ---------- 0. 安装必备工具 ----------
-    log "🔧 安装编译必备工具..."
-    sudo apt-get update -qq && sudo apt-get install -y -qq \
-        build-essential git wget curl unzip gawk gettext \
-        python3 python3-distutils file rsync \
-        libncurses-dev zlib1g-dev libssl-dev libelf-dev \
-        bison flex cpio squashfs-tools libtool libtool-bin 2>/dev/null || true
-
-    # ---------- 1. 克隆 ----------
-    log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
-    sudo rm -rf "$BUILD_DIR"/*
-    git clone --depth 1 https://github.com/hanwckf/immortalwrt-mt798x.git "$BUILD_DIR" || {
-        log "❌ 克隆失败"
-        exit 1
-    }
-
-    # ---------- 2. 导入模板 ----------
-    log "⚙️ 导入 MT7981 AX3000 基础配置模板..."
-    if [ -f "defconfig/mt7981-ax3000.config" ]; then
-        cp "defconfig/mt7981-ax3000.config" ".config"
-    else
-        log "❌ 找不到 defconfig/mt7981-ax3000.config"
-        exit 1
-    fi
-
-    # ---------- 3. 锁定唯一设备 ----------
-    log "🎯 锁定设备：$hanwckf_device"
-    sed -i '/^CONFIG_TARGET_x86_64/d' .config
-    sed -i '/^CONFIG_TARGET_mediatek_filogic_DEVICE_/d' .config
-    sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
-    sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
-    sed -i 's/^# CONFIG_TARGET_mediatek_filogic is not set/CONFIG_TARGET_mediatek_filogic=y/' .config
-    echo "CONFIG_TARGET_mediatek_filogic_DEVICE_${hanwckf_device}=y" >> .config
-
-    # ---------- 4. 追加 normal 模式插件 ----------
-    log "📌 追加 normal 模式插件..."
-    local mode_config_file="$REPO_ROOT/firmware-config/config/normal.config"
-    if [ -f "$mode_config_file" ]; then
-        grep -E '^CONFIG_PACKAGE_' "$mode_config_file" >> .config
-        log "✅ 已追加 normal.config 中的插件"
-    fi
-
-    # ---------- 5. 添加额外用户包 ----------
-    if [ -n "$extra_packages" ]; then
-        log "📦 添加额外软件包: $extra_packages"
-        IFS=';' read -ra PKGS <<< "$extra_packages"
-        for pkg in "${PKGS[@]}"; do
-            pkg=$(echo "$pkg" | xargs)
-            [ -z "$pkg" ] && continue
-            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-        done
-    fi
-
-    # ---------- 6. 禁用插件 ----------
-    local forbidden_list="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
-    if [ -n "$forbidden_list" ]; then
-        log "🚫 禁用不需要的插件: $forbidden_list"
-        IFS=' ' read -ra BASE_PKGS <<< "$forbidden_list"
-        for pkg in "${BASE_PKGS[@]}"; do
-            [ -z "$pkg" ] && continue
-            sed -i "/^CONFIG_PACKAGE_${pkg}=y/d" .config
-            sed -i "/^CONFIG_PACKAGE_luci-app-${pkg}=y/d" .config
-            sed -i "/^CONFIG_PACKAGE_luci-i18n-${pkg}-zh-cn=y/d" .config
-        done
-    fi
-
-    # ---------- 7. 集成自定义文件 ----------
-    log "📁 集成自定义文件..."
-    local main_script="$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
-    if [ -f "$main_script" ] && [ -x "$main_script" ]; then
-        "$main_script" integrate_custom_files
-    fi
-
-    # ---------- 8. Feeds 安装 ----------
-    log "🔄 更新并安装 feeds..."
-    ./scripts/feeds update -a
-    ./scripts/feeds install -a
-
-    # ---------- 9. 最终配置确认并物理移除不兼容包 ----------
-    log "🛠️ make defconfig..."
-    make defconfig
-
-    # 最终极保险：彻底删除已知不兼容的包源码，防止make去编译它
-    log "🗑️ 移除不兼容的 sysfsutils 源码，避免编译干扰..."
-    rm -rf package/libs/sysfsutils
-    # 同时在.config中彻底清除它的痕迹
-    sed -i '/SYSFSUTILS/d' .config
-    make defconfig
-
-    # ---------- 10. 预下载 ----------
-    log "📦 预下载依赖包..."
-    download_dependencies
-
-    # ---------- 11. 编译 ----------
-    log "🏗️ 开始编译..."
-    export ACLOCAL_PATH="/usr/share/aclocal:/usr/share/libtool/m4"
-    if ! make -j1 V=s 2>&1 | tee build.log; then
-        log "❌ 编译失败，正在分析..."
-        quick_error_check "$BUILD_DIR" "$TARGET" "build.log" "/tmp/quick-error-check-hanwckf.txt"
-        exit 1
-    fi
-
-    # ---------- 12. 检查产物 ----------
-    log "🔍 检查产物..."
-    local target_dir="bin/targets/$TARGET/$SUBTARGET"
-    local factory_bin=$(ls "$target_dir"/*factory.bin 2>/dev/null | head -1)
-    local sysupgrade_bin=$(ls "$target_dir"/*sysupgrade.bin 2>/dev/null | head -1)
-
-    if [ -n "$factory_bin" ] || [ -n "$sysupgrade_bin" ]; then
-        log "✅ 固件生成成功！"
-        ls -lh "$target_dir"/*sysupgrade* "$target_dir"/*factory* 2>/dev/null || true
-        echo "export TARGET=\"$TARGET\"" > "$BUILD_DIR/build_env.sh"
-        echo "export SUBTARGET=\"$SUBTARGET\"" >> "$BUILD_DIR/build_env.sh"
-        [ -n "$GITHUB_ENV" ] && echo "TARGET=$TARGET" >> $GITHUB_ENV && echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-    else
-        log "❌ 未找到固件"
-        exit 1
-    fi
-
-    log "====================================================="
-    log "✅ Hanwckf 编译完成"
-    log "====================================================="
-    return 0
-}
-#【build_firmware_main.sh-45-end】
 
 # ============================================
 # 主函数 - 命令分发
@@ -7659,17 +7498,14 @@ main() {
             workflow_step30_build_summary "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
 
-        # 新增 Hanwckf 独立编译命令
-        "step_hanwckf_build")
-            workflow_step_hanwckf_build "$arg1" "$arg2"
-            ;;
-
+#【build_firmware_main.sh-99.01】
         "execute_patches")
             execute_patches "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
         "list_patches")
             list_available_patches "$arg1" "$arg2" "$arg3"
             ;;
+#【build_firmware_main.sh-99.01-end】
 
         "search_compiler_files"|"universal_compiler_search"|"search_compiler_files_simple"|"intelligent_platform_aware_compiler_search")
             echo "⚠️ 编译器搜索命令已废弃，使用步骤09编译工具链"
@@ -7688,10 +7524,6 @@ main() {
             echo "    step17_check_usb_drivers, step20_fix_network, step21_download_deps"
             echo "    step22_integrate_custom_files, step23_pre_build_check, step25_build_firmware"
             echo "    step26_check_artifacts, step29_post_build_space_check, step30_build_summary"
-            echo ""
-            echo "  Hanwckf 独立编译: step_hanwckf_build <设备名> <额外包>"
-            echo ""
-            echo "  单独函数: integrate_custom_files"
             echo ""
             echo "  补丁管理命令:"
             echo "    execute_patches <补丁选择> <设备名> <源码类型> <分支> [自定义补丁文件]"
