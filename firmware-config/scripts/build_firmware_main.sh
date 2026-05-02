@@ -7354,7 +7354,7 @@ workflow_step30_build_summary() {
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
 # 当设备名包含 rax3000m 时自动调用，不干扰其他设备编译
-# 修复：libtool 版本冲突 + 管道退出码误判 + 自动跳过失败包
+# 完整修复版：强制重置 libtool + 主动禁用不兼容包
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7524,18 +7524,27 @@ workflow_step_hanwckf_build() {
     ./scripts/feeds install -a
     ./scripts/feeds install luci-base luci-lib-base luci-i18n-base-zh-cn 2>/dev/null || true
 
-    # ---------- 9. 最终配置确认 ----------
+    # ---------- 9. 最终配置确认并强制禁用不兼容包 ----------
     log "🛠️ 最终配置确认 (make defconfig)..."
     TERM=dumb make defconfig
 
-    # ---------- 🔧 修复宿主 autotools 环境 + 清理旧版本 libtool ----------
-    log "🔧 修复宿主 autotools 环境（解决 libtool 版本冲突）..."
+    # 主动禁用已知的、会因版本问题编译失败的包
+    local build_incompatible_packages="SYSFSUTILS"
+    log "🔧 主动禁用构建不兼容包: $build_incompatible_packages"
+    for pkg in $build_incompatible_packages; do
+        sed -i "/^CONFIG_PACKAGE_${pkg}=y/d" .config
+        echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+    done
+    TERM=dumb make defconfig
+
+    # ---------- 🔧 强制修复宿主 autotools 环境 ----------
+    log "🔧 强制重置宿主 autotools 环境..."
     sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin
     sudo mkdir -p /usr/local/share/aclocal
     sudo cp /usr/share/aclocal/libtool.m4 /usr/local/share/aclocal/ 2>/dev/null || true
     export ACLOCAL_PATH="/usr/share/aclocal:/usr/local/share/aclocal:$ACLOCAL_PATH"
 
-    # 清理宿主工具中可能残留的旧 libtool 文件
+    # 彻底清理宿主工具中的 libtool
     rm -f staging_dir/host/bin/libtool staging_dir/host/bin/libtoolize
     rm -rf staging_dir/host/share/libtool staging_dir/host/share/aclocal/libtool.m4
     make tools/libtool/clean 2>/dev/null || true
@@ -7543,62 +7552,19 @@ workflow_step_hanwckf_build() {
     make tools/autoconf/compile -j1 V=s 2>/dev/null || true
     make tools/automake/compile -j1 V=s 2>/dev/null || true
     make tools/libtool/compile -j1 V=s 2>/dev/null || true
-    log "✅ 宿主 autotools 环境已初始化。"
+    log "✅ 宿主 autotools 环境已强制重置。"
 
     # ---------- 10. 预下载所有源码包 ----------
     log "📦 预下载所有依赖源码包（使用通用下载流程）..."
     download_dependencies
 
-    # ---------- 11. 编译固件（带管道退出码修复 + 自动跳过失败包） ----------
+    # ---------- 11. 编译固件 ----------
     export TARGET="mediatek"
     export SUBTARGET="mt7981"
     log "🏗️ 开始编译固件 (TARGET=$TARGET, SUBTARGET=$SUBTARGET)..."
-
-    local build_retry=1
-    local max_build_retries=2
-    local build_success=0
-
-    while [ $build_retry -le $max_build_retries ] && [ $build_success -eq 0 ]; do
-        local attempt_log="build_attempt_${build_retry}.log"
-        log "   📦 编译尝试：第 $build_retry 次"
-        # 使用 PIPESTATUS 捕获 make 的真实退出码
-        make -j1 V=s 2>&1 | tee "$attempt_log"
+    if ! make -j1 V=s 2>&1 | tee build.log; then
         local make_ret=${PIPESTATUS[0]}
-
-        if [ $make_ret -eq 0 ]; then
-            build_success=1
-            log "   ✅ 第 $build_retry 次编译尝试成功！"
-            mv "$attempt_log" build.log
-            break
-        else
-            log "   ⚠️ 第 $build_retry 次编译尝试失败 (make 退出码: $make_ret)，正在分析原因..."
-
-            # 确保 build.log 存在
-            cat "$attempt_log" >> build.log 2>/dev/null
-            rm -f "$attempt_log"
-
-            # 提取失败包信息（依赖包路径格式 package/libs/sysfsutils）
-            local failed_pkg_name=$(grep -E 'make\[[0-9]+\]:.*compile.*Error|ERROR:.*failed to build' build.log | tail -1 | sed -n 's|.*package/\(.*\)/compile.*|\1|p' | sed 's|/| |' | awk '{print $1"/"$2}')
-            [ -z "$failed_pkg_name" ] && failed_pkg_name=$(grep -E 'ERROR:.*failed to build' build.log | tail -1 | sed 's/.*ERROR: package\/\(.*\) failed to build.*/\1/')
-
-            if [ -n "$failed_pkg_name" ] && [ $build_retry -lt $max_build_retries ]; then
-                log "   🔍 定位到编译失败的包: $failed_pkg_name"
-                log "   🔧 尝试修复：清理并禁用 $failed_pkg_name，然后重试编译..."
-                make package/${failed_pkg_name}/clean V=s 2>/dev/null || true
-                local config_name=$(echo "$failed_pkg_name" | tr '/' '_' | tr 'a-z' 'A-Z')
-                sed -i "/^CONFIG_PACKAGE_${config_name}=y/d" .config
-                echo "# CONFIG_PACKAGE_${config_name} is not set" >> .config
-                make defconfig 2>/dev/null || true
-                log "   ✅ 已禁用 $failed_pkg_name，准备重试编译。"
-            fi
-        fi
-        build_retry=$((build_retry + 1))
-    done
-
-    if [ $build_success -eq 0 ]; then
-        log "❌ 编译在重试后依然失败，正在生成最终错误报告..."
-        # 确保最终日志是 build.log
-        [ -f build.log ] || cat build_attempt_*.log >> build.log 2>/dev/null
+        log "❌ 编译遇到错误（make 退出码: $make_ret），正在自动分析原因..."
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt"
         log "📄 错误报告已保存: /tmp/quick-error-check-hanwckf.txt"
         exit 1
