@@ -7321,7 +7321,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 终极修复：系统+宿主双 libtool 保障
+# 修复：删除不兼容的 sysfsutils 源码
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7334,8 +7334,8 @@ workflow_step_hanwckf_build() {
     
     cd "$BUILD_DIR" || exit 1
     
-    # ---------- 0. 安装系统级 libtool ----------
-    log "🔧 安装系统 libtool（提供第一层 libtool.m4）..."
+    # ---------- 0. 系统级依赖 ----------
+    log "🔧 安装系统 libtool..."
     sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin 2>/dev/null || true
     
     # ---------- 1. 克隆 ----------
@@ -7351,11 +7351,15 @@ workflow_step_hanwckf_build() {
     ./scripts/feeds update -a
     ./scripts/feeds install -a
     
-    # ---------- 3. 编译宿主 libtool（第二层保障） ----------
-    log "🔧 编译宿主 libtool（提供第二层 libtool.m4）..."
+    # ---------- 3. 编译宿主 libtool ----------
+    log "🔧 编译宿主 libtool..."
     make tools/libtool/compile -j1 V=s 2>/dev/null || true
     
-    # ---------- 4. 导入配置并锁定设备 ----------
+    # ---------- 4. 删除不兼容的包 ----------
+    log "🗑️ 移除不兼容的 sysfsutils 源码..."
+    rm -rf package/libs/sysfsutils
+    
+    # ---------- 5. 导入配置并锁定设备 ----------
     log "⚙️ 导入 MT7981 AX3000 基础配置..."
     if [ -f "defconfig/mt7981-ax3000.config" ]; then
         cp "defconfig/mt7981-ax3000.config" ".config"
@@ -7370,7 +7374,7 @@ workflow_step_hanwckf_build() {
     sed -i 's/^# CONFIG_TARGET_mediatek_mt7981 is not set/CONFIG_TARGET_mediatek_mt7981=y/' .config
     echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
     
-    # ---------- 5. 追加额外包 ----------
+    # ---------- 6. 追加额外包 ----------
     if [ -n "$extra_packages" ]; then
         IFS=';' read -ra PKGS <<< "$extra_packages"
         for pkg in "${PKGS[@]}"; do
@@ -7381,18 +7385,17 @@ workflow_step_hanwckf_build() {
         log "📦 已追加额外包: $extra_packages"
     fi
     
-    # ---------- 6. 应用配置 ----------
+    # ---------- 7. 应用配置 ----------
     log "🛠️ make defconfig..."
     make defconfig
     
-    # ---------- 7. 编译固件（设置 ACLOCAL_PATH） ----------
+    # ---------- 8. 编译固件 ----------
     log "🏗️ 开始编译..."
-    # 设置 aclocal 搜索路径：系统路径 + 宿主工具路径
     export ACLOCAL_PATH="/usr/share/aclocal:$BUILD_DIR/staging_dir/host/share/aclocal"
     local make_ret=0
     make -j$(nproc) V=s 2>&1 | tee build.log || make_ret=$?
     
-    # ---------- 8. 写入环境变量 ----------
+    # ---------- 9. 写入环境变量 ----------
     local actual_subtarget="mt7981"
     [ -d "bin/targets/mediatek/filogic" ] && actual_subtarget="filogic"
     
@@ -7403,7 +7406,7 @@ workflow_step_hanwckf_build() {
     [ -n "$GITHUB_ENV" ] && echo "TARGET=mediatek" >> $GITHUB_ENV
     [ -n "$GITHUB_ENV" ] && echo "SUBTARGET=$actual_subtarget" >> $GITHUB_ENV
     
-    # ---------- 9. 检查产物 ----------
+    # ---------- 10. 检查产物 ----------
     log "🔍 检查构建产物..."
     local target_dir="bin/targets/mediatek/$actual_subtarget"
     local found_firmware=0
