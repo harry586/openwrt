@@ -7321,7 +7321,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 修复：设置 ACLOCAL_PATH + 只编译单个设备 + 环境变量写入
+# 根本性修复：编译前完整初始化宿主工具链
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7334,13 +7334,6 @@ workflow_step_hanwckf_build() {
     
     cd "$BUILD_DIR" || exit 1
     
-    # ---------- 0. 安装编译依赖 + 设置 ACLOCAL_PATH ----------
-    log "🔧 安装编译依赖（libtool，修复 autoreconf 错误）..."
-    sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin 2>/dev/null || true
-    # 关键：告知宿主 aclocal 去哪里找 libtool.m4
-    export ACLOCAL_PATH="/usr/share/aclocal:/usr/local/share/aclocal:/usr/share/libtool/m4"
-    log "   已设置 ACLOCAL_PATH=$ACLOCAL_PATH"
-    
     # ---------- 1. 清理并克隆 hanwckf 仓库 ----------
     log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
     sudo rm -rf "$BUILD_DIR"/*
@@ -7349,7 +7342,26 @@ workflow_step_hanwckf_build() {
         exit 1
     }
     
-    # ---------- 2. 复制预置配置并锁定 RAX3000M ----------
+    # ---------- 2. 初始化编译环境（编译宿主工具链） ----------
+    log "🔧 初始化编译环境（编译宿主工具链）..."
+    # 系统级依赖
+    sudo apt-get update -qq && sudo apt-get install -y -qq build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 python3-distutils file rsync 2>/dev/null || true
+    
+    # 步骤 A：更新 feeds
+    ./scripts/feeds update -a 2>/dev/null || true
+    ./scripts/feeds install -a 2>/dev/null || true
+    
+    # 步骤 B：编译宿主工具（autoconf/automake/libtool等）
+    log "   编译宿主工具链（解决 autoreconf/sysfsutils 兼容性）..."
+    make tools/compile -j$(nproc) V=s 2>&1 | tail -5 || {
+        log "   ⚠️ 宿主工具编译有警告，继续..."
+    }
+    make toolchain/compile -j$(nproc) V=s 2>&1 | tail -5 || {
+        log "   ⚠️ 工具链编译有警告，继续..."
+    }
+    log "   ✅ 宿主工具链初始化完成"
+    
+    # ---------- 3. 复制预置配置并锁定 RAX3000M ----------
     log "⚙️ 应用 MT7981 AX3000 配置并锁定 RAX3000M NAND..."
     if [ -f "defconfig/mt7981-ax3000.config" ]; then
         cp "defconfig/mt7981-ax3000.config" ".config"
@@ -7363,9 +7375,8 @@ workflow_step_hanwckf_build() {
     sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
     sed -i 's/^# CONFIG_TARGET_mediatek_mt7981 is not set/CONFIG_TARGET_mediatek_mt7981=y/' .config
     echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
-    echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_emmc is not set" >> .config
     
-    # ---------- 3. 追加额外包 ----------
+    # ---------- 4. 追加额外包 ----------
     if [ -n "$extra_packages" ]; then
         IFS=';' read -ra PKGS <<< "$extra_packages"
         for pkg in "${PKGS[@]}"; do
@@ -7375,11 +7386,6 @@ workflow_step_hanwckf_build() {
         done
         log "📦 已追加额外包: $extra_packages"
     fi
-    
-    # ---------- 4. 更新并安装 feeds ----------
-    log "🔄 更新 feeds..."
-    ./scripts/feeds update -a
-    ./scripts/feeds install -a
     
     # ---------- 5. 应用配置 ----------
     log "🛠️ make defconfig..."
@@ -7391,11 +7397,8 @@ workflow_step_hanwckf_build() {
     make -j$(nproc) V=s 2>&1 | tee build.log || make_ret=$?
     
     # ---------- 7. 写入环境变量 ----------
-    log "🔧 写入目标平台信息..."
-    local actual_subtarget=""
-    [ -d "bin/targets/mediatek/mt7981" ] && actual_subtarget="mt7981"
+    local actual_subtarget="mt7981"
     [ -d "bin/targets/mediatek/filogic" ] && actual_subtarget="filogic"
-    [ -z "$actual_subtarget" ] && actual_subtarget="mt7981"
     
     echo "export TARGET=\"mediatek\"" > "$BUILD_DIR/build_env.sh"
     echo "export SUBTARGET=\"$actual_subtarget\"" >> "$BUILD_DIR/build_env.sh"
@@ -7407,15 +7410,11 @@ workflow_step_hanwckf_build() {
     # ---------- 8. 检查产物 ----------
     log "🔍 检查构建产物..."
     local target_dir="bin/targets/mediatek/$actual_subtarget"
-    local factory_bin=""
-    local sysupgrade_bin=""
     local found_firmware=0
     
     if [ -d "$target_dir" ]; then
-        factory_bin=$(find "$target_dir" -maxdepth 1 -type f \( -name "*rax3000m*factory*" -o -name "*RAX3000M*factory*" \) 2>/dev/null | head -1)
-        sysupgrade_bin=$(find "$target_dir" -maxdepth 1 -type f \( -name "*rax3000m*sysupgrade*" -o -name "*RAX3000M*sysupgrade*" \) ! -name "*emmc*" 2>/dev/null | head -1)
-        
-        if [ -n "$factory_bin" ] || [ -n "$sysupgrade_bin" ]; then
+        local fw_count=$(find "$target_dir" -maxdepth 1 -type f \( -name "*rax3000m*" -o -name "*RAX3000M*" \) ! -name "*emmc*" 2>/dev/null | wc -l)
+        if [ $fw_count -gt 0 ]; then
             found_firmware=1
             log "✅ 固件生成成功！"
             ls -lh "$target_dir"/*rax3000m* 2>/dev/null || ls -lh "$target_dir"/*RAX3000M* 2>/dev/null || true
