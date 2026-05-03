@@ -7321,7 +7321,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 修复：只编译 RAX3000M NAND 设备，避免生成 1.22GB 全平台固件
+# 修复：设置 ACLOCAL_PATH + 只编译单个设备 + 环境变量写入
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7334,9 +7334,12 @@ workflow_step_hanwckf_build() {
     
     cd "$BUILD_DIR" || exit 1
     
-    # ---------- 0. 安装缺失的编译依赖 ----------
+    # ---------- 0. 安装编译依赖 + 设置 ACLOCAL_PATH ----------
     log "🔧 安装编译依赖（libtool，修复 autoreconf 错误）..."
     sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin 2>/dev/null || true
+    # 关键：告知宿主 aclocal 去哪里找 libtool.m4
+    export ACLOCAL_PATH="/usr/share/aclocal:/usr/local/share/aclocal:/usr/share/libtool/m4"
+    log "   已设置 ACLOCAL_PATH=$ACLOCAL_PATH"
     
     # ---------- 1. 清理并克隆 hanwckf 仓库 ----------
     log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
@@ -7355,20 +7358,12 @@ workflow_step_hanwckf_build() {
         exit 1
     fi
     
-    # 关键：删除所有其他设备的配置，只保留 cmcc_rax3000m
     log "🎯 锁定设备：cmcc_rax3000m"
-    # 删除所有设备选择
     sed -i '/^CONFIG_TARGET_mediatek_mt7981_DEVICE_/d' .config
-    # 确保平台和子目标启用
     sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
     sed -i 's/^# CONFIG_TARGET_mediatek_mt7981 is not set/CONFIG_TARGET_mediatek_mt7981=y/' .config
-    # 添加唯一设备
     echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
-    # 也禁用 NAND 版本的 eMMC 变体（如果有）
     echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_emmc is not set" >> .config
-    echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_nand_ubootmod is not set" >> .config
-    # 确保所有其他设备都被禁用
-    sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
     
     # ---------- 3. 追加额外包 ----------
     if [ -n "$extra_packages" ]; then
@@ -7391,32 +7386,23 @@ workflow_step_hanwckf_build() {
     make defconfig
     
     # ---------- 6. 编译固件 ----------
-    log "🏗️ 开始编译（日志保存到 build.log）..."
+    log "🏗️ 开始编译..."
     local make_ret=0
     make -j$(nproc) V=s 2>&1 | tee build.log || make_ret=$?
     
-    # ---------- 7. 写入环境变量供后续步骤使用 ----------
-    log "🔧 写入目标平台信息到环境文件..."
+    # ---------- 7. 写入环境变量 ----------
+    log "🔧 写入目标平台信息..."
     local actual_subtarget=""
-    # 自动检测子目标路径
-    if [ -d "bin/targets/mediatek/mt7981" ]; then
-        actual_subtarget="mt7981"
-    elif [ -d "bin/targets/mediatek/filogic" ]; then
-        actual_subtarget="filogic"
-    else
-        actual_subtarget="mt7981"
-    fi
+    [ -d "bin/targets/mediatek/mt7981" ] && actual_subtarget="mt7981"
+    [ -d "bin/targets/mediatek/filogic" ] && actual_subtarget="filogic"
+    [ -z "$actual_subtarget" ] && actual_subtarget="mt7981"
     
     echo "export TARGET=\"mediatek\"" > "$BUILD_DIR/build_env.sh"
     echo "export SUBTARGET=\"$actual_subtarget\"" >> "$BUILD_DIR/build_env.sh"
     echo "export DEVICE=\"$device_name\"" >> "$BUILD_DIR/build_env.sh"
     echo "export SOURCE_REPO_TYPE=\"hanwckf\"" >> "$BUILD_DIR/build_env.sh"
-    if [ -n "$GITHUB_ENV" ]; then
-        echo "TARGET=mediatek" >> $GITHUB_ENV
-        echo "SUBTARGET=$actual_subtarget" >> $GITHUB_ENV
-        echo "DEVICE=$device_name" >> $GITHUB_ENV
-    fi
-    log "   目标: mediatek/$actual_subtarget"
+    [ -n "$GITHUB_ENV" ] && echo "TARGET=mediatek" >> $GITHUB_ENV
+    [ -n "$GITHUB_ENV" ] && echo "SUBTARGET=$actual_subtarget" >> $GITHUB_ENV
     
     # ---------- 8. 检查产物 ----------
     log "🔍 检查构建产物..."
@@ -7432,25 +7418,18 @@ workflow_step_hanwckf_build() {
         if [ -n "$factory_bin" ] || [ -n "$sysupgrade_bin" ]; then
             found_firmware=1
             log "✅ 固件生成成功！"
-            log "📁 固件目录: $target_dir"
             ls -lh "$target_dir"/*rax3000m* 2>/dev/null || ls -lh "$target_dir"/*RAX3000M* 2>/dev/null || true
         fi
     fi
     
     if [ $found_firmware -eq 0 ]; then
-        log "❌ 未找到 RAX3000M 固件文件，编译失败。"
-        if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
-            log "📋 目录内容:"
-            ls -lh "$target_dir" 2>/dev/null | head -20 || log "   (空目录)"
-        fi
+        log "❌ 未找到 RAX3000M 固件文件"
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
         exit 1
     fi
     
-    # 有非零退出码但固件存在，只警告
     if [ $make_ret -ne 0 ]; then
-        log "⚠️ make 返回非零退出码 ($make_ret)，但固件已成功生成。"
-        log "   某些非核心包编译失败（如 libtool 相关），不影响固件使用。"
+        log "⚠️ make 返回非零 ($make_ret)，但固件已生成。"
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
     fi
     
