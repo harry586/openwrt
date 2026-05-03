@@ -2691,36 +2691,6 @@ EOF
     
     log "✅ 固件名称前缀修正完成"
     log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
-
-    # ---------- MT7981 (RAX3000M) 无线稳定性修复 ----------
-    if [[ "$correct_device" == *"rax3000m"* ]] || [[ "$correct_device" == *"RAX3000M"* ]]; then
-        log "📡 为 RAX3000M (MT7981) 应用无线稳定性修复（路径一）..."
-        
-        # 1. 禁用 WED (Wi-Fi Ethernet Datapath) 硬件加速，避免 mt7915e 断连
-        cat >> .config << 'EOF'
-# 禁用 WED 硬件加速，修复无线崩溃问题
-# CONFIG_PACKAGE_kmod-mt76-wed is not set
-# CONFIG_PACKAGE_kmod-mt76x02-wed is not set
-EOF
-        # 删除可能存在的启用行，避免冲突
-        sed -i '/^CONFIG_PACKAGE_kmod-mt76.*wed=y/d' .config || true
-        sed -i 's/^CONFIG_PACKAGE_kmod-mt76-wed=y/# CONFIG_PACKAGE_kmod-mt76-wed is not set/' .config || true
-        sed -i 's/^CONFIG_PACKAGE_kmod-mt76x02-wed=y/# CONFIG_PACKAGE_kmod-mt76x02-wed is not set/' .config || true
-        
-        # 2. 强制启用必要的无线加密模块（确保 WPA3 等可用）
-        cat >> .config << 'EOF'
-CONFIG_PACKAGE_kmod-crypto-aead=y
-CONFIG_PACKAGE_kmod-crypto-ccm=y
-CONFIG_PACKAGE_kmod-crypto-gcm=y
-CONFIG_PACKAGE_kmod-crypto-sha256=y
-CONFIG_PACKAGE_kmod-crypto-sha512=y
-EOF
-        
-        log "✅ WED 已禁用，无线加密模块已补全"
-        
-        # 清理补丁可能遗留的标记文件
-        rm -f /tmp/rax3000m_wed_disable.flag
-    fi
     
     # ============================================
     # 显示已应用补丁状态（动态）
@@ -7137,7 +7107,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 增强版（精准扼要定位非零原因）
+# 全流程错误检查函数 - 精简精准版（快速定位非零原因）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7345,6 +7315,93 @@ workflow_step30_build_summary() {
 }
 #【build_firmware_main.sh-44-end】
 
+#【build_firmware_main.sh-45】
+# ============================================
+# Hanwckf 独立编译流程（专用于 RAX3000M）
+# 修复：非零退出时检查固件，存在则成功并输出错误报告
+# ============================================
+workflow_step_hanwckf_build() {
+    local device_name="$1"
+    local extra_packages="$2"
+    
+    log "====================================================="
+    log "🚀 启动 Hanwckf-mt798x 独立编译流程"
+    log "   设备: $device_name"
+    log "====================================================="
+    
+    cd "$BUILD_DIR" || exit 1
+    
+    # ---------- 1. 清理并克隆 hanwckf 仓库 ----------
+    log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
+    sudo rm -rf "$BUILD_DIR"/*
+    git clone --depth 1 https://github.com/hanwckf/immortalwrt-mt798x.git "$BUILD_DIR" || {
+        log "❌ 克隆失败"
+        exit 1
+    }
+    
+    # ---------- 2. 复制预置配置 ----------
+    log "⚙️ 应用 MT7981 AX3000 配置..."
+    if [ -f "defconfig/mt7981-ax3000.config" ]; then
+        cp "defconfig/mt7981-ax3000.config" ".config"
+    else
+        log "❌ 找不到 defconfig/mt7981-ax3000.config"
+        exit 1
+    fi
+    
+    # ---------- 3. 追加额外包 ----------
+    if [ -n "$extra_packages" ]; then
+        IFS=';' read -ra PKGS <<< "$extra_packages"
+        for pkg in "${PKGS[@]}"; do
+            pkg=$(echo "$pkg" | xargs)
+            [ -z "$pkg" ] && continue
+            echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+        done
+        log "📦 已追加额外包: $extra_packages"
+    fi
+    
+    # ---------- 4. 更新并安装 feeds ----------
+    log "🔄 更新 feeds..."
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
+    
+    # ---------- 5. 应用配置 ----------
+    log "🛠️ make defconfig..."
+    make defconfig
+    
+    # ---------- 6. 编译固件（捕获非零退出） ----------
+    log "🏗️ 开始编译..."
+    local make_ret=0
+    make -j$(nproc) V=s || make_ret=$?
+    
+    # ---------- 7. 检查产物，决定最终状态 ----------
+    log "🔍 检查构建产物..."
+    local target_dir="bin/targets/mediatek/filogic"
+    local factory_bin=$(ls "$target_dir"/*factory.bin 2>/dev/null | head -1)
+    local sysupgrade_bin=$(ls "$target_dir"/*sysupgrade.bin 2>/dev/null | head -1)
+    
+    if [ -n "$factory_bin" ] || [ -n "$sysupgrade_bin" ]; then
+        if [ $make_ret -ne 0 ]; then
+            log "⚠️ make 返回非零 ($make_ret)，但固件已生成。编译过程中部分包可能失败，请查看错误报告。"
+            # 运行增强版错误分析
+            quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
+        else
+            log "✅ 编译成功"
+        fi
+        log "✅ 固件目录: $target_dir"
+        ls -lh "$target_dir"/*.bin 2>/dev/null || true
+    else
+        log "❌ 未找到固件文件，编译失败。"
+        quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
+        exit 1
+    fi
+    
+    log "====================================================="
+    log "✅ Hanwckf 独立编译流程结束"
+    log "====================================================="
+    return 0
+}
+#【build_firmware_main.sh-45-end】
+
 # ============================================
 # 主函数 - 命令分发
 # ============================================
@@ -7498,14 +7555,17 @@ main() {
             workflow_step30_build_summary "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
 
-#【build_firmware_main.sh-99.01】
+        # 新增 Hanwckf 独立编译命令
+        "step_hanwckf_build")
+            workflow_step_hanwckf_build "$arg1" "$arg2"
+            ;;
+
         "execute_patches")
             execute_patches "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
         "list_patches")
             list_available_patches "$arg1" "$arg2" "$arg3"
             ;;
-#【build_firmware_main.sh-99.01-end】
 
         "search_compiler_files"|"universal_compiler_search"|"search_compiler_files_simple"|"intelligent_platform_aware_compiler_search")
             echo "⚠️ 编译器搜索命令已废弃，使用步骤09编译工具链"
@@ -7524,6 +7584,8 @@ main() {
             echo "    step17_check_usb_drivers, step20_fix_network, step21_download_deps"
             echo "    step22_integrate_custom_files, step23_pre_build_check, step25_build_firmware"
             echo "    step26_check_artifacts, step29_post_build_space_check, step30_build_summary"
+            echo ""
+            echo "  Hanwckf 独立编译: step_hanwckf_build <设备名> <额外包>"
             echo ""
             echo "  补丁管理命令:"
             echo "    execute_patches <补丁选择> <设备名> <源码类型> <分支> [自定义补丁文件]"
