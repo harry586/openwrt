@@ -7321,7 +7321,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 根本性修复：编译前完整初始化宿主工具链
+# 终极修复：系统+宿主双 libtool 保障
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7334,7 +7334,11 @@ workflow_step_hanwckf_build() {
     
     cd "$BUILD_DIR" || exit 1
     
-    # ---------- 1. 清理并克隆 hanwckf 仓库 ----------
+    # ---------- 0. 安装系统级 libtool ----------
+    log "🔧 安装系统 libtool（提供第一层 libtool.m4）..."
+    sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin 2>/dev/null || true
+    
+    # ---------- 1. 克隆 ----------
     log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
     sudo rm -rf "$BUILD_DIR"/*
     git clone --depth 1 https://github.com/hanwckf/immortalwrt-mt798x.git "$BUILD_DIR" || {
@@ -7342,27 +7346,17 @@ workflow_step_hanwckf_build() {
         exit 1
     }
     
-    # ---------- 2. 初始化编译环境（编译宿主工具链） ----------
-    log "🔧 初始化编译环境（编译宿主工具链）..."
-    # 系统级依赖
-    sudo apt-get update -qq && sudo apt-get install -y -qq build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc wget unzip python3 python3-distutils file rsync 2>/dev/null || true
+    # ---------- 2. 更新 feeds ----------
+    log "🔄 更新 feeds..."
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
     
-    # 步骤 A：更新 feeds
-    ./scripts/feeds update -a 2>/dev/null || true
-    ./scripts/feeds install -a 2>/dev/null || true
+    # ---------- 3. 编译宿主 libtool（第二层保障） ----------
+    log "🔧 编译宿主 libtool（提供第二层 libtool.m4）..."
+    make tools/libtool/compile -j1 V=s 2>/dev/null || true
     
-    # 步骤 B：编译宿主工具（autoconf/automake/libtool等）
-    log "   编译宿主工具链（解决 autoreconf/sysfsutils 兼容性）..."
-    make tools/compile -j$(nproc) V=s 2>&1 | tail -5 || {
-        log "   ⚠️ 宿主工具编译有警告，继续..."
-    }
-    make toolchain/compile -j$(nproc) V=s 2>&1 | tail -5 || {
-        log "   ⚠️ 工具链编译有警告，继续..."
-    }
-    log "   ✅ 宿主工具链初始化完成"
-    
-    # ---------- 3. 复制预置配置并锁定 RAX3000M ----------
-    log "⚙️ 应用 MT7981 AX3000 配置并锁定 RAX3000M NAND..."
+    # ---------- 4. 导入配置并锁定设备 ----------
+    log "⚙️ 导入 MT7981 AX3000 基础配置..."
     if [ -f "defconfig/mt7981-ax3000.config" ]; then
         cp "defconfig/mt7981-ax3000.config" ".config"
     else
@@ -7370,13 +7364,13 @@ workflow_step_hanwckf_build() {
         exit 1
     fi
     
-    log "🎯 锁定设备：cmcc_rax3000m"
+    log "🎯 锁定唯一设备：cmcc_rax3000m"
     sed -i '/^CONFIG_TARGET_mediatek_mt7981_DEVICE_/d' .config
     sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
     sed -i 's/^# CONFIG_TARGET_mediatek_mt7981 is not set/CONFIG_TARGET_mediatek_mt7981=y/' .config
     echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
     
-    # ---------- 4. 追加额外包 ----------
+    # ---------- 5. 追加额外包 ----------
     if [ -n "$extra_packages" ]; then
         IFS=';' read -ra PKGS <<< "$extra_packages"
         for pkg in "${PKGS[@]}"; do
@@ -7387,16 +7381,18 @@ workflow_step_hanwckf_build() {
         log "📦 已追加额外包: $extra_packages"
     fi
     
-    # ---------- 5. 应用配置 ----------
+    # ---------- 6. 应用配置 ----------
     log "🛠️ make defconfig..."
     make defconfig
     
-    # ---------- 6. 编译固件 ----------
+    # ---------- 7. 编译固件（设置 ACLOCAL_PATH） ----------
     log "🏗️ 开始编译..."
+    # 设置 aclocal 搜索路径：系统路径 + 宿主工具路径
+    export ACLOCAL_PATH="/usr/share/aclocal:$BUILD_DIR/staging_dir/host/share/aclocal"
     local make_ret=0
     make -j$(nproc) V=s 2>&1 | tee build.log || make_ret=$?
     
-    # ---------- 7. 写入环境变量 ----------
+    # ---------- 8. 写入环境变量 ----------
     local actual_subtarget="mt7981"
     [ -d "bin/targets/mediatek/filogic" ] && actual_subtarget="filogic"
     
@@ -7407,7 +7403,7 @@ workflow_step_hanwckf_build() {
     [ -n "$GITHUB_ENV" ] && echo "TARGET=mediatek" >> $GITHUB_ENV
     [ -n "$GITHUB_ENV" ] && echo "SUBTARGET=$actual_subtarget" >> $GITHUB_ENV
     
-    # ---------- 8. 检查产物 ----------
+    # ---------- 9. 检查产物 ----------
     log "🔍 检查构建产物..."
     local target_dir="bin/targets/mediatek/$actual_subtarget"
     local found_firmware=0
