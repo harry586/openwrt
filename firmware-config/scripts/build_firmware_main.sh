@@ -7318,7 +7318,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 修复：非零退出时检查固件，存在则成功并输出错误报告
+# 修复：自动检测正确的子目标路径 + 编译日志保存
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7368,31 +7368,65 @@ workflow_step_hanwckf_build() {
     log "🛠️ make defconfig..."
     make defconfig
     
-    # ---------- 6. 编译固件（捕获非零退出） ----------
-    log "🏗️ 开始编译..."
+    # ---------- 6. 编译固件（输出重定向到 build.log） ----------
+    log "🏗️ 开始编译（日志保存到 build.log）..."
     local make_ret=0
-    make -j$(nproc) V=s || make_ret=$?
+    make -j$(nproc) V=s 2>&1 | tee build.log || make_ret=$?
     
-    # ---------- 7. 检查产物，决定最终状态 ----------
-    log "🔍 检查构建产物..."
-    local target_dir="bin/targets/mediatek/filogic"
-    local factory_bin=$(ls "$target_dir"/*factory.bin 2>/dev/null | head -1)
-    local sysupgrade_bin=$(ls "$target_dir"/*sysupgrade.bin 2>/dev/null | head -1)
-    
-    if [ -n "$factory_bin" ] || [ -n "$sysupgrade_bin" ]; then
-        if [ $make_ret -ne 0 ]; then
-            log "⚠️ make 返回非零 ($make_ret)，但固件已生成。编译过程中部分包可能失败，请查看错误报告。"
-            # 运行增强版错误分析
-            quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
-        else
-            log "✅ 编译成功"
-        fi
-        log "✅ 固件目录: $target_dir"
-        ls -lh "$target_dir"/*.bin 2>/dev/null || true
+    # ---------- 7. 自动检测正确的子目标路径 ----------
+    log "🔍 检测固件输出目录..."
+    local target_dir=""
+    # 优先检测 mt7981，其次 filogic（兼容不同版本）
+    if [ -d "bin/targets/mediatek/mt7981" ]; then
+        target_dir="bin/targets/mediatek/mt7981"
+        log "   检测到子目标路径: mediatek/mt7981"
+    elif [ -d "bin/targets/mediatek/filogic" ]; then
+        target_dir="bin/targets/mediatek/filogic"
+        log "   检测到子目标路径: mediatek/filogic"
     else
-        log "❌ 未找到固件文件，编译失败。"
+        # 自动查找任意子目录
+        target_dir=$(find bin/targets/mediatek -maxdepth 1 -type d -name "*" ! -path "bin/targets/mediatek" 2>/dev/null | head -1)
+        if [ -n "$target_dir" ]; then
+            log "   自动检测到: $target_dir"
+        fi
+    fi
+    
+    # ---------- 8. 检查产物 ----------
+    log "🔍 检查构建产物..."
+    local factory_bin=""
+    local sysupgrade_bin=""
+    local found_firmware=0
+    
+    if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
+        # 查找所有 RAX3000M 相关的固件文件
+        factory_bin=$(find "$target_dir" -maxdepth 1 -type f \( -name "*rax3000m*factory*" -o -name "*RAX3000M*factory*" \) | head -1)
+        sysupgrade_bin=$(find "$target_dir" -maxdepth 1 -type f \( -name "*rax3000m*sysupgrade*" -o -name "*RAX3000M*sysupgrade*" \) ! -name "*emmc*" | head -1)
+        
+        if [ -n "$factory_bin" ] || [ -n "$sysupgrade_bin" ]; then
+            found_firmware=1
+            log "✅ 固件生成成功！"
+            log "📁 固件目录: $target_dir"
+            ls -lh "$target_dir"/*rax3000m* 2>/dev/null || ls -lh "$target_dir"/*RAX3000M* 2>/dev/null || true
+        fi
+    fi
+    
+    if [ $found_firmware -eq 0 ]; then
+        log "❌ 未找到 RAX3000M 固件文件，可能编译失败。"
+        # 尝试列出目录内容辅助排查
+        if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
+            log "📋 目录内容:"
+            ls -lh "$target_dir"/*.bin 2>/dev/null | head -20 || log "   (无 .bin 文件)"
+        fi
+        # 运行错误分析
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
         exit 1
+    fi
+    
+    # 如果有非零退出码但固件存在，只警告不中断
+    if [ $make_ret -ne 0 ]; then
+        log "⚠️ make 返回非零退出码 ($make_ret)，但固件已成功生成。"
+        log "   部分软件包可能编译失败，请查看错误报告。"
+        quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
     fi
     
     log "====================================================="
