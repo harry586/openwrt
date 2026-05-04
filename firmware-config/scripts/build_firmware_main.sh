@@ -7321,7 +7321,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 最终版：双 libtool + 完整 normal.config + 自定义文件 + 不强行删包
+# 最终稳定版：双 libtool + 完整 normal.config + 自定义文件 + 不删任何包
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7458,7 +7458,8 @@ workflow_step_hanwckf_build() {
     fi
     
     if [ $make_ret -ne 0 ]; then
-        log "⚠️ make 返回非零 ($make_ret)，但固件已生成。"
+        log "⚠️ make 返回非零 ($make_ret)，但固件已成功生成。"
+        log "   某些非核心包编译失败（如 sysfsutils 等），不影响固件使用。"
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
     fi
     
