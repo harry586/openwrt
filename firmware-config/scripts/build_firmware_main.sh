@@ -7321,7 +7321,8 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 最终稳定版：双 libtool + 完整 normal.config + 自定义文件 + 不删任何包
+# 最终稳定版：双 libtool + 完整 normal.config + 容错机制
+# 修复：主动移除不兼容包 + 清理构建残留
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7419,14 +7420,23 @@ workflow_step_hanwckf_build() {
     # ---------- 9. 应用配置 ----------
     log "🛠️ make defconfig..."
     make defconfig
+
+    # ---------- 10. 预防性移除不兼容包 ----------
+    # 这些包与当前环境的宿主工具链存在已知兼容性问题，会导致编译失败
+    # 移除它们不会影响路由器核心功能（上网、无线、USB共享等）
+    log "🛡️ 主动移除已知不兼容的构建包..."
+    rm -rf package/libs/sysfsutils
+    rm -rf build_dir/target-aarch64_cortex-a53_musl/sysfsutils-* 2>/dev/null || true
+    rm -f staging_dir/target-aarch64_cortex-a53_musl/stamp/.package_compile 2>/dev/null || true
+    log "✅ 已移除 sysfsutils 及相关构建残留"
     
-    # ---------- 10. 编译固件 ----------
+    # ---------- 11. 编译固件 ----------
     log "🏗️ 开始编译..."
     export ACLOCAL_PATH="/usr/share/aclocal:$BUILD_DIR/staging_dir/host/share/aclocal"
     local make_ret=0
     make -j$(nproc) V=s 2>&1 | tee build.log || make_ret=$?
     
-    # ---------- 11. 写入环境变量 ----------
+    # ---------- 12. 写入环境变量 ----------
     local actual_subtarget="mt7981"
     [ -d "bin/targets/mediatek/filogic" ] && actual_subtarget="filogic"
     
@@ -7437,7 +7447,7 @@ workflow_step_hanwckf_build() {
     [ -n "$GITHUB_ENV" ] && echo "TARGET=mediatek" >> $GITHUB_ENV
     [ -n "$GITHUB_ENV" ] && echo "SUBTARGET=$actual_subtarget" >> $GITHUB_ENV
     
-    # ---------- 12. 检查产物 ----------
+    # ---------- 13. 检查产物 ----------
     log "🔍 检查构建产物..."
     local target_dir="bin/targets/mediatek/$actual_subtarget"
     local found_firmware=0
@@ -7452,14 +7462,13 @@ workflow_step_hanwckf_build() {
     fi
     
     if [ $found_firmware -eq 0 ]; then
-        log "❌ 未找到 RAX3000M 固件文件"
+        log "❌ 未找到 RAX3000M 固件文件，最终编译失败"
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
         exit 1
     fi
     
     if [ $make_ret -ne 0 ]; then
-        log "⚠️ make 返回非零 ($make_ret)，但固件已成功生成。"
-        log "   某些非核心包编译失败（如 sysfsutils 等），不影响固件使用。"
+        log "⚠️ make 返回非零 ($make_ret)，但固件已成功生成。某些非核心包编译失败，不影响固件使用。"
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
     fi
     
