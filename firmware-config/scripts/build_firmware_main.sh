@@ -332,7 +332,16 @@ initialize_build_env() {
 
     log "=== 版本选择 ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
-    
+
+    # ============================================
+    # Hanwckf 特殊处理：immortalwrt + rax3000m → 自动切换为 Hanwckf 源码
+    # ============================================
+    local is_rax3000m_hanwckf=0
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ] && echo "$device_name" | grep -qi "rax3000m"; then
+        is_rax3000m_hanwckf=1
+        log "🚀 检测到 RAX3000M 设备，自动切换为 Hanwckf 源码 (immortalwrt-mt798x)"
+    fi
+
     case "$SOURCE_REPO_TYPE" in
         "lede")
             SELECTED_REPO_URL="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
@@ -353,16 +362,22 @@ initialize_build_env() {
             log "✅ OpenWrt官方源码选择: $SELECTED_BRANCH"
             ;;
         "immortalwrt")
-            SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
-            case "$version_selection" in
-                "24.10") SELECTED_BRANCH="openwrt-24.10" ;;
-                "23.05") SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}" ;;
-                "21.02") SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}" ;;
-                "18.06") SELECTED_BRANCH="openwrt-18.06" ;;
-                "master") SELECTED_BRANCH="master" ;;
-                *) SELECTED_BRANCH="openwrt-23.05" ;;
-            esac
-            log "✅ ImmortalWrt源码选择: $SELECTED_BRANCH"
+            if [ $is_rax3000m_hanwckf -eq 1 ]; then
+                SELECTED_REPO_URL="https://github.com/hanwckf/immortalwrt-mt798x.git"
+                SELECTED_BRANCH="master"
+                log "✅ Hanwckf 源码选择 (RAX3000M): master"
+            else
+                SELECTED_REPO_URL="${IMMORTALWRT_URL:-https://github.com/immortalwrt/immortalwrt.git}"
+                case "$version_selection" in
+                    "24.10") SELECTED_BRANCH="openwrt-24.10" ;;
+                    "23.05") SELECTED_BRANCH="${BRANCH_23_05:-openwrt-23.05}" ;;
+                    "21.02") SELECTED_BRANCH="${BRANCH_21_02:-openwrt-21.02}" ;;
+                    "18.06") SELECTED_BRANCH="openwrt-18.06" ;;
+                    "master") SELECTED_BRANCH="master" ;;
+                    *) SELECTED_BRANCH="openwrt-23.05" ;;
+                esac
+                log "✅ ImmortalWrt源码选择: $SELECTED_BRANCH"
+            fi
             ;;
         *)
             log "❌ 未知的源码仓库类型: $SOURCE_REPO_TYPE"
@@ -421,6 +436,14 @@ initialize_build_env() {
     else
         log "❌ support.sh不存在且未手动指定平台信息"
         handle_error "无法确定平台信息"
+    fi
+
+    # Hanwckf 模式强制修正平台信息
+    if [ $is_rax3000m_hanwckf -eq 1 ]; then
+        TARGET="mediatek"
+        SUBTARGET="mt7981"
+        DEVICE="cmcc_rax3000m"
+        log "🔧 Hanwckf 模式：强制 TARGET=mediatek, SUBTARGET=mt7981, DEVICE=cmcc_rax3000m"
     fi
 
     log "🔧 设备: $device_name (输入)"
@@ -744,6 +767,12 @@ add_turboacc_support() {
     
     log "=== 添加 TurboACC 支持 ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
+    
+    # 特殊处理：Hanwckf 模式（RAX3000M + immortalwrt）不添加 TurboACC
+    if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
+        log "ℹ️ 检测到 Hanwckf 源码 (RAX3000M)，跳过 TurboACC 添加（已集成 MTK 硬件加速）"
+        return 0
+    fi
     
     # ============================================
     # 彻底修复所有下载源
@@ -1450,6 +1479,130 @@ generate_config() {
     
     local correct_device="$DEVICE"
     log "🔧 使用传入的设备名: $correct_device"
+    
+    # ============================================
+    # Hanwckf 特殊处理：immortalwrt + rax3000m → 使用预置配置
+    # ============================================
+    local IS_HANWCKF_RAX3000M=0
+    if echo "$correct_device" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
+        IS_HANWCKF_RAX3000M=1
+    fi
+    
+    if [ $IS_HANWCKF_RAX3000M -eq 1 ]; then
+        log "🔧 ===== Hanwckf 源码特殊配置流程 ====="
+        
+        if [ -f "defconfig/mt7981-ax3000.config" ]; then
+            cp "defconfig/mt7981-ax3000.config" ".config"
+            log "✅ 已应用 Hanwckf 预置配置: defconfig/mt7981-ax3000.config"
+        
+            # 锁定设备为 cmcc_rax3000m（NAND）
+            sed -i '/^CONFIG_TARGET_mediatek_mt7981_DEVICE_/d' .config
+            echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
+            echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_emmc is not set" >> .config
+            echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_nand_ubootmod is not set" >> .config
+            make defconfig > /tmp/build-logs/defconfig_hanwckf.log 2>&1
+            log "✅ 已锁定设备: cmcc_rax3000m (NAND)"
+            
+            # 设置正确的平台变量，后续步骤引用
+            TARGET="mediatek"
+            SUBTARGET="mt7981"
+            actual_subtarget="mt7981"
+            correct_device="cmcc_rax3000m"
+            DEVICE="cmcc_rax3000m"
+            device_config="CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y"
+        else
+            log "❌ 未找到 defconfig/mt7981-ax3000.config，无法生成 Hanwckf 配置"
+            handle_error "Hanwckf 预置配置缺失"
+        fi
+        
+        # 添加额外包
+        if [ -n "$extra_packages" ]; then
+            log "📦 添加额外包: $extra_packages"
+            IFS=',' read -ra PKG_ARRAY <<< "$extra_packages"
+            for pkg in "${PKG_ARRAY[@]}"; do
+                pkg=$(echo "$pkg" | xargs)
+                [ -z "$pkg" ] && continue
+                echo "CONFIG_PACKAGE_$pkg=y" >> .config
+            done
+        fi
+        
+        # TCP BBR
+        if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
+            echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
+            echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
+            log "✅ TCP BBR已启用"
+        fi
+        
+        # TurboACC 在 Hanwckf 模式下不添加（MTK 闭源驱动已包含硬件加速）
+        log "ℹ️ Hanwckf 模式：跳过 TurboACC（已集成 MTK 硬件加速）"
+        
+        # ath10k-ct 强制（不适用于此平台，跳过）
+        
+        # 禁用 IPv6（与通用流程一致）
+        if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+            log "🔧 ===== 禁用所有 IPv6 功能 ====="
+            cat >> .config << 'EOF'
+# IPv6 包禁用
+# CONFIG_PACKAGE_ip6tables is not set
+# CONFIG_PACKAGE_ip6tables-extra is not set
+# CONFIG_PACKAGE_ip6tables-mod-nat is not set
+# CONFIG_PACKAGE_kmod-ip6tables is not set
+# CONFIG_PACKAGE_kmod-ip6tables-extra is not set
+# CONFIG_PACKAGE_odhcp6c is not set
+# CONFIG_PACKAGE_odhcpd is not set
+# CONFIG_PACKAGE_odhcpd-ipv6only is not set
+# CONFIG_PACKAGE_6in4 is not set
+# CONFIG_PACKAGE_6rd is not set
+# CONFIG_PACKAGE_6to4 is not set
+# CONFIG_PACKAGE_ds-lite is not set
+# CONFIG_PACKAGE_map is not set
+# CONFIG_PACKAGE_luci-proto-ipv6 is not set
+# CONFIG_PACKAGE_luci-proto-6in4 is not set
+# CONFIG_PACKAGE_luci-proto-6rd is not set
+# CONFIG_PACKAGE_luci-proto-6to4 is not set
+# CONFIG_PACKAGE_kmod-ipv6 is not set
+# CONFIG_PACKAGE_kmod-nf-ip6 is not set
+# CONFIG_PACKAGE_kmod-nf-conntrack6 is not set
+# CONFIG_PACKAGE_kmod-nf-log6 is not set
+# CONFIG_PACKAGE_kmod-nf-nat6 is not set
+# CONFIG_PACKAGE_kmod-nf-reject6 is not set
+# CONFIG_PACKAGE_kmod-sit is not set
+EOF
+            sed -i '/^CONFIG_PACKAGE_.*ip6tables/d' .config
+            sed -i '/^CONFIG_PACKAGE_odhcp6c/d' .config
+            sed -i '/^CONFIG_PACKAGE_odhcpd/d' .config
+            sed -i '/^CONFIG_PACKAGE_6in4/d' .config
+            sed -i '/^CONFIG_PACKAGE_6rd/d' .config
+            sed -i '/^CONFIG_PACKAGE_6to4/d' .config
+            sed -i '/^CONFIG_PACKAGE_luci-proto-ipv6/d' .config
+            sed -i '/^CONFIG_PACKAGE_kmod-ipv6/d' .config
+            sed -i '/^CONFIG_PACKAGE_kmod-nf-ip6/d' .config
+            sed -i '/^CONFIG_PACKAGE_kmod-nf-conntrack6/d' .config
+            log "  ✅ 已禁用 IPv6 包"
+        fi
+        
+        # 禁用不需要的插件
+        local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
+        log "🔧 禁用指定插件: $base_forbidden"
+        local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
+        for plugin in "${full_forbidden_list[@]}"; do
+            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
+            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
+            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
+        done
+        
+        # 去重并最终 defconfig
+        sort .config | uniq > .config.tmp
+        mv .config.tmp .config
+        make defconfig > /dev/null 2>&1
+        
+        log "✅ Hanwckf 配置生成完成"
+        return 0
+    fi
+    
+    # ============================================
+    # 以下为原有标准流程（immortalwrt/openwrt/lede 非 rax3000m 设备）
+    # ============================================
     
     # ============================================
     # LEDE 源码启动修复（针对无法开机问题）
@@ -7321,8 +7474,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 最终稳定版：双 libtool + 完整 normal.config + 容错机制
-# 修复：主动移除不兼容包 + 清理构建残留
+# 修复：只编译 RAX3000M NAND 设备，避免生成 1.22GB 全平台固件
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7335,11 +7487,11 @@ workflow_step_hanwckf_build() {
     
     cd "$BUILD_DIR" || exit 1
     
-    # ---------- 0. 安装系统级 libtool ----------
-    log "🔧 安装系统 libtool..."
+    # ---------- 0. 安装缺失的编译依赖 ----------
+    log "🔧 安装编译依赖（libtool，修复 autoreconf 错误）..."
     sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin 2>/dev/null || true
     
-    # ---------- 1. 克隆 ----------
+    # ---------- 1. 清理并克隆 hanwckf 仓库 ----------
     log "📥 克隆 hanwckf/immortalwrt-mt798x 源码..."
     sudo rm -rf "$BUILD_DIR"/*
     git clone --depth 1 https://github.com/hanwckf/immortalwrt-mt798x.git "$BUILD_DIR" || {
@@ -7347,17 +7499,8 @@ workflow_step_hanwckf_build() {
         exit 1
     }
     
-    # ---------- 2. 更新 feeds ----------
-    log "🔄 更新 feeds..."
-    ./scripts/feeds update -a
-    ./scripts/feeds install -a
-    
-    # ---------- 3. 编译宿主 libtool ----------
-    log "🔧 编译宿主 libtool（提供内建 libtool.m4）..."
-    make tools/libtool/compile -j1 V=s 2>/dev/null || true
-    
-    # ---------- 4. 导入配置并锁定设备 ----------
-    log "⚙️ 导入 MT7981 AX3000 基础配置..."
+    # ---------- 2. 复制预置配置并锁定 RAX3000M ----------
+    log "⚙️ 应用 MT7981 AX3000 配置并锁定 RAX3000M NAND..."
     if [ -f "defconfig/mt7981-ax3000.config" ]; then
         cp "defconfig/mt7981-ax3000.config" ".config"
     else
@@ -7365,28 +7508,22 @@ workflow_step_hanwckf_build() {
         exit 1
     fi
     
-    log "🎯 锁定唯一设备：cmcc_rax3000m"
+    # 关键：删除所有其他设备的配置，只保留 cmcc_rax3000m
+    log "🎯 锁定设备：cmcc_rax3000m"
+    # 删除所有设备选择
     sed -i '/^CONFIG_TARGET_mediatek_mt7981_DEVICE_/d' .config
+    # 确保平台和子目标启用
     sed -i 's/^# CONFIG_TARGET_mediatek is not set/CONFIG_TARGET_mediatek=y/' .config
     sed -i 's/^# CONFIG_TARGET_mediatek_mt7981 is not set/CONFIG_TARGET_mediatek_mt7981=y/' .config
+    # 添加唯一设备
     echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
+    # 也禁用 NAND 版本的 eMMC 变体（如果有）
+    echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_emmc is not set" >> .config
+    echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_nand_ubootmod is not set" >> .config
+    # 确保所有其他设备都被禁用
+    sed -i '/^CONFIG_TARGET_DEVICE_/d' .config
     
-    # ---------- 5. 追加 normal.config 插件 ----------
-    log "📌 加载 normal.config 中的插件..."
-    local mode_config_file="$REPO_ROOT/firmware-config/config/normal.config"
-    if [ -f "$mode_config_file" ]; then
-        grep -E '^CONFIG_PACKAGE_' "$mode_config_file" | while read line; do
-            local cfg_name=$(echo "$line" | cut -d'=' -f1)
-            if ! grep -q "^${cfg_name}=" .config 2>/dev/null; then
-                echo "$line" >> .config
-            fi
-        done
-        log "✅ 已追加 normal.config 中的插件（如 smartdns, vsftpd, sqm, 微信推送等）"
-    else
-        log "⚠️ 未找到 normal.config，跳过插件加载"
-    fi
-    
-    # ---------- 6. 添加额外用户包 ----------
+    # ---------- 3. 追加额外包 ----------
     if [ -n "$extra_packages" ]; then
         IFS=';' read -ra PKGS <<< "$extra_packages"
         for pkg in "${PKGS[@]}"; do
@@ -7397,78 +7534,76 @@ workflow_step_hanwckf_build() {
         log "📦 已追加额外包: $extra_packages"
     fi
     
-    # ---------- 7. 禁用不需要的插件 ----------
-    local forbidden_list="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
-    log "🚫 禁用插件: $forbidden_list"
-    IFS=' ' read -ra BASE_PKGS <<< "$forbidden_list"
-    for pkg in "${BASE_PKGS[@]}"; do
-        [ -z "$pkg" ] && continue
-        sed -i "/^CONFIG_PACKAGE_${pkg}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_luci-app-${pkg}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_luci-i18n-${pkg}-zh-cn=y/d" .config
-    done
+    # ---------- 4. 更新并安装 feeds ----------
+    log "🔄 更新 feeds..."
+    ./scripts/feeds update -a
+    ./scripts/feeds install -a
     
-    # ---------- 8. 集成自定义文件 ----------
-    log "📁 集成自定义文件..."
-    local main_script="$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
-    if [ -f "$main_script" ] && [ -x "$main_script" ]; then
-        "$main_script" integrate_custom_files
-    else
-        log "⚠️ 无法执行 integrate_custom_files，跳过自定义文件集成"
-    fi
-    
-    # ---------- 9. 应用配置 ----------
+    # ---------- 5. 应用配置 ----------
     log "🛠️ make defconfig..."
     make defconfig
-
-    # ---------- 10. 预防性移除不兼容包 ----------
-    # 这些包与当前环境的宿主工具链存在已知兼容性问题，会导致编译失败
-    # 移除它们不会影响路由器核心功能（上网、无线、USB共享等）
-    log "🛡️ 主动移除已知不兼容的构建包..."
-    rm -rf package/libs/sysfsutils
-    rm -rf build_dir/target-aarch64_cortex-a53_musl/sysfsutils-* 2>/dev/null || true
-    rm -f staging_dir/target-aarch64_cortex-a53_musl/stamp/.package_compile 2>/dev/null || true
-    log "✅ 已移除 sysfsutils 及相关构建残留"
     
-    # ---------- 11. 编译固件 ----------
-    log "🏗️ 开始编译..."
-    export ACLOCAL_PATH="/usr/share/aclocal:$BUILD_DIR/staging_dir/host/share/aclocal"
+    # ---------- 6. 编译固件 ----------
+    log "🏗️ 开始编译（日志保存到 build.log）..."
     local make_ret=0
     make -j$(nproc) V=s 2>&1 | tee build.log || make_ret=$?
     
-    # ---------- 12. 写入环境变量 ----------
-    local actual_subtarget="mt7981"
-    [ -d "bin/targets/mediatek/filogic" ] && actual_subtarget="filogic"
+    # ---------- 7. 写入环境变量供后续步骤使用 ----------
+    log "🔧 写入目标平台信息到环境文件..."
+    local actual_subtarget=""
+    # 自动检测子目标路径
+    if [ -d "bin/targets/mediatek/mt7981" ]; then
+        actual_subtarget="mt7981"
+    elif [ -d "bin/targets/mediatek/filogic" ]; then
+        actual_subtarget="filogic"
+    else
+        actual_subtarget="mt7981"
+    fi
     
     echo "export TARGET=\"mediatek\"" > "$BUILD_DIR/build_env.sh"
     echo "export SUBTARGET=\"$actual_subtarget\"" >> "$BUILD_DIR/build_env.sh"
     echo "export DEVICE=\"$device_name\"" >> "$BUILD_DIR/build_env.sh"
     echo "export SOURCE_REPO_TYPE=\"hanwckf\"" >> "$BUILD_DIR/build_env.sh"
-    [ -n "$GITHUB_ENV" ] && echo "TARGET=mediatek" >> $GITHUB_ENV
-    [ -n "$GITHUB_ENV" ] && echo "SUBTARGET=$actual_subtarget" >> $GITHUB_ENV
+    if [ -n "$GITHUB_ENV" ]; then
+        echo "TARGET=mediatek" >> $GITHUB_ENV
+        echo "SUBTARGET=$actual_subtarget" >> $GITHUB_ENV
+        echo "DEVICE=$device_name" >> $GITHUB_ENV
+    fi
+    log "   目标: mediatek/$actual_subtarget"
     
-    # ---------- 13. 检查产物 ----------
+    # ---------- 8. 检查产物 ----------
     log "🔍 检查构建产物..."
     local target_dir="bin/targets/mediatek/$actual_subtarget"
+    local factory_bin=""
+    local sysupgrade_bin=""
     local found_firmware=0
     
     if [ -d "$target_dir" ]; then
-        local fw_count=$(find "$target_dir" -maxdepth 1 -type f \( -name "*rax3000m*" -o -name "*RAX3000M*" \) ! -name "*emmc*" 2>/dev/null | wc -l)
-        if [ $fw_count -gt 0 ]; then
+        factory_bin=$(find "$target_dir" -maxdepth 1 -type f \( -name "*rax3000m*factory*" -o -name "*RAX3000M*factory*" \) 2>/dev/null | head -1)
+        sysupgrade_bin=$(find "$target_dir" -maxdepth 1 -type f \( -name "*rax3000m*sysupgrade*" -o -name "*RAX3000M*sysupgrade*" \) ! -name "*emmc*" 2>/dev/null | head -1)
+        
+        if [ -n "$factory_bin" ] || [ -n "$sysupgrade_bin" ]; then
             found_firmware=1
             log "✅ 固件生成成功！"
+            log "📁 固件目录: $target_dir"
             ls -lh "$target_dir"/*rax3000m* 2>/dev/null || ls -lh "$target_dir"/*RAX3000M* 2>/dev/null || true
         fi
     fi
     
     if [ $found_firmware -eq 0 ]; then
-        log "❌ 未找到 RAX3000M 固件文件，最终编译失败"
+        log "❌ 未找到 RAX3000M 固件文件，编译失败。"
+        if [ -n "$target_dir" ] && [ -d "$target_dir" ]; then
+            log "📋 目录内容:"
+            ls -lh "$target_dir" 2>/dev/null | head -20 || log "   (空目录)"
+        fi
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
         exit 1
     fi
     
+    # 有非零退出码但固件存在，只警告
     if [ $make_ret -ne 0 ]; then
-        log "⚠️ make 返回非零 ($make_ret)，但固件已成功生成。某些非核心包编译失败，不影响固件使用。"
+        log "⚠️ make 返回非零退出码 ($make_ret)，但固件已成功生成。"
+        log "   某些非核心包编译失败（如 libtool 相关），不影响固件使用。"
         quick_error_check "$BUILD_DIR" "mediatek" "build.log" "/tmp/quick-error-check-hanwckf.txt" 2>/dev/null || true
     fi
     
