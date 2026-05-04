@@ -7321,7 +7321,7 @@ workflow_step30_build_summary() {
 #【build_firmware_main.sh-45】
 # ============================================
 # Hanwckf 独立编译流程（专用于 RAX3000M）
-# 修复：删除不兼容的 sysfsutils 源码
+# 修复：双 libtool + 完整 normal.config + 移除不兼容包
 # ============================================
 workflow_step_hanwckf_build() {
     local device_name="$1"
@@ -7334,7 +7334,7 @@ workflow_step_hanwckf_build() {
     
     cd "$BUILD_DIR" || exit 1
     
-    # ---------- 0. 系统级依赖 ----------
+    # ---------- 0. 安装系统级 libtool ----------
     log "🔧 安装系统 libtool..."
     sudo apt-get update -qq && sudo apt-get install -y -qq libtool libtool-bin 2>/dev/null || true
     
@@ -7352,12 +7352,16 @@ workflow_step_hanwckf_build() {
     ./scripts/feeds install -a
     
     # ---------- 3. 编译宿主 libtool ----------
-    log "🔧 编译宿主 libtool..."
+    log "🔧 编译宿主 libtool（提供内建 libtool.m4）..."
     make tools/libtool/compile -j1 V=s 2>/dev/null || true
     
-    # ---------- 4. 删除不兼容的包 ----------
-    log "🗑️ 移除不兼容的 sysfsutils 源码..."
+    # ---------- 4. 删除与编译环境不兼容的包 ----------
+    log "🗑️ 移除与编译环境不兼容的源码包（不影响核心功能）..."
+    # sysfsutils：系统设备信息查询工具（可用 lsusb/dmesg 替代）
     rm -rf package/libs/sysfsutils
+    # gmp：高精度算术库（仅用于 IPsec/证书验证，智能路由/无线不受影响）
+    rm -rf package/libs/gmp
+    log "✅ 已移除 sysfsutils 和 gmp"
     
     # ---------- 5. 导入配置并锁定设备 ----------
     log "⚙️ 导入 MT7981 AX3000 基础配置..."
@@ -7374,7 +7378,22 @@ workflow_step_hanwckf_build() {
     sed -i 's/^# CONFIG_TARGET_mediatek_mt7981 is not set/CONFIG_TARGET_mediatek_mt7981=y/' .config
     echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
     
-    # ---------- 6. 追加额外包 ----------
+    # ---------- 6. 追加 normal.config 插件 ----------
+    log "📌 加载 normal.config 中的插件..."
+    local mode_config_file="$REPO_ROOT/firmware-config/config/normal.config"
+    if [ -f "$mode_config_file" ]; then
+        grep -E '^CONFIG_PACKAGE_' "$mode_config_file" | while read line; do
+            local cfg_name=$(echo "$line" | cut -d'=' -f1)
+            if ! grep -q "^${cfg_name}=" .config 2>/dev/null; then
+                echo "$line" >> .config
+            fi
+        done
+        log "✅ 已追加 normal.config 中的插件（如 smartdns, vsftpd, sqm, 微信推送等）"
+    else
+        log "⚠️ 未找到 normal.config，跳过插件加载"
+    fi
+    
+    # ---------- 7. 添加额外用户包 ----------
     if [ -n "$extra_packages" ]; then
         IFS=';' read -ra PKGS <<< "$extra_packages"
         for pkg in "${PKGS[@]}"; do
@@ -7385,17 +7404,37 @@ workflow_step_hanwckf_build() {
         log "📦 已追加额外包: $extra_packages"
     fi
     
-    # ---------- 7. 应用配置 ----------
+    # ---------- 8. 禁用不需要的插件 ----------
+    local forbidden_list="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
+    log "🚫 禁用插件: $forbidden_list"
+    IFS=' ' read -ra BASE_PKGS <<< "$forbidden_list"
+    for pkg in "${BASE_PKGS[@]}"; do
+        [ -z "$pkg" ] && continue
+        sed -i "/^CONFIG_PACKAGE_${pkg}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_luci-app-${pkg}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_luci-i18n-${pkg}-zh-cn=y/d" .config
+    done
+    
+    # ---------- 9. 集成自定义文件 ----------
+    log "📁 集成自定义文件..."
+    local main_script="$REPO_ROOT/firmware-config/scripts/build_firmware_main.sh"
+    if [ -f "$main_script" ] && [ -x "$main_script" ]; then
+        "$main_script" integrate_custom_files
+    else
+        log "⚠️ 无法执行 integrate_custom_files，跳过自定义文件集成"
+    fi
+    
+    # ---------- 10. 应用配置 ----------
     log "🛠️ make defconfig..."
     make defconfig
     
-    # ---------- 8. 编译固件 ----------
+    # ---------- 11. 编译固件 ----------
     log "🏗️ 开始编译..."
     export ACLOCAL_PATH="/usr/share/aclocal:$BUILD_DIR/staging_dir/host/share/aclocal"
     local make_ret=0
     make -j$(nproc) V=s 2>&1 | tee build.log || make_ret=$?
     
-    # ---------- 9. 写入环境变量 ----------
+    # ---------- 12. 写入环境变量 ----------
     local actual_subtarget="mt7981"
     [ -d "bin/targets/mediatek/filogic" ] && actual_subtarget="filogic"
     
@@ -7406,7 +7445,7 @@ workflow_step_hanwckf_build() {
     [ -n "$GITHUB_ENV" ] && echo "TARGET=mediatek" >> $GITHUB_ENV
     [ -n "$GITHUB_ENV" ] && echo "SUBTARGET=$actual_subtarget" >> $GITHUB_ENV
     
-    # ---------- 10. 检查产物 ----------
+    # ---------- 13. 检查产物 ----------
     log "🔍 检查构建产物..."
     local target_dir="bin/targets/mediatek/$actual_subtarget"
     local found_firmware=0
