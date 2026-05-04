@@ -1348,6 +1348,12 @@ install_turboacc_packages() {
     
     log "=== 安装 TurboACC 包 ==="
     
+    # Hanwckf 源码（RAX3000M + immortalwrt）已集成硬件加速，无需安装 TurboACC 包
+    if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
+        log "ℹ️ 检测到 Hanwckf 源码 (RAX3000M)，跳过 TurboACC 包安装"
+        return 0
+    fi
+    
     ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
     
     ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
@@ -6450,12 +6456,9 @@ workflow_step25_build_firmware() {
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 LEDE 源码：修复文件描述符限制..."
-        # 尝试提高到最大可能值，避免 "Bad file descriptor" 错误
         ulimit -n 1048576 2>/dev/null || ulimit -n 65536 2>/dev/null || true
         local current_limit=$(ulimit -n)
         log "  ✅ 当前文件描述符限制: $current_limit"
-        
-        # 清理可能残留的并发编译临时文件
         log "🔧 LEDE 源码：清理残留编译文件..."
         rm -rf tmp/ccache 2>/dev/null || true
         find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
@@ -6463,12 +6466,10 @@ workflow_step25_build_firmware() {
         log "  ✅ 清理完成"
     fi
     
-    # 标准限制设置（对其他源码也适用）
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # 加载环境变量获取固件格式信息
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
     fi
@@ -6578,9 +6579,7 @@ EOF
             ;;
     esac
     
-    # 设置并行任务数
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        # LEDE 源码强制单线程编译，避免并发问题导致编译失败
         MAKE_JOBS=1
         log "⚠️ LEDE 源码：强制使用单线程编译（避免并发编译错误）"
     elif [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
@@ -6598,37 +6597,19 @@ EOF
     fi
     
     # ============================================
-    # 全局动态目录创建函数
+    # 全局动态目录创建函数（修复：使用 root-${target} 命名）
     # ============================================
     ensure_root_dirs() {
         local target="$1"
         local build_dir="$2"
-        
         local target_dirs=$(find "$build_dir/build_dir" -maxdepth 1 -type d -name "target-*" 2>/dev/null)
-        
         for tdir in $target_dirs; do
-            local root_name=""
-            case "$target" in
-                ipq40xx|ipq806x|qcom)
-                    root_name="root-ipq40xx"
-                    ;;
-                mediatek|ramips)
-                    root_name="root-ramips"
-                    ;;
-                ath79)
-                    root_name="root-ath79"
-                    ;;
-                *)
-                    root_name="root-${target}"
-                    ;;
-            esac
-            
+            local root_name="root-${target}"          # 统一使用 root-目标平台
             local root_path="$tdir/$root_name"
             if [ ! -d "$root_path" ]; then
                 mkdir -p "$root_path"
                 mkdir -p "$root_path/etc" "$root_path/lib" "$root_path/usr" "$root_path/tmp"
             fi
-            
             local orig_root_path="$tdir/root.orig-${target}"
             if [ ! -d "$orig_root_path" ]; then
                 mkdir -p "$orig_root_path"
@@ -6692,13 +6673,10 @@ EOF
         
         if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    🔧 检测到补丁失败，正在修复..."
-            
             local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-            
             if [ -z "$failed_patches" ]; then
                 failed_patches=$(grep "Patch failed!" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([^/]+\.patch).*/\1/' | sort -u)
             fi
-            
             for patch_name in $failed_patches; do
                 log "      🗑️ 删除失败补丁: $patch_name"
                 find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do
@@ -6706,16 +6684,7 @@ EOF
                     rm -f "$patch_file"
                 done
             done
-            
-            if [ -z "$failed_patches" ] && [ "$TARGET" = "ath79" ]; then
-                log "      🗑️ 删除 ath79 已知问题补丁: 910-unaligned_access_hacks.patch"
-                find target/linux/ath79 -name "910-unaligned_access_hacks.patch" -type f 2>/dev/null | while read patch_file; do
-                    log "        删除: $patch_file"
-                    rm -f "$patch_file"
-                done
-            fi
-            
-            rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
+            rm -rf build_dir/target-*/linux-*${TARGET}* 2>/dev/null || true
             rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
             find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
             find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
@@ -6723,7 +6692,11 @@ EOF
         
         if grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
             log "    ❌ 磁盘空间不足，无法继续"
-            break
+            # 尝试合并日志以便错误分析
+            cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
+            kill $protect_pid 2>/dev/null || true
+            rm -rf "$protect_dir" 2>/dev/null || true
+            exit 1
         fi
         
         if grep -q "swconfig\|SWITCH_LINK_FLAG" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
@@ -6739,6 +6712,7 @@ EOF
     
     if [ $kernel_success -eq 0 ]; then
         log "  ❌ 内核编译失败，已重试 $max_kernel_retries 次"
+        cat build_step*.log build_step2_attempt*.log > build.log 2>/dev/null || true
         kill $protect_pid 2>/dev/null || true
         rm -rf "$protect_dir" 2>/dev/null || true
         exit 1
@@ -6753,14 +6727,9 @@ EOF
     STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
     
-    if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
-        log "    🔧 禁用 swconfig..."
-        find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-        sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
-        echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-        make defconfig > /dev/null 2>&1 || true
+    if [ $STEP3_EXIT_CODE -ne 0 ]; then
+        log "  ⚠️ 软件包编译部分失败，继续..."
     fi
-    
     local info_count=$(ls tmp/info/ 2>/dev/null | wc -l)
     if [ $info_count -eq 0 ]; then
         make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
@@ -6814,6 +6783,9 @@ EOF
     
     if [ $step5_success -eq 0 ]; then
         log "  ❌ 固件生成失败，已重试 $max_step5_retries 次"
+        # 失败前合并所有日志，方便快速错误分析
+        cat build_step*.log build_step2_attempt*.log build_step5_attempt*.log > build.log 2>/dev/null || true
+        log "已合并日志到 build.log"
         kill $protect_pid 2>/dev/null || true
         rm -rf "$protect_dir" 2>/dev/null || true
         exit 1
@@ -6937,7 +6909,7 @@ EOC
         log "✅ 固件格式转换完成"
     fi
     
-    # 合并所有日志
+    # 合并所有日志（正常完成时执行）
     cat build_step*.log build_step2_attempt*.log build_step5_attempt*.log > build.log 2>/dev/null || true
     
     log "  ✅ 分步编译完成"
@@ -7260,7 +7232,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 精简版（自适应日志查找）
+# 全流程错误检查函数 - 增强版（自适应日志查找 + 常见错误分析）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7277,15 +7249,17 @@ quick_error_check() {
         source "$build_dir/build_env.sh"
     fi
 
-    # 如果指定的日志文件不存在，自动搜索
+    # 如果指定的日志文件不存在，自动搜索分步编译日志
     if [ ! -f "$log_file" ]; then
-        log_file=$(ls -t "$build_dir"/build_attempt_*.log "$build_dir"/build.log 2>/dev/null | head -1)
+        log_file=$(ls -t "$build_dir"/build.log \
+                           "$build_dir"/build_step*.log \
+                           "$build_dir"/build_step*_attempt*.log 2>/dev/null | head -1)
     fi
 
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 精简版（快速定位非零原因）"
+        echo "🔍 全流程错误检查 - 增强版（快速定位失败原因）"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7295,8 +7269,8 @@ quick_error_check() {
         echo "================================================================="
 
         if [ ! -f "$log_file" ]; then
-            echo "❌ 主日志文件不存在，无法分析。"
-            echo "   已尝试搜索: build_attempt_*.log, build.log"
+            echo "❌ 未找到任何构建日志文件。"
+            echo "   已搜索模式: build.log, build_step*.log, build_step*_attempt*.log"
             return 1
         fi
         echo "📄 使用日志: $log_file"
@@ -7319,12 +7293,17 @@ quick_error_check() {
         echo "🔍 关键错误定位 (仅显示致命错误，忽略正常编译警告)："
 
         local make_errors=$(grep -E 'make\[[0-9]+\]: \*\*\* \[.*\] Error' "$log_file" | tail -5)
+        local root_missing_errors=$(grep -E "cannot create regular file.*root-[a-zA-Z0-9_]+/init.*No such file or directory" "$log_file" | tail -3)
         local autoreconf_errors=$(grep -E 'autoreconf.*failed|aclocal.*error|libtool.m4.*does not exist' "$log_file" | tail -5)
         local compile_errors=$(grep -E '^.*error:' "$log_file" | grep -v 'Wno-error' | tail -5)
 
         if [ -n "$make_errors" ]; then
             echo "🚨 致命构建错误 (make Error):"
             echo "$make_errors"
+        elif [ -n "$root_missing_errors" ]; then
+            echo "🚨 根文件系统目录缺失错误:"
+            echo "$root_missing_errors"
+            echo "💡 修复建议: 检查 ensure_root_dirs 是否正确创建 root-{target} 目录。"
         elif [ -n "$autoreconf_errors" ]; then
             echo "🚨 配置错误 (autoreconf/libtool):"
             echo "$autoreconf_errors"
@@ -7343,6 +7322,8 @@ quick_error_check() {
         echo "📊 非零退出原因诊断："
         if [ -n "$make_errors" ]; then
             echo "   - 构建系统错误，请查看上方 'make Error' 信息。"
+        elif [ -n "$root_missing_errors" ]; then
+            echo "   - 根文件系统目录创建错误，导致 init 文件无法拷贝。"
         elif [ -n "$autoreconf_errors" ]; then
             echo "   - 构建环境缺少 'libtool'，导致 autoreconf 失败。"
         elif [ -n "$compile_errors" ]; then
