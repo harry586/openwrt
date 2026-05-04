@@ -6474,7 +6474,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（分步编译流程 + 自动格式转换） ==="
+    log "=== 步骤25: 编译固件（分步编译流程 + 自动修复 host 工具缺失） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -6611,7 +6611,7 @@ EOF
     fi
     
     # ============================================
-    # 全局动态目录创建函数（已修正：统一使用 root-${target}）
+    # 全局动态目录创建函数（已修正：统一使用 root-${target} 命名）
     # ============================================
     ensure_root_dirs() {
         local target="$1"
@@ -6650,10 +6650,9 @@ EOF
     log "  ✅ 环境清理完成"
     
     # ============================================
-    # 确保关键 host 工具已安装（修复 opkg 缺失）
+    # 关键修复：自动检查并补齐缺失的 host 工具（opkg, fakeroot 等）
     # ============================================
     log "  🔧 检查关键 host 工具（opkg、fakeroot 等）..."
-    local host_bin_ok=1
     local need_tools_rebuild=0
     for tool in opkg fakeroot mkhash; do
         if [ ! -f "$BUILD_DIR/staging_dir/host/bin/$tool" ]; then
@@ -6665,10 +6664,10 @@ EOF
     done
     
     if [ $need_tools_rebuild -eq 1 ]; then
-        log "  🔧 重新编译 host tools 以补齐缺失工具..."
+        log "  🔧 重新编译并安装 host tools 以补齐缺失工具..."
         make tools/compile -j$(nproc) V=s || handle_error "host tools 编译失败"
         make tools/install -j$(nproc) V=s || handle_error "host tools 安装失败"
-        log "  ✅ host tools 已重新编译安装"
+        log "  ✅ host tools 已重新编译安装，缺失工具已补齐"
     else
         log "  ✅ 所有关键 host 工具已就绪"
     fi
@@ -7223,7 +7222,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 精确定位版（修复缺失文件提取与 Error 127 诊断）
+# 全流程错误检查函数 - 最终优化版（精确提取，强化诊断）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7249,7 +7248,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 精确定位版（修复缺失文件/Error 127/下载失败）"
+        echo "🔍 全流程错误检查 - 最终优化版（精确提取 + 强化诊断）"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7279,26 +7278,25 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
-        # ===== 精确收集缺失文件（排除 No such file or directory 文本本身） =====
+        # ===== 精确收集缺失文件 =====
         local all_missing_files=""
         for f in "${!log_sources[@]}"; do
-            # 提取 "文件路径: No such file or directory" 中的文件路径（路径包含斜杠）
-            local missing_lines=$(grep -oP '[^\s]+:\s*No such file or directory' "$f" 2>/dev/null | sed 's/: No such file or directory//' | sort -u)
+            # 提取 "路径: No such file or directory" 中的路径
+            local missing_lines=$(grep -oP '(/[^ ]*|[^ ]+/[^ ]*)\s*:\s*No such file or directory' "$f" 2>/dev/null | sed 's/: No such file or directory//' | sort -u)
             [ -n "$missing_lines" ] && all_missing_files+=$'\n'"$missing_lines"
         done
-        # 去重并限制数量
         local unique_missing=($(echo "$all_missing_files" | sort -u | head -15))
 
-        # ===== 收集下载失败详细记录 =====
+        # ===== 收集下载失败（仅提取包含 HTTP 错误码或失败提示的行） =====
         local all_dl_fails=""
         for f in "${!log_sources[@]}"; do
-            local dl_fails=$(grep -iE 'curl.*[0-9]{3}|wget.*error|Download failed|404 Not Found|401 Unauthorized' "$f" 2>/dev/null | sort -u)
+            local dl_fails=$(grep -E 'curl: \(?[0-9]+\)|wget: .*error|Download failed|404 Not Found|401 Unauthorized' "$f" 2>/dev/null | sort -u)
             [ -n "$dl_fails" ] && all_dl_fails+=$'\n'"$dl_fails"
         done
         local unique_dl_fails=($(echo "$all_dl_fails" | head -5))
 
         # ========== 0. 固件状态 ==========
-        echo "🔍 步骤26: 固件生成状态检查"
+        echo "🔍 固件生成状态检查"
         echo "----------------------------------------"
 
         local full_target="${TARGET:-$target_platform}"
@@ -7376,9 +7374,6 @@ quick_error_check() {
             if echo "${unique_missing[*]}" | grep -q "fakeroot"; then
                 echo "   - fakeroot 缺失: 安装 fakeroot 软件包或重新编译 tools"
             fi
-            if echo "${unique_missing[*]}" | grep -q "ucode/module.h"; then
-                echo "   - ucode 头文件缺失: 依赖 uc 相关包未编译，可暂时忽略或单独编译"
-            fi
             echo ""
         fi
 
@@ -7404,7 +7399,7 @@ quick_error_check() {
                 echo "   🔧 opkg 缺失，请执行: make tools/compile && make tools/install"
                 echo "   或重新运行完整编译流程，确保 host tools 编译完成。"
             else
-                echo "   🔧 检查对应程序是否已安装，必要时重新编译 tools 或 toolchain。"
+                echo "   🔧 检查对应程序是否已安装，必要时重新编译 tools。"
             fi
             echo ""
         fi
@@ -7420,7 +7415,20 @@ quick_error_check() {
             echo ""
         fi
 
-        # ========== 4. 按步骤错误扫描 ==========
+        # ========== 4. staging_dir 完整性检查 ==========
+        if [ -d "staging_dir" ]; then
+            local missing_host_tools=()
+            for tool in opkg fakeroot mkhash; do
+                [ ! -f "staging_dir/host/bin/$tool" ] && missing_host_tools+=("$tool")
+            done
+            if [ ${#missing_host_tools[@]} -gt 0 ]; then
+                echo "⚠️ staging_dir 关键 host 工具缺失: ${missing_host_tools[*]}"
+                echo "   🔧 请执行 make tools/compile && make tools/install 重新编译安装 host 工具。"
+                echo ""
+            fi
+        fi
+
+        # ========== 5. 按步骤错误扫描（保留原有逻辑） ==========
         echo "🔍 按步骤错误扫描:"
         echo "----------------------------------------"
 
@@ -7496,7 +7504,7 @@ quick_error_check() {
         [ $total_step_errors -eq 0 ] && echo "✅ 所有步骤未检测到错误" || echo "📊 全流程错误/警告总数: $total_step_errors"
         echo ""
 
-        # ========== 5. 关键组件状态 ==========
+        # ========== 6. 关键组件状态 ==========
         echo "🔍 关键组件状态检查:"
         echo "----------------------------------------"
         [ -d "staging_dir" ] && echo "✅ staging_dir 存在 ($(du -sh staging_dir 2>/dev/null | awk '{print $1}'))" || echo "❌ staging_dir 不存在"
@@ -7513,7 +7521,7 @@ quick_error_check() {
         fi
         echo ""
 
-        # ========== 6. 最后30行日志 ==========
+        # ========== 7. 最后30行日志 ==========
         if [ -f "$log_file" ]; then
             echo "🔍 最后30行日志摘要 ($(basename "$log_file")):"
             echo "----------------------------------------"
@@ -7521,7 +7529,7 @@ quick_error_check() {
             echo ""
         fi
 
-        # ========== 7. 构建总结 ==========
+        # ========== 8. 构建总结 ==========
         echo "================================================================="
         echo "📊 构建结果总结:"
         local valid_total=$((valid_sysupgrade + valid_factory))
