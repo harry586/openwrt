@@ -7223,7 +7223,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 加强定位版（缺失文件 + Error 127 + 下载失败详情）
+# 全流程错误检查函数 - 精确定位版（修复缺失文件提取与 Error 127 诊断）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7249,7 +7249,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 加强定位版（缺失文件 / Error 127 / 下载失败详情）"
+        echo "🔍 全流程错误检查 - 精确定位版（修复缺失文件/Error 127/下载失败）"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7279,18 +7279,20 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
-        # ========== 全局收集缺失文件 ==========
+        # ===== 精确收集缺失文件（排除 No such file or directory 文本本身） =====
         local all_missing_files=""
         for f in "${!log_sources[@]}"; do
-            local missing_lines=$(grep -oP '(?<=: )([^ ]+): No such file or directory' "$f" 2>/dev/null | sort -u)
+            # 提取 "文件路径: No such file or directory" 中的文件路径（路径包含斜杠）
+            local missing_lines=$(grep -oP '[^\s]+:\s*No such file or directory' "$f" 2>/dev/null | sed 's/: No such file or directory//' | sort -u)
             [ -n "$missing_lines" ] && all_missing_files+=$'\n'"$missing_lines"
         done
-        local unique_missing=($(echo "$all_missing_files" | sort -u | head -10))
+        # 去重并限制数量
+        local unique_missing=($(echo "$all_missing_files" | sort -u | head -15))
 
-        # 收集下载失败URL
+        # ===== 收集下载失败详细记录 =====
         local all_dl_fails=""
         for f in "${!log_sources[@]}"; do
-            local dl_fails=$(grep -ioP 'curl.*?\([0-9]+\)|Download failed|wget.*?error [0-9]+|404 Not Found|.*/download.*fail' "$f" 2>/dev/null | sort -u)
+            local dl_fails=$(grep -iE 'curl.*[0-9]{3}|wget.*error|Download failed|404 Not Found|401 Unauthorized' "$f" 2>/dev/null | sort -u)
             [ -n "$dl_fails" ] && all_dl_fails+=$'\n'"$dl_fails"
         done
         local unique_dl_fails=($(echo "$all_dl_fails" | head -5))
@@ -7356,7 +7358,69 @@ quick_error_check() {
         echo "----------------------------------------"
         echo ""
 
-        # ========== 1. 按步骤错误扫描 ==========
+        # ========== 1. 缺失文件专项报告 ==========
+        if [ ${#unique_missing[@]} -gt 0 ]; then
+            echo "🚨 发现缺失文件/目录:"
+            echo "----------------------------------------"
+            for mf in "${unique_missing[@]}"; do
+                echo "   ❌ $mf"
+            done
+            echo ""
+            echo "💡 常见原因与修复:"
+            if echo "${unique_missing[*]}" | grep -q "root-mediatek\|root-ramips\|root-"; then
+                echo "   - root 目录缺失: 确保 ensure_root_dirs 创建了正确的 root-\${TARGET} 目录"
+            fi
+            if echo "${unique_missing[*]}" | grep -q "opkg"; then
+                echo "   - opkg 缺失: 执行 make tools/compile && make tools/install 重新安装 host 工具"
+            fi
+            if echo "${unique_missing[*]}" | grep -q "fakeroot"; then
+                echo "   - fakeroot 缺失: 安装 fakeroot 软件包或重新编译 tools"
+            fi
+            if echo "${unique_missing[*]}" | grep -q "ucode/module.h"; then
+                echo "   - ucode 头文件缺失: 依赖 uc 相关包未编译，可暂时忽略或单独编译"
+            fi
+            echo ""
+        fi
+
+        # ========== 2. Error 127 专项诊断 ==========
+        local err127_lines=""
+        for f in "${!log_sources[@]}"; do
+            local found127=$(grep -B2 "Error 127" "$f" 2>/dev/null)
+            [ -n "$found127" ] && err127_lines+=$'\n'"$found127"
+        done
+        if [ -n "$err127_lines" ]; then
+            echo "🚨 检测到 Error 127 (命令未找到)，最近错误信息:"
+            echo "----------------------------------------"
+            echo "$err127_lines" | tail -20
+            echo ""
+            local missing_cmd=$(echo "$err127_lines" | grep -oP '\S+:\s+(No such file or directory|command not found)' | sed 's/:.*//' | sort -u)
+            if [ -n "$missing_cmd" ]; then
+                echo "🔧 缺失的命令/文件:"
+                for cmd in $missing_cmd; do echo "   - $cmd"; done
+            fi
+            echo ""
+            echo "💡 修复建议:"
+            if echo "$err127_lines" | grep -q "opkg"; then
+                echo "   🔧 opkg 缺失，请执行: make tools/compile && make tools/install"
+                echo "   或重新运行完整编译流程，确保 host tools 编译完成。"
+            else
+                echo "   🔧 检查对应程序是否已安装，必要时重新编译 tools 或 toolchain。"
+            fi
+            echo ""
+        fi
+
+        # ========== 3. 下载失败详情 ==========
+        if [ ${#unique_dl_fails[@]} -gt 0 ]; then
+            echo "🚨 下载失败记录:"
+            echo "----------------------------------------"
+            for dl in "${unique_dl_fails[@]}"; do
+                echo "   🔗 $dl"
+            done
+            echo "💡 请检查网络连接或更换镜像源，必要时手动下载文件放入 dl/ 目录。"
+            echo ""
+        fi
+
+        # ========== 4. 按步骤错误扫描 ==========
         echo "🔍 按步骤错误扫描:"
         echo "----------------------------------------"
 
@@ -7432,39 +7496,7 @@ quick_error_check() {
         [ $total_step_errors -eq 0 ] && echo "✅ 所有步骤未检测到错误" || echo "📊 全流程错误/警告总数: $total_step_errors"
         echo ""
 
-        # ========== 2. 缺失文件专项报告 ==========
-        if [ ${#unique_missing[@]} -gt 0 ]; then
-            echo "🚨 发现缺失文件/目录 (No such file or directory):"
-            echo "----------------------------------------"
-            for mf in "${unique_missing[@]}"; do
-                echo "   ❌ $mf"
-            done
-            echo ""
-            echo "💡 常见原因与修复:"
-            if echo "${unique_missing[*]}" | grep -q "root-mediatek\|root-ramips\|root-"; then
-                echo "   - root 目录缺失: 确保 ensure_root_dirs 创建了正确的 root-\${TARGET} 目录"
-            fi
-            if echo "${unique_missing[*]}" | grep -q "opkg"; then
-                echo "   - opkg 缺失: 执行 make tools/compile && make tools/install 重新安装 host 工具"
-            fi
-            if echo "${unique_missing[*]}" | grep -q "fakeroot"; then
-                echo "   - fakeroot 缺失: 安装 fakeroot 软件包或重新编译 tools"
-            fi
-            echo ""
-        fi
-
-        # ========== 3. 下载失败详情 ==========
-        if [ ${#unique_dl_fails[@]} -gt 0 ]; then
-            echo "🚨 下载失败记录:"
-            echo "----------------------------------------"
-            for dl in "${unique_dl_fails[@]}"; do
-                echo "   🔗 $dl"
-            done
-            echo "💡 请检查网络或更换镜像源，必要时手动下载放入 dl/ 目录。"
-            echo ""
-        fi
-
-        # ========== 4. 关键组件状态 ==========
+        # ========== 5. 关键组件状态 ==========
         echo "🔍 关键组件状态检查:"
         echo "----------------------------------------"
         [ -d "staging_dir" ] && echo "✅ staging_dir 存在 ($(du -sh staging_dir 2>/dev/null | awk '{print $1}'))" || echo "❌ staging_dir 不存在"
@@ -7481,7 +7513,7 @@ quick_error_check() {
         fi
         echo ""
 
-        # ========== 5. 最后30行日志 ==========
+        # ========== 6. 最后30行日志 ==========
         if [ -f "$log_file" ]; then
             echo "🔍 最后30行日志摘要 ($(basename "$log_file")):"
             echo "----------------------------------------"
@@ -7489,7 +7521,7 @@ quick_error_check() {
             echo ""
         fi
 
-        # ========== 6. 构建总结 ==========
+        # ========== 7. 构建总结 ==========
         echo "================================================================="
         echo "📊 构建结果总结:"
         local valid_total=$((valid_sysupgrade + valid_factory))
@@ -7502,23 +7534,25 @@ quick_error_check() {
             echo ""
             echo "💡 诊断建议:"
             if [ ${#unique_missing[@]} -gt 0 ]; then
-                echo "   🔧 文件缺失: 请检查上方缺失列表，确认相应文件/工具是否已生成。"
+                echo "   🔧 文件缺失: 请检查上方缺失列表，确保相关工具已编译。"
+            fi
+            if [ -n "$err127_lines" ]; then
+                echo "   🔧 Error 127: 缺失的关键命令或工具，请参考上方修复建议。"
             fi
             for f in "${!log_sources[@]}"; do
                 grep -l "No space left" "$f" 2>/dev/null && echo "   🔧 磁盘空间不足: 清理磁盘空间"
-                grep -l "Download failed\|curl.*error\|wget.*error" "$f" 2>/dev/null && echo "   🔧 下载失败: 检查网络或更换镜像源"
+                grep -l "Download failed\|curl.*error" "$f" 2>/dev/null && echo "   🔧 下载失败: 检查网络或更换镜像源"
                 grep -l "Patch failed\|Hunk FAILED" "$f" 2>/dev/null && echo "   🔧 补丁失败: 删除失败的补丁文件"
-                grep -l "No such file or directory.*opkg" "$f" 2>/dev/null && echo "   🔧 Host 工具缺失 (opkg): 执行 make tools/install"
             done
             echo ""
-            echo "💡 固件偏小时请检查:"
+            echo "💡 固件偏小分析:"
             if [ -f ".config" ]; then
                 grep -q "^CONFIG_PACKAGE_kmod-mt_wifi=m\|^CONFIG_PACKAGE_kmod-mt_wifi=y" .config || echo "   - 无线驱动 (kmod-mt_wifi) 未启用？"
                 grep -q "^CONFIG_PACKAGE_luci=y" .config || echo "   - LuCI 界面未启用？"
                 grep -q "^CONFIG_PACKAGE_kmod-usb-core=y" .config || echo "   - USB 支持未启用？"
             fi
-            echo "   - 内核模块/软件包可能裁剪过度，请对比正常配置 (cmcc.config)"
-            echo "   - 建议执行: diff <(grep '=y' .config | sort) <(grep '=y' cmcc.config | sort)"
+            echo "   - 内核模块/软件包可能裁剪过度，请对比正常配置。"
+            echo "   - 若 opkg 缺失，即使生成了固件也可能无法安装软件包。"
         fi
         echo ""
         echo "================================================================="
