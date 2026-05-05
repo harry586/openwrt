@@ -6474,7 +6474,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件 (带执行标记版) ==="
+    log "=== 步骤25: 编译固件（最终修复版：强制编译 tools/opkg） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -6598,8 +6598,8 @@ EOF
     
     log "🔧 使用分步编译流程..."
     
-    # *** 步骤0：清理并强制补齐host工具 ***
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 清理环境并强制编译安装 host tools 开始 <<<\e[0m"
+    # 步骤0：清理并强制安装 host 工具（特别加入 opkg 的强制编译）
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 清理环境并强制编译安装 host tools (含 opkg) 开始 <<<\e[0m"
     log "  📦 步骤0: 清理并强制编译安装host tools..."
     rm -rf tmp/info 2>/dev/null || true
     mkdir -p tmp/info
@@ -6607,12 +6607,24 @@ EOF
     rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
     find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
+    
+    # 强制编译所有 tools
     make tools/compile -j1 V=s 2>&1 | tee build_tools_compile.log
     make tools/install -j1 V=s 2>&1 | tee build_tools_install.log
+    # 显式编译 opkg，因为某些旧 OpenWrt 版本不会自动包含它
+    make tools/opkg/compile -j1 V=s 2>&1 | tee -a build_tools_compile.log
+    make tools/opkg/install -j1 V=s 2>&1 | tee -a build_tools_install.log
+    # 最终验证 opkg 是否存在
+    if [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ]; then
+        log "  ✅ opkg 已成功安装到位"
+    else
+        log "  ❌ 致命错误：opkg 安装失败，请检查 tools/opkg 源码或依赖"
+        exit 1
+    fi
     echo -e "\e[1;33m>>> BUILD_MARK: STEP0 清理环境并强制编译安装 host tools 完成 <<<\e[0m"
     log "  ✅ host tools 重新编译安装完成"
     
-    # *** 步骤1：编译工具链 ***
+    # 步骤1：编译工具链
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链开始 <<<\e[0m"
     log "  📦 步骤1: 编译工具链..."
     set +e
@@ -6623,7 +6635,7 @@ EOF
     [ $STEP1_EXIT_CODE -ne 0 ] && log "  ⚠️ 工具链编译有警告，继续..."
     log "  ✅ 步骤1完成"
     
-    # *** 步骤2：编译内核和模块（带重试） ***
+    # 步骤2：编译内核和模块（带重试）
     echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m"
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
@@ -6656,7 +6668,7 @@ EOF
     [ $kernel_success -eq 0 ] && log "  ❌ 内核编译失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     log "  ✅ 步骤2完成"
     
-    # *** 步骤3：编译软件包 ***
+    # 步骤3：编译软件包
     echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包开始 <<<\e[0m"
     log "  📦 步骤3: 编译所有软件包..."
     set +e
@@ -6674,7 +6686,7 @@ EOF
     [ $(ls tmp/info/ 2>/dev/null | wc -l) -eq 0 ] && make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
     log "  ✅ 步骤3完成"
     
-    # *** 步骤4：安装软件包 ***
+    # 步骤4：安装软件包
     echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包开始 <<<\e[0m"
     log "  📦 步骤4: 安装软件包..."
     set +e
@@ -6685,7 +6697,7 @@ EOF
     [ $STEP4_EXIT_CODE -ne 0 ] && log "  ⚠️ 软件包安装有警告，继续..."
     log "  ✅ 步骤4完成"
     
-    # *** 步骤5：生成固件（带重试） ***
+    # 步骤5：生成固件（带重试）
     echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件开始 <<<\e[0m"
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
@@ -6705,7 +6717,7 @@ EOF
     [ $step5_success -eq 0 ] && log "  ❌ 固件生成失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     log "  ✅ 步骤5完成"
     
-    # 格式转换（不变）
+    # 格式转换（仅当需要时）
     if [ "${FIRMWARE_NEED_CONVERT:-false}" = "true" ] || [ "${FIRMWARE_HAS_ITB:-0}" = "1" ] || [ "${FIRMWARE_FORMAT_TYPE:-bin}" = "itb" ]; then
         log "🔧 自动固件格式转换..."
         local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
