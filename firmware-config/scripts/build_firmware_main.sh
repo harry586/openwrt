@@ -6474,7 +6474,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（通用流程，强制补齐 host 工具） ==="
+    log "=== 步骤25: 编译固件（已内置强制补齐 host 工具） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -6575,7 +6575,7 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    # 动态目录创建函数（通用，所有平台均使用 root-${target}）
+    # 动态目录创建函数（通用）
     ensure_root_dirs() {
         local target="$1"
         local build_dir="$2"
@@ -6608,7 +6608,7 @@ EOF
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     log "  ✅ 环境清理完成"
     
-    # 强制补齐 host 工具（通用，适用于所有 OpenWrt 构建）
+    # 强制补齐 host 工具（解决 opkg 缺失问题的关键步骤）
     log "  🔧 强制重新编译并安装 host tools 以确保 opkg、fakeroot 等工具存在..."
     make tools/compile -j$(nproc) V=s 2>&1 | tee build_tools_compile.log
     make tools/install -j$(nproc) V=s 2>&1 | tee build_tools_install.log
@@ -7026,7 +7026,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 最终优化版
+# 全流程错误检查函数 - 最终无噪声版
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7051,7 +7051,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 最终优化版"
+        echo "🔍 全流程错误检查 - 最终无噪声版"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7084,7 +7084,7 @@ quick_error_check() {
         done
         local unique_missing=($(echo "$all_missing_files" | sort -u | head -15))
 
-        # 收集下载失败（整行提取，避免分词）
+        # 收集下载失败（整行，不再拆分）
         local all_dl_fails=""
         for f in "${!log_sources[@]}"; do
             local dl_fails=$(grep -E 'curl:.*[0-9]{3}|wget:.*error|Download failed|404 Not Found|401 Unauthorized|Failed to connect' "$f" 2>/dev/null | sort -u)
