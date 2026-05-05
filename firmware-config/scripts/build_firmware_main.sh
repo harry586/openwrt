@@ -6474,7 +6474,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（终极版：强制单线程补齐 host 工具） ==="
+    log "=== 步骤25: 编译固件 (带执行标记版) ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -6598,32 +6598,33 @@ EOF
     
     log "🔧 使用分步编译流程..."
     
-    # 步骤0: 清理并准备环境
-    log "  📦 步骤0: 清理并准备环境..."
+    # *** 步骤0：清理并强制补齐host工具 ***
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 清理环境并强制编译安装 host tools 开始 <<<\e[0m"
+    log "  📦 步骤0: 清理并强制编译安装host tools..."
     rm -rf tmp/info 2>/dev/null || true
     mkdir -p tmp/info
     rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
     rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
     find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    log "  ✅ 环境清理完成"
-    
-    # 终极强制补齐 host 工具（单线程，显式日志）
-    log "  🔧 终极强制重新编译并安装 host tools..."
     make tools/compile -j1 V=s 2>&1 | tee build_tools_compile.log
     make tools/install -j1 V=s 2>&1 | tee build_tools_install.log
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 清理环境并强制编译安装 host tools 完成 <<<\e[0m"
     log "  ✅ host tools 重新编译安装完成"
     
-    # 步骤1: 编译工具链
+    # *** 步骤1：编译工具链 ***
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链开始 <<<\e[0m"
     log "  📦 步骤1: 编译工具链..."
     set +e
     make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log
     STEP1_EXIT_CODE=${PIPESTATUS[0]}
     set -e
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链完成 <<<\e[0m"
     [ $STEP1_EXIT_CODE -ne 0 ] && log "  ⚠️ 工具链编译有警告，继续..."
     log "  ✅ 步骤1完成"
     
-    # 步骤2: 编译内核和模块（带重试）
+    # *** 步骤2：编译内核和模块（带重试） ***
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m"
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     local kernel_retry=1 max_kernel_retries=3 kernel_success=0
@@ -6651,15 +6652,18 @@ EOF
         grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null && log "    ❌ 磁盘空间不足" && break
         kernel_retry=$((kernel_retry + 1))
     done
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块完成 <<<\e[0m"
     [ $kernel_success -eq 0 ] && log "  ❌ 内核编译失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     log "  ✅ 步骤2完成"
     
-    # 步骤3: 编译软件包
+    # *** 步骤3：编译软件包 ***
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包开始 <<<\e[0m"
     log "  📦 步骤3: 编译所有软件包..."
     set +e
     make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
     STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包完成 <<<\e[0m"
     if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
         log "    🔧 禁用 swconfig..."
         find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
@@ -6670,16 +6674,19 @@ EOF
     [ $(ls tmp/info/ 2>/dev/null | wc -l) -eq 0 ] && make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
     log "  ✅ 步骤3完成"
     
-    # 步骤4: 安装软件包
+    # *** 步骤4：安装软件包 ***
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包开始 <<<\e[0m"
     log "  📦 步骤4: 安装软件包..."
     set +e
     make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log
     STEP4_EXIT_CODE=${PIPESTATUS[0]}
     set -e
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包完成 <<<\e[0m"
     [ $STEP4_EXIT_CODE -ne 0 ] && log "  ⚠️ 软件包安装有警告，继续..."
     log "  ✅ 步骤4完成"
     
-    # 步骤5: 生成固件（带重试）
+    # *** 步骤5：生成固件（带重试） ***
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件开始 <<<\e[0m"
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     local step5_retry=1 max_step5_retries=2 step5_success=0
@@ -6694,6 +6701,7 @@ EOF
         [ $step5_retry -lt $max_step5_retries ] && log "    🔧 清理并重试..." && rm -rf build_dir/target-*/root-* 2>/dev/null || true && ensure_root_dirs "$TARGET" "$BUILD_DIR"
         step5_retry=$((step5_retry + 1))
     done
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件完成 <<<\e[0m"
     [ $step5_success -eq 0 ] && log "  ❌ 固件生成失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     log "  ✅ 步骤5完成"
     
@@ -7026,7 +7034,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 终极无分词版
+# 全流程错误检查函数 - 标记高亮版 + 不拆分单词
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7051,7 +7059,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 终极无分词版"
+        echo "🔍 全流程错误检查 - 标记高亮版 (绝对不拆分单词)"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7076,6 +7084,21 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
+        # --- 显示执行标记 (BUILD_MARK) ---
+        echo "📌 编译流程执行标记:"
+        echo "----------------------------------------"
+        local marks_found=0
+        for f in "${!log_sources[@]}"; do
+            grep ">>> BUILD_MARK:" "$f" 2>/dev/null | while IFS= read -r line; do
+                # 保留原有的 ANSI 颜色或添加高亮
+                printf "   %s\n" "$line"
+            done
+        done
+        if [ $? -eq 0 ] && [ -z "$(for f in "${!log_sources[@]}"; do grep ">>> BUILD_MARK:" "$f" 2>/dev/null; done)" ]; then
+            echo "   ⚠️ 未找到任何 BUILD_MARK 标记！编译流程可能未执行到到位。"
+        fi
+        echo ""
+
         # 精确收集缺失文件
         local all_missing_files=""
         for f in "${!log_sources[@]}"; do
@@ -7084,13 +7107,13 @@ quick_error_check() {
         done
         local unique_missing=($(echo "$all_missing_files" | sort -u | head -15))
 
-        # 收集下载失败（整行，不拆分）
+        # 下载失败记录（按行提取，使用 grep -E 匹配整行，不再分词）
         local all_dl_fails=""
         for f in "${!log_sources[@]}"; do
             local dl_fails=$(grep -E 'curl: \([0-9]+\) |wget: .*error|Download failed|404 Not Found|401 Unauthorized|Failed to connect' "$f" 2>/dev/null | sort -u)
             [ -n "$dl_fails" ] && all_dl_fails+=$'\n'"$dl_fails"
         done
-        local unique_dl_fails=($(echo "$all_dl_fails" | head -5))
+        readarray -t unique_dl_fails <<< "$(echo "$all_dl_fails" | head -5)"
 
         # 固件状态
         echo "🔍 固件生成状态检查"
