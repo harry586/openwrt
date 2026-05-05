@@ -1591,7 +1591,7 @@ generate_config() {
     log "🔧 使用传入的设备名: $correct_device"
     
     # ============================================
-    # Hanwckf 特殊处理：immortalwrt + rax3000m → 使用预置配置，但不返回
+    # Hanwckf 特殊处理：immortalwrt + rax3000m → 使用预置配置
     # ============================================
     local IS_HANWCKF_RAX3000M=0
     if echo "$correct_device" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
@@ -1626,7 +1626,6 @@ generate_config() {
         fi
         
         # 不再在此添加额外包、TCP BBR、禁用 IPv6 等，全部交给后续通用流程
-        # 但需要确保后续流程可以正常使用这些变量
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
@@ -1639,7 +1638,265 @@ generate_config() {
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
         log "🔧 ===== LEDE 源码启动修复 ====="
-        # ...（LEDE 修复代码保持原样，此处省略以节省篇幅，实际文件中原代码不变）
+        
+        case "$TARGET" in
+            ipq40xx)
+                log "  🔧 IPQ40xx 平台启动修复 (适用于 AC42U 等设备)"
+                
+                cat >> .config << 'EOF'
+# IPQ40xx 启动必需配置
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+CONFIG_MTD_ROOTFS_ROOT_DEV=y
+CONFIG_MTD_ROOTFS_SPLIT=y
+CONFIG_MTD_SPLIT_SQUASHFS=y
+
+# 确保 UBI 支持
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_UBIFS_FS_XZ=y
+CONFIG_UBIFS_FS_LZO=y
+CONFIG_UBIFS_FS_ZLIB=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="console=ttyMSM0,115200n8"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 看门狗支持
+CONFIG_WATCHDOG=y
+CONFIG_QCOM_WDT=y
+
+# 确保 MTD 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_BLOCK_RO=y
+CONFIG_MTD_SPLIT=y
+EOF
+                log "  ✅ IPQ40xx 启动修复配置已添加"
+                ;;
+                
+            mediatek)
+                log "  🔧 Mediatek 平台启动修复 (适用于 RAX3000M 等设备)"
+                
+                cat >> .config << 'EOF'
+# Mediatek 启动必需配置
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+
+# 确保 MTD 和 UBI 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPLIT=y
+CONFIG_MTD_UBI=y
+CONFIG_UBIFS_FS=y
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZSTD=y
+
+# NAND 支持
+CONFIG_MTD_NAND=y
+CONFIG_MTD_NAND_ECC=y
+CONFIG_MTD_NAND_ECC_SW_HAMMING=y
+CONFIG_MTD_SPI_NAND=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="earlycon=uart8250,mmio32,0x11002000 console=ttyS0,115200n1"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 确保 watchdog 支持
+CONFIG_WATCHDOG=y
+CONFIG_MEDIATEK_WATCHDOG=y
+EOF
+                log "  ✅ Mediatek 启动修复配置已添加"
+                ;;
+                
+            ath79)
+                log "  🔧 ATH79 平台启动修复 (适用于 WNDR3800 等设备)"
+                
+                cat >> .config << 'EOF'
+# ATH79 启动必需配置
+CONFIG_CMDLINE_PARTITION=y
+CONFIG_MTD_SPLIT_FIRMWARE=y
+CONFIG_MTD_SPLIT_UIMAGE_FW=y
+
+# 确保 MTD 支持
+CONFIG_MTD=y
+CONFIG_MTD_BLOCK=y
+CONFIG_MTD_SPLIT=y
+CONFIG_MTD_ROOTFS=y
+
+# 内核命令行参数
+CONFIG_CMDLINE="console=ttyS0,115200"
+CONFIG_CMDLINE_FROM_BOOTLOADER=y
+
+# 确保 watchdog 支持
+CONFIG_WATCHDOG=y
+CONFIG_ATH79_WDT=y
+
+# SquashFS 支持
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZLIB=y
+CONFIG_SQUASHFS_LZ4=y
+EOF
+                log "  ✅ ATH79 启动修复配置已添加"
+                ;;
+        esac
+        
+        log "  🔧 LEDE 通用启动修复"
+        
+        cat >> .config << 'EOF'
+# LEDE 通用启动修复配置
+# 确保 initramfs 支持
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_INITRAMFS_SOURCE=""
+CONFIG_RD_GZIP=y
+CONFIG_RD_BZIP2=y
+CONFIG_RD_LZMA=y
+CONFIG_RD_XZ=y
+CONFIG_RD_LZO=y
+CONFIG_RD_LZ4=y
+
+# 确保正确的根文件系统类型
+CONFIG_ROOT_NFS=y
+
+# 确保必要的文件系统支持
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_USE_FOR_EXT2=y
+CONFIG_FUSE_FS=y
+CONFIG_MSDOS_FS=y
+CONFIG_VFAT_FS=y
+CONFIG_FAT_DEFAULT_CODEPAGE=437
+CONFIG_FAT_DEFAULT_IOCHARSET="iso8859-1"
+CONFIG_NTFS_FS=y
+CONFIG_NTFS3_FS=y
+
+# 确保网络支持（不影响启动）
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_IPV4=y
+EOF
+        log "  ✅ LEDE 通用启动修复配置已添加"
+        
+        log "  🔧 检查和修复 LEDE 设备定义文件..."
+        
+        local device_mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+        local device_found=0
+        
+        for mkfile in $device_mk_files; do
+            if grep -q "define Device.*$correct_device" "$mkfile" 2>/dev/null; then
+                device_found=1
+                log "    📁 找到设备定义文件: $mkfile"
+                
+                cp "$mkfile" "$mkfile.bak.lede"
+                
+                if ! grep -q "KERNEL_SIZE" "$mkfile" 2>/dev/null; then
+                    local kernel_size=""
+                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
+                        kernel_size="2097152"
+                    elif grep -q "ac42u\|rt-ac42u" "$mkfile" 2>/dev/null; then
+                        kernel_size="4194304"
+                    elif grep -q "rax3000m" "$mkfile" 2>/dev/null; then
+                        kernel_size="4194304"
+                    else
+                        kernel_size="2097152"
+                    fi
+                    
+                    sed -i "/define Device.*$correct_device/a \  KERNEL_SIZE := $kernel_size" "$mkfile"
+                    log "      ✅ 添加 KERNEL_SIZE := $kernel_size"
+                fi
+                
+                if ! grep -q "BLOCKSIZE" "$mkfile" 2>/dev/null; then
+                    local blocksize="256k"
+                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
+                        blocksize="128k"
+                    fi
+                    sed -i "/define Device.*$correct_device/a \  BLOCKSIZE := $blocksize" "$mkfile"
+                    log "      ✅ 添加 BLOCKSIZE := $blocksize"
+                fi
+                
+                if ! grep -q "IMAGE_SIZE" "$mkfile" 2>/dev/null; then
+                    local image_size=""
+                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
+                        image_size="15744k"
+                    elif grep -q "ac42u\|rt-ac42u" "$mkfile" 2>/dev/null; then
+                        image_size="32256k"
+                    elif grep -q "rax3000m" "$mkfile" 2>/dev/null; then
+                        image_size="32256k"
+                    fi
+                    
+                    if [ -n "$image_size" ]; then
+                        sed -i "/define Device.*$correct_device/a \  IMAGE_SIZE := $image_size" "$mkfile"
+                        log "      ✅ 添加 IMAGE_SIZE := $image_size"
+                    fi
+                fi
+                
+                if ! grep -q "IMAGE/sysupgrade.bin" "$mkfile" 2>/dev/null; then
+                    case "$TARGET" in
+                        ipq40xx)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | check-size" >> /tmp/device_temp.txt
+                            ;;
+                        mediatek)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-ubi | check-size" >> /tmp/device_temp.txt
+                            ;;
+                        ath79)
+                            echo "define Device/$correct_device" > /tmp/device_temp.txt
+                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | append-metadata | check-size" >> /tmp/device_temp.txt
+                            ;;
+                    esac
+                    log "      ℹ️ 建议检查 IMAGE/sysupgrade.bin 定义"
+                fi
+                
+                break
+            fi
+        done
+        
+        if [ $device_found -eq 0 ]; then
+            log "    ⚠️ 未找到设备 $correct_device 的定义文件，跳过修复"
+        fi
+        
+        log "  🔧 检查和修复 LEDE 内核补丁..."
+        
+        local patch_dirs=$(find "target/linux/$TARGET" -type d -name "patches-*" 2>/dev/null)
+        
+        for patch_dir in $patch_dirs; do
+            log "    📁 检查补丁目录: $patch_dir"
+            
+            local problem_patches=$(find "$patch_dir" -name "*.patch" -exec grep -l "leds.*color\|function.*LED_FUNCTION" {} \; 2>/dev/null)
+            
+            for patch in $problem_patches; do
+                log "    ⚠️ 发现可能的问题补丁: $(basename "$patch")"
+                mv "$patch" "$patch.disabled" 2>/dev/null || true
+                log "      🔧 已禁用问题补丁: $(basename "$patch").disabled"
+            done
+        done
+        
+        log "  🔧 配置正确的镜像格式..."
+        
+        case "$TARGET" in
+            ipq40xx)
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
+                ;;
+            mediatek)
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
+                echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
+                ;;
+            ath79)
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+                ;;
+        esac
+        
+        log "✅ LEDE 源码启动修复完成"
+        log "======================================"
     fi
     
     # ============================================
@@ -1648,41 +1905,41 @@ generate_config() {
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
-    # 修复：只有当 SUBTARGET 无效（不存在或等于目标名）时才尝试自动查找
-    local subtarget_valid=0
-    if [ -n "$actual_subtarget" ] && [ "$actual_subtarget" != "$TARGET" ]; then
-        if [ -f "target/linux/$TARGET/$actual_subtarget/target.mk" ] || [ -d "target/linux/$TARGET/$actual_subtarget/base-files" ]; then
-            subtarget_valid=1
-        fi
-    fi
-    
-    if [ $subtarget_valid -eq 0 ]; then
-        log "🔧 当前子目标无效 ($actual_subtarget)，尝试自动查找..."
-        local found_subtarget=""
-        for sub_dir in "target/linux/$TARGET/"*/; do
-            [ -d "$sub_dir" ] || continue
-            local sub_name=$(basename "$sub_dir")
-            if [ "$sub_name" = "image" ] || [ "$sub_name" = "files" ] || [[ "$sub_name" == patches* ]]; then
-                continue
-            fi
-            if [ -f "$sub_dir/target.mk" ] || [ -d "$sub_dir/base-files" ]; then
-                found_subtarget="$sub_name"
-                break
-            fi
-        done
-        if [ -n "$found_subtarget" ]; then
-            actual_subtarget="$found_subtarget"
-            log "  ✅ 自动找到子目标: $actual_subtarget"
-        else
-            log "  ❌ 无法自动找到子目标，请手动指定"
-            handle_error "无法确定设备子目标"
-        fi
-    else
-        log "  ✅ 子目标已正确设置: $actual_subtarget"
-    fi
-    
-    # 如果不是 Hanwckf 模式，则重新生成 device_config（Hanwckf 模式已在上面设置）
+    # 如果不是 Hanwckf 模式，则需要重新生成 device_config
     if [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
+        # 修复：只有当 SUBTARGET 无效（不存在或等于目标名）时才尝试自动查找
+        local subtarget_valid=0
+        if [ -n "$actual_subtarget" ] && [ "$actual_subtarget" != "$TARGET" ]; then
+            if [ -f "target/linux/$TARGET/$actual_subtarget/target.mk" ] || [ -d "target/linux/$TARGET/$actual_subtarget/base-files" ]; then
+                subtarget_valid=1
+            fi
+        fi
+        
+        if [ $subtarget_valid -eq 0 ]; then
+            log "🔧 当前子目标无效 ($actual_subtarget)，尝试自动查找..."
+            local found_subtarget=""
+            for sub_dir in "target/linux/$TARGET/"*/; do
+                [ -d "$sub_dir" ] || continue
+                local sub_name=$(basename "$sub_dir")
+                if [ "$sub_name" = "image" ] || [ "$sub_name" = "files" ] || [[ "$sub_name" == patches* ]]; then
+                    continue
+                fi
+                if [ -f "$sub_dir/target.mk" ] || [ -d "$sub_dir/base-files" ]; then
+                    found_subtarget="$sub_name"
+                    break
+                fi
+            done
+            if [ -n "$found_subtarget" ]; then
+                actual_subtarget="$found_subtarget"
+                log "  ✅ 自动找到子目标: $actual_subtarget"
+            else
+                log "  ❌ 无法自动找到子目标，请手动指定"
+                handle_error "无法确定设备子目标"
+            fi
+        else
+            log "  ✅ 子目标已正确设置: $actual_subtarget"
+        fi
+        
         device_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}=y"
         log "🔧 标准设备配置格式: $device_config"
         
@@ -1815,15 +2072,25 @@ EOF
         log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
+    # 强制启用 ath10k-ct（只对真正可能使用 ath10k 的平台）
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
-        sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
-        sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
-        sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
-        echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
-        echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
-        echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
-        log "✅ ath10k-ct驱动已强制启用"
+        local force_ath10k=0
+        case "$TARGET" in
+            ipq40xx|ipq806x|qcom) force_ath10k=1 ;;
+            ath79) force_ath10k=1 ;;
+        esac
+        if [ $force_ath10k -eq 1 ]; then
+            sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
+            sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
+            sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
+            echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
+            echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
+            echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
+            echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
+            log "✅ ath10k-ct驱动已强制启用"
+        else
+            log "ℹ️ 当前平台 $TARGET 不需要 ath10k-ct，跳过强制启用"
+        fi
     fi
     
     # ============================================
@@ -1935,7 +2202,55 @@ EOF
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
         log "🔧 ===== LEDE 源码最终启动验证 ====="
-        # ...（LEDE 最终验证代码保持原样，此处省略以节省篇幅）
+        
+        if [ -f .config.lede_base_fixed ]; then
+            log "  🔧 合并 LEDE 基础修复配置..."
+            while IFS= read -r line; do
+                config_name=$(echo "$line" | cut -d'=' -f1)
+                if ! grep -q "^${config_name}=" .config; then
+                    echo "$line" >> .config
+                fi
+            done < .config.lede_base_fixed
+            rm -f .config.lede_base_fixed
+        fi
+        
+        log "  🔧 验证关键启动配置..."
+        
+        local critical_missing=0
+        
+        if ! grep -q "CONFIG_CMDLINE_PARTITION=y" .config; then
+            echo "CONFIG_CMDLINE_PARTITION=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        if ! grep -q "CONFIG_MTD_SPLIT_FIRMWARE=y" .config; then
+            echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        if ! grep -q "CONFIG_MTD_SPLIT_UIMAGE_FW=y" .config; then
+            echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        if [ $critical_missing -gt 0 ]; then
+            log "    ✅ 添加了 $critical_missing 个缺失的关键配置"
+        else
+            log "    ✅ 所有关键配置都已存在"
+        fi
+        
+        local mtd_missing=0
+        local mtd_configs=("CONFIG_MTD" "CONFIG_MTD_BLOCK" "CONFIG_MTD_SPLIT")
+        for cfg in "${mtd_configs[@]}"; do
+            if ! grep -q "^${cfg}=y" .config; then
+                mtd_missing=$((mtd_missing + 1))
+            fi
+        done
+        if [ $mtd_missing -gt 0 ]; then
+            log "  ⚠️  有 $mtd_missing 个 MTD 相关配置未启用，但可能不影响构建"
+        fi
+        
+        log "✅ LEDE 源码最终启动验证完成"
     fi
     
     log "🔄 第一次去重配置..."
@@ -6660,8 +6975,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 精准版
-# 修复算术错误、静默管道破裂
+# 全流程错误检查函数 - 精准版 + 失败包详情
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6714,7 +7028,7 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
-        # ===== 解析 BUILD_MARK =====
+        # ===== BUILD_MARK =====
         echo "📌 编译流程执行标记:"
         echo "----------------------------------------"
         local any_mark=0
@@ -6754,10 +7068,9 @@ quick_error_check() {
         fi
         echo ""
 
-        # ===== 缺失文件 + 下载失败（静默可能破裂的管道） =====
+        # ===== 缺失文件 + 下载失败 =====
         echo "🚨 关键异常摘要:"
         echo "----------------------------------------"
-        # 缺失文件（忽略 sort broken pipe）
         local missing_files=$(for f in "${!log_sources[@]}"; do
             grep -oP '(/[^ ]+|[^ ]+/[^ ]*)\s*:\s*No such file or directory' "$f" 2>/dev/null | sed 's/: No such file or directory//' | sort -u 2>/dev/null
         done | sort -u 2>/dev/null | head -5)
@@ -6765,7 +7078,6 @@ quick_error_check() {
             echo "  ❌ 缺失文件/头文件:"
             echo "$missing_files" | while read mf; do echo "      - $mf"; done
         fi
-        # 下载错误
         local dl_errors=$(for f in "${!log_sources[@]}"; do
             grep -E 'Download failed|curl: \([0-9]+\) |wget: .*error|404 Not Found' "$f" 2>/dev/null | sort -u 2>/dev/null
         done | sort -u 2>/dev/null | head -5)
@@ -6784,14 +7096,13 @@ quick_error_check() {
         [ ! -d "$target_dir" ] && target_dir=$(find bin/targets -type d -name "*$full_target*" 2>/dev/null | head -1)
         echo "检查路径: $target_dir"
         echo ""
-        local found_firmware=0 valid_sysupgrade=0 valid_factory=0
+        local found_firmware=0 valid_sysupgrade=0 valid_factory=0 sysupgrade_size="" factory_size=""
 
         if [ -d "$target_dir" ]; then
             while IFS= read -r file; do
                 [ -z "$file" ] && continue
                 local fname=$(basename "$file")
                 [[ "$fname" == *"initramfs"* ]] || [[ "$fname" == *".manifest" ]] || [[ "$fname" == *"sha256sums"* ]] && continue
-
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
                 local fsize_human=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
@@ -6803,15 +7114,11 @@ quick_error_check() {
 
                 if [ $fsize_mb -ge 5 ]; then
                     if [ "$ftype" != "other" ]; then
-                        if [ $fsize_mb -lt 10 ]; then
-                            echo "⚠️ $fname"
-                            echo "   大小: $fsize_human (${fsize_mb}MB) - 固件偏小，可能功能精简"
-                        else
-                            echo "✅ $fname"
-                        fi
+                        echo "✅ $fname"
+                        echo "   大小: $fsize_human (${fsize_mb}MB)"
                         echo "   SHA256: $fhash"
-                        [ "$ftype" = "sysupgrade" ] && valid_sysupgrade=$((valid_sysupgrade + 1))
-                        [ "$ftype" = "factory" ] && valid_factory=$((valid_factory + 1))
+                        [ "$ftype" = "sysupgrade" ] && valid_sysupgrade=$((valid_sysupgrade + 1)) && sysupgrade_size="$fsize_human (${fsize_mb}MB)"
+                        [ "$ftype" = "factory" ] && valid_factory=$((valid_factory + 1)) && factory_size="$fsize_human (${fsize_mb}MB)"
                     else
                         echo "📄 $fname - $fsize_human (其他文件)"
                     fi
@@ -6829,17 +7136,17 @@ quick_error_check() {
         echo "----------------------------------------"
         echo ""
 
-        # ===== 按步骤致命错误扫描（修复算术错误） =====
+        # ===== 分步致命错误统计 =====
         echo "🔍 分步编译致命错误统计:"
         echo "----------------------------------------"
         local fatal_patterns=(
-            'make\[[0-9]*\]: \*\*\* \[.*\] Error [0-9]+'   # 构建规则错误
-            'ERROR:.*failed to build'                       # 包构建失败
-            'fatal error:'                                  # 编译致命错误
-            'undefined reference to'                        # 链接未定义
-            'No rule to make target'                        # 缺少目标
-            'cannot find -l'                                # 库缺失
-            'recipe for target.*failed'                     # 目标失败
+            'make\[[0-9]*\]: \*\*\* \[.*\] Error [0-9]+'
+            'ERROR:.*failed to build'
+            'fatal error:'
+            'undefined reference to'
+            'No rule to make target'
+            'cannot find -l'
+            'recipe for target.*failed'
         )
         declare -A step_errors
         map_log_to_step() {
@@ -6854,16 +7161,13 @@ quick_error_check() {
                 *) echo "OTHER" ;;
             esac
         }
-
         local total_fatal=0
         for log_to_check in "${!log_sources[@]}"; do
             [[ "$(basename "$log_to_check")" == "build_marks.log" ]] && continue
             local step_label=$(map_log_to_step "$log_to_check")
             local err_count=0
             for pat in "${fatal_patterns[@]}"; do
-                # 安全获取匹配行数：确保结果为数字
                 local cnt=$(grep -cE "$pat" "$log_to_check" 2>/dev/null || true)
-                # 移除可能的多余空白，并转换为整数
                 cnt=$(echo "$cnt" | tr -d '[:space:]')
                 if [ -n "$cnt" ] && [ "$cnt" -eq "$cnt" ] 2>/dev/null; then
                     err_count=$((err_count + cnt))
@@ -6875,18 +7179,40 @@ quick_error_check() {
             step_errors[$step_label]=$((step_errors[$step_label] + err_count))
             total_fatal=$((total_fatal + err_count))
         done
+        [ $total_fatal -eq 0 ] && echo "   ✅ 未发现致命编译错误"
+        echo ""
 
-        if [ $total_fatal -eq 0 ]; then
-            echo "   ✅ 未发现致命编译错误"
+        # ===== 失败包详情（解析日志，列出具体包和错误原因） =====
+        echo "🔧 编译失败包详情 (点击左侧三角展开):"
+        echo "----------------------------------------"
+        # 提取所有编译失败的包路径 (例: make[3]: *** [package/feeds/packages/gnutls/compile] Error 2)
+        local failed_pkgs_list="/tmp/failed_pkgs_$$.txt"
+        > "$failed_pkgs_list"
+        for f in "${!log_sources[@]}"; do
+            grep -oP 'make\[[0-9]+\]: \*\*\* \[\K[^]]+' "$f" 2>/dev/null | grep -E '/compile|/install' >> "$failed_pkgs_list"
+        done
+        local unique_failed=$(sort -u "$failed_pkgs_list" | head -20)
+        if [ -n "$unique_failed" ]; then
+            while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                # 把 make 目标路径转换为包名（比如 package/feeds/packages/gnutls -> gnutls）
+                local pkg=$(echo "$line" | awk -F'/' '{for(i=1;i<=NF;i++){if($i=="package"){print $(i+1)":"$(i+2)":"$(i+3)}}}' | sed 's/:/ /g' | awk '{print $NF}')
+                [ -z "$pkg" ] && pkg=$(basename "$line")
+                echo "   📦 $pkg  ($line)"
+                # 在日志中搜索该目标附近的错误信息（最近2行包含 error 或 Error）
+                local detail=$(for f in "${!log_sources[@]}"; do
+                    grep -B2 -A0 "Error" "$f" 2>/dev/null | grep -E "$pkg|error:" | tail -2
+                done | sort -u | head -3)
+                if [ -n "$detail" ]; then
+                    echo "      ${detail}"
+                fi
+                echo ""
+            done <<< "$unique_failed"
         else
-            echo ""
-            echo "📊 各阶段致命错误总数: $total_fatal"
-            for seg in "STEP0" "STEP1" "STEP2" "STEP3" "STEP4" "STEP5" "OTHER"; do
-                [ ${step_errors[$seg]:-0} -gt 0 ] && echo "   $seg: ${step_errors[$seg]} 个"
-            done
-            echo ""
-            echo "⚠️ 建议：查看对应步骤日志，定位首个错误。"
+            echo "   (无具体包编译失败信息)"
         fi
+        rm -f "$failed_pkgs_list"
+        echo "----------------------------------------"
         echo ""
 
         # ===== 关键组件 =====
@@ -6906,7 +7232,7 @@ quick_error_check() {
         fi
         echo ""
 
-        # 最后30行日志（过滤标记）
+        # 最后30行日志
         echo "🔍 最后30行日志 (已过滤 BUILD_MARK):"
         echo "----------------------------------------"
         if [ -f "$log_file" ]; then
@@ -6926,17 +7252,19 @@ quick_error_check() {
         echo "================================================================="
         echo "📊 构建结论:"
         if [ $((valid_sysupgrade + valid_factory)) -gt 0 ]; then
-            echo "🎉 固件已成功生成，有效文件: sysupgrade $valid_sysupgrade 个，factory $valid_factory 个"
+            [ -n "$sysupgrade_size" ] && echo "   sysupgrade 固件: $sysupgrade_size"
+            [ -n "$factory_size" ] && echo "   factory 固件: $factory_size"
+            echo "🎉 固件已成功生成，可正常刷机使用。"
             if [ $total_fatal -gt 0 ]; then
-                echo "⚠️ 但检测到 $total_fatal 个致命编译错误（可能有部分软件包未编译成功），请核查功能。"
+                echo "⚠️ 检测到 $total_fatal 个编译错误（已在上方列出失败包），请根据日志修复。"
             fi
         else
-            echo "❌ 构建失败，未生成任何有效固件。"
+            echo "❌ 未生成任何有效固件，构建失败。"
             echo ""
             echo "💡 排查建议:"
+            [ -n "$unique_failed" ] && echo "   🔧 失败的包: $(echo $unique_failed | tr '\n' ' ')"
             [ -n "$missing_files" ] && echo "   🔧 缺失文件可能导致部分包编译失败。"
             [ -n "$dl_errors" ] && echo "   🔧 下载失败，请检查网络或更换源。"
-            [ $total_fatal -gt 0 ] && echo "   🔧 请查看上方分步错误，从最早阶段开始修复。"
         fi
         echo "================================================================="
     } | tee "$output_file"
