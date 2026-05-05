@@ -6474,7 +6474,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（最终修复版：强制编译 tools/opkg） ==="
+    log "=== 步骤25: 编译固件 (彻底修复 opkg：通过 package/opkg/host 安装) ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -6598,9 +6598,9 @@ EOF
     
     log "🔧 使用分步编译流程..."
     
-    # 步骤0：清理并强制安装 host 工具（特别加入 opkg 的强制编译）
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 清理环境并强制编译安装 host tools (含 opkg) 开始 <<<\e[0m"
-    log "  📦 步骤0: 清理并强制编译安装host tools..."
+    # ===== 步骤0：强制安装 host opkg =====
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 安装 host tools 及 opkg 开始 <<<\e[0m"
+    log "  📦 步骤0: 清理并强制安装 host tools 与 opkg..."
     rm -rf tmp/info 2>/dev/null || true
     mkdir -p tmp/info
     rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
@@ -6608,23 +6608,27 @@ EOF
     find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     
-    # 强制编译所有 tools
+    # 编译通用 tools（不包含 opkg）
     make tools/compile -j1 V=s 2>&1 | tee build_tools_compile.log
     make tools/install -j1 V=s 2>&1 | tee build_tools_install.log
-    # 显式编译 opkg，因为某些旧 OpenWrt 版本不会自动包含它
-    make tools/opkg/compile -j1 V=s 2>&1 | tee -a build_tools_compile.log
-    make tools/opkg/install -j1 V=s 2>&1 | tee -a build_tools_install.log
-    # 最终验证 opkg 是否存在
+    
+    # Hanwckf 21.02 的 opkg 在 package/opkg 中，必须单独编译 host 版本
+    if [ ! -f "$BUILD_DIR/staging_dir/host/bin/opkg" ]; then
+        log "  🔧 从 package/opkg 编译 host 版 opkg..."
+        make package/opkg/host/compile -j1 V=s 2>&1 | tee -a build_tools_compile.log
+        make package/opkg/host/install -j1 V=s 2>&1 | tee -a build_tools_install.log
+    fi
+    
+    # 最终验证
     if [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ]; then
-        log "  ✅ opkg 已成功安装到位"
+        log "  ✅ host opkg 已成功安装"
     else
-        log "  ❌ 致命错误：opkg 安装失败，请检查 tools/opkg 源码或依赖"
+        log "  ❌ 致命错误：无法安装 host opkg，构建终止。请检查 package/opkg 是否存在。"
         exit 1
     fi
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 清理环境并强制编译安装 host tools 完成 <<<\e[0m"
-    log "  ✅ host tools 重新编译安装完成"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 安装 host tools 及 opkg 完成 <<<\e[0m"
     
-    # 步骤1：编译工具链
+    # ===== 步骤1：工具链 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链开始 <<<\e[0m"
     log "  📦 步骤1: 编译工具链..."
     set +e
@@ -6635,8 +6639,8 @@ EOF
     [ $STEP1_EXIT_CODE -ne 0 ] && log "  ⚠️ 工具链编译有警告，继续..."
     log "  ✅ 步骤1完成"
     
-    # 步骤2：编译内核和模块（带重试）
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m"
+    # ===== 步骤2：内核与模块 =====
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核与模块开始 <<<\e[0m"
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     local kernel_retry=1 max_kernel_retries=3 kernel_success=0
@@ -6664,18 +6668,18 @@ EOF
         grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null && log "    ❌ 磁盘空间不足" && break
         kernel_retry=$((kernel_retry + 1))
     done
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核与模块完成 <<<\e[0m"
     [ $kernel_success -eq 0 ] && log "  ❌ 内核编译失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     log "  ✅ 步骤2完成"
     
-    # 步骤3：编译软件包
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包开始 <<<\e[0m"
+    # ===== 步骤3：软件包 =====
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译软件包开始 <<<\e[0m"
     log "  📦 步骤3: 编译所有软件包..."
     set +e
     make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
     STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译软件包完成 <<<\e[0m"
     if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
         log "    🔧 禁用 swconfig..."
         find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
@@ -6686,7 +6690,7 @@ EOF
     [ $(ls tmp/info/ 2>/dev/null | wc -l) -eq 0 ] && make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
     log "  ✅ 步骤3完成"
     
-    # 步骤4：安装软件包
+    # ===== 步骤4：安装软件包 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包开始 <<<\e[0m"
     log "  📦 步骤4: 安装软件包..."
     set +e
@@ -6697,7 +6701,7 @@ EOF
     [ $STEP4_EXIT_CODE -ne 0 ] && log "  ⚠️ 软件包安装有警告，继续..."
     log "  ✅ 步骤4完成"
     
-    # 步骤5：生成固件（带重试）
+    # ===== 步骤5：生成固件 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件开始 <<<\e[0m"
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
@@ -6717,7 +6721,7 @@ EOF
     [ $step5_success -eq 0 ] && log "  ❌ 固件生成失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     log "  ✅ 步骤5完成"
     
-    # 格式转换（仅当需要时）
+    # ===== 格式转换（不变） =====
     if [ "${FIRMWARE_NEED_CONVERT:-false}" = "true" ] || [ "${FIRMWARE_HAS_ITB:-0}" = "1" ] || [ "${FIRMWARE_FORMAT_TYPE:-bin}" = "itb" ]; then
         log "🔧 自动固件格式转换..."
         local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
@@ -6778,12 +6782,12 @@ EOC
         fi
     fi
     
-    # 合并日志
+    # ===== 合并日志 =====
     cat build_tools_compile.log build_tools_install.log build_step*.log build_step2_attempt*.log build_step5_attempt*.log > build.log 2>/dev/null || true
     log "  ✅ 分步编译完成"
     kill $protect_pid 2>/dev/null || true
     
-    # 验证固件
+    # ===== 验证固件 =====
     log "🔍 验证固件并计算哈希值..."
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local valid_firmware=0
@@ -7046,7 +7050,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 标记高亮版 + 不拆分单词
+# 全流程错误检查函数 - 全面日志收集 + 最后30行保底
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7063,15 +7067,16 @@ quick_error_check() {
         source "$build_dir/build_env.sh"
     fi
 
+    # 若主日志不存在，选择最近修改的任意日志
     if [ ! -f "$log_file" ]; then
-        local alt_log=$(ls -t "$build_dir"/build_step5_attempt*.log "$build_dir"/build_step*.log "$build_dir"/build.log 2>/dev/null | head -1)
-        [ -f "$alt_log" ] && log_file="$alt_log"
+        local latest_log=$(ls -t "$build_dir"/build_tools_compile.log "$build_dir"/build_tools_install.log "$build_dir"/build_step*.log "$build_dir"/build.log 2>/dev/null | head -1)
+        [ -f "$latest_log" ] && log_file="$latest_log"
     fi
 
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 标记高亮版 (绝对不拆分单词)"
+        echo "🔍 全流程错误检查 - 全面日志收集版"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7080,14 +7085,16 @@ quick_error_check() {
         echo "输入设备: ${DEVICE:-unknown}"
         echo "================================================================="
 
-        # 收集所有日志
+        # 收集所有日志：构建目录下所有 .log，以及 /tmp/build-logs 下所有日志
         declare -A log_sources
-        for pattern in "build_tools_compile" "build_tools_install" "build_step"*.log "build_phase"*.log "build.log" "download.log"; do
-            for f in "$build_dir/"$pattern; do
-                [ -f "$f" ] && log_sources["$f"]="构建目录"
-            done
+        for f in "$build_dir"/*.log; do
+            [ -f "$f" ] && log_sources["$f"]="构建目录"
         done
-        [ -d "/tmp/build-logs" ] && for f in /tmp/build-logs/*.log; do [ -f "$f" ] && log_sources["$f"]="临时日志目录"; done
+        if [ -d "/tmp/build-logs" ]; then
+            for f in /tmp/build-logs/*.log; do
+                [ -f "$f" ] && log_sources["$f"]="临时日志目录"
+            done
+        fi
 
         if [ ${#log_sources[@]} -eq 0 ]; then
             echo "⚠️ 未找到任何日志文件"
@@ -7102,12 +7109,11 @@ quick_error_check() {
         local marks_found=0
         for f in "${!log_sources[@]}"; do
             grep ">>> BUILD_MARK:" "$f" 2>/dev/null | while IFS= read -r line; do
-                # 保留原有的 ANSI 颜色或添加高亮
                 printf "   %s\n" "$line"
             done
         done
-        if [ $? -eq 0 ] && [ -z "$(for f in "${!log_sources[@]}"; do grep ">>> BUILD_MARK:" "$f" 2>/dev/null; done)" ]; then
-            echo "   ⚠️ 未找到任何 BUILD_MARK 标记！编译流程可能未执行到到位。"
+        if [ -z "$(for f in "${!log_sources[@]}"; do grep ">>> BUILD_MARK:" "$f" 2>/dev/null; done)" ]; then
+            echo "   ⚠️ 未找到任何 BUILD_MARK 标记"
         fi
         echo ""
 
@@ -7119,7 +7125,7 @@ quick_error_check() {
         done
         local unique_missing=($(echo "$all_missing_files" | sort -u | head -15))
 
-        # 下载失败记录（按行提取，使用 grep -E 匹配整行，不再分词）
+        # 下载失败记录（整行）
         local all_dl_fails=""
         for f in "${!log_sources[@]}"; do
             local dl_fails=$(grep -E 'curl: \([0-9]+\) |wget: .*error|Download failed|404 Not Found|401 Unauthorized|Failed to connect' "$f" 2>/dev/null | sort -u)
@@ -7193,8 +7199,7 @@ quick_error_check() {
             for mf in "${unique_missing[@]}"; do echo "   ❌ $mf"; done
             echo ""
             echo "💡 常见原因与修复:"
-            echo "${unique_missing[*]}" | grep -q "opkg" && echo "   - opkg 缺失: 执行 make tools/compile && make tools/install"
-            echo "${unique_missing[*]}" | grep -q "root-" && echo "   - root 目录缺失: 检查 ensure_root_dirs 是否正确创建"
+            echo "${unique_missing[*]}" | grep -q "opkg" && echo "   - opkg 缺失: 执行 make package/opkg/host/install"
             echo ""
         fi
 
@@ -7209,12 +7214,7 @@ quick_error_check() {
             echo "----------------------------------------"
             echo "$err127_lines" | tail -20
             echo ""
-            local missing_cmd=$(echo "$err127_lines" | grep -oP '\S+:\s+(No such file or directory|command not found)' | sed 's/:.*//' | sort -u)
-            [ -n "$missing_cmd" ] && echo "🔧 缺失的命令/文件:" && for cmd in $missing_cmd; do echo "   - $cmd"; done
-            echo ""
-            echo "💡 修复建议:"
-            echo "   🔧 缺失 host 工具时，请执行 make tools/compile && make tools/install"
-            echo "   🔧 若为源码问题，检查相关软件包是否需要独立编译"
+            echo "💡 修复建议: 请确保 host opkg 已正确安装。"
             echo ""
         fi
 
@@ -7235,12 +7235,12 @@ quick_error_check() {
             done
             if [ ${#missing_host_tools[@]} -gt 0 ]; then
                 echo "⚠️ staging_dir 关键 host 工具缺失: ${missing_host_tools[*]}"
-                echo "   🔧 请执行 make tools/compile && make tools/install 重新编译安装。"
+                echo "   🔧 请执行 make package/opkg/host/install 重新编译 opkg。"
                 echo ""
             fi
         fi
 
-        # 按步骤错误扫描
+        # 按步骤错误扫描（简化但保留）
         echo "🔍 按步骤错误扫描:"
         echo "----------------------------------------"
         declare -A step_patterns
@@ -7302,13 +7302,20 @@ quick_error_check() {
         fi
         echo ""
 
-        # 最后日志
+        # 最后30行日志（保证展示）
+        echo "🔍 最后30行日志摘要 ($(basename "${log_file:-未知}")):"
+        echo "----------------------------------------"
         if [ -f "$log_file" ]; then
-            echo "🔍 最后30行日志摘要 ($(basename "$log_file")):"
-            echo "----------------------------------------"
             tail -30 "$log_file" | sed 's/^/   /'
-            echo ""
+        else
+            echo "   (无可用主日志，尝试显示最近日志文件内容)"
+            local fallback_log=$(ls -t "$build_dir"/*.log 2>/dev/null | head -1)
+            if [ -f "$fallback_log" ]; then
+                echo "   文件: $(basename "$fallback_log")"
+                tail -30 "$fallback_log" | sed 's/^/   /'
+            fi
         fi
+        echo ""
 
         # 构建总结
         echo "================================================================="
@@ -7321,7 +7328,7 @@ quick_error_check() {
             echo ""
             echo "💡 诊断建议:"
             [ ${#unique_missing[@]} -gt 0 ] && echo "   🔧 文件缺失: 请检查上方缺失列表。"
-            [ -n "$err127_lines" ] && echo "   🔧 Error 127: 缺失关键命令，请执行 make tools/compile && make tools/install。"
+            [ -n "$err127_lines" ] && echo "   🔧 Error 127: 缺失关键命令，请检查 step0 日志。"
             for f in "${!log_sources[@]}"; do
                 grep -l "No space left" "$f" 2>/dev/null && echo "   🔧 磁盘空间不足"
                 grep -l "Download failed" "$f" 2>/dev/null && echo "   🔧 下载失败"
