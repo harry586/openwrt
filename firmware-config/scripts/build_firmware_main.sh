@@ -6975,7 +6975,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 精准版 + 失败包详情
+# 全流程错误检查函数 - 精准版（明确列出失败包）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7062,7 +7062,6 @@ quick_error_check() {
         local feed_warnings=$(grep -hE "WARNING: Makefile.*has a (dependency|build dependency) on" "$build_dir"/*.log 2>/dev/null | sort -u | head -10)
         if [ -n "$feed_warnings" ]; then
             echo "$feed_warnings"
-            echo "   ... 更多警告请查看 feeds 相关日志"
         else
             echo "   ✅ 未发现依赖缺失警告"
         fi
@@ -7141,6 +7140,7 @@ quick_error_check() {
         echo "----------------------------------------"
         local fatal_patterns=(
             'make\[[0-9]*\]: \*\*\* \[.*\] Error [0-9]+'
+            'make: \*\*\* \[.*\] Error [0-9]+'
             'ERROR:.*failed to build'
             'fatal error:'
             'undefined reference to'
@@ -7182,36 +7182,62 @@ quick_error_check() {
         [ $total_fatal -eq 0 ] && echo "   ✅ 未发现致命编译错误"
         echo ""
 
-        # ===== 失败包详情（解析日志，列出具体包和错误原因） =====
-        echo "🔧 编译失败包详情 (点击左侧三角展开):"
+        # ===== 失败包详情（增强提取） =====
+        echo "🔧 编译失败包详情:"
         echo "----------------------------------------"
-        # 提取所有编译失败的包路径 (例: make[3]: *** [package/feeds/packages/gnutls/compile] Error 2)
-        local failed_pkgs_list="/tmp/failed_pkgs_$$.txt"
-        > "$failed_pkgs_list"
+        local failed_pkgs_file="/tmp/failed_pkgs_$$.txt"
+        > "$failed_pkgs_file"
+
+        # 1. 提取所有 make 错误目标（支持 make[1]: *** [路径] 和 make: *** [路径]）
         for f in "${!log_sources[@]}"; do
-            grep -oP 'make\[[0-9]+\]: \*\*\* \[\K[^]]+' "$f" 2>/dev/null | grep -E '/compile|/install' >> "$failed_pkgs_list"
+            grep -Poh 'make(?:\[[0-9]+\])?: \*\*\* \[\K[^\]]+(?=\])' "$f" 2>/dev/null >> "$failed_pkgs_file"
         done
-        local unique_failed=$(sort -u "$failed_pkgs_list" | head -20)
-        if [ -n "$unique_failed" ]; then
-            while IFS= read -r line; do
-                [ -z "$line" ] && continue
-                # 把 make 目标路径转换为包名（比如 package/feeds/packages/gnutls -> gnutls）
-                local pkg=$(echo "$line" | awk -F'/' '{for(i=1;i<=NF;i++){if($i=="package"){print $(i+1)":"$(i+2)":"$(i+3)}}}' | sed 's/:/ /g' | awk '{print $NF}')
-                [ -z "$pkg" ] && pkg=$(basename "$line")
-                echo "   📦 $pkg  ($line)"
-                # 在日志中搜索该目标附近的错误信息（最近2行包含 error 或 Error）
-                local detail=$(for f in "${!log_sources[@]}"; do
-                    grep -B2 -A0 "Error" "$f" 2>/dev/null | grep -E "$pkg|error:" | tail -2
-                done | sort -u | head -3)
-                if [ -n "$detail" ]; then
-                    echo "      ${detail}"
-                fi
-                echo ""
-            done <<< "$unique_failed"
-        else
-            echo "   (无具体包编译失败信息)"
+        # 2. 提取 ERROR: ... failed to build
+        for f in "${!log_sources[@]}"; do
+            grep -ohP 'ERROR: \K.*failed to build' "$f" 2>/dev/null >> "$failed_pkgs_file"
+        done
+
+        local unique_failed_lines=$(sort -u "$failed_pkgs_file" | grep -v '/Makefile:')
+        # 从每一行中提取包名（取最后一个 /compile 或 /install 之前的目录名）
+        local shown_failures=0
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            # 跳过已经包含 'toplevel.mk' 的全局错误，避免重复
+            if echo "$line" | grep -q 'toplevel.mk'; then
+                continue
+            fi
+            local pkg_name=""
+            if echo "$line" | grep -q '/compile\|/install'; then
+                pkg_name=$(echo "$line" | sed 's:/compile$::; s:/install$::; s:/host/compile$::; s:/host/install$::' | awk -F/ '{print $NF}')
+            else
+                # 对于 ERROR: package/xxx failed to build 这种
+                pkg_name=$(echo "$line" | sed 's/ failed to build$//' | awk -F/ '{print $NF}')
+            fi
+            [ -z "$pkg_name" ] && pkg_name="$(basename "$line")"
+            echo "   📦 $pkg_name  ($line)"
+            # 在日志中搜索该包附近的错误信息（最多3行）
+            local detail=$(for f in "${!log_sources[@]}"; do
+                grep -A2 -i "error:" "$f" 2>/dev/null | grep -i "$pkg_name" | head -2
+            done | sort -u)
+            if [ -n "$detail" ]; then
+                echo "$detail" | while read d; do echo "      $d"; done
+            fi
+            shown_failures=$((shown_failures + 1))
+            [ $shown_failures -ge 15 ] && break
+        done <<< "$unique_failed_lines"
+
+        # 如果没有有效包，再显示顶级 make 错误作为提示
+        if [ $shown_failures -eq 0 ]; then
+            local top_error=$(grep -h 'make: \*\*\* .* Error' "$build_dir"/build_step3.log "$build_dir"/build.log 2>/dev/null | head -1)
+            if [ -n "$top_error" ]; then
+                echo "   ⚠️ 未提取到具体包，顶层错误: $top_error"
+                echo "   💡 这通常表示某个软件包编译失败，但日志中未包含详细包名。"
+                echo "   请查看 build_step3.log 末尾附近的 'ERROR:' 或 'make[...]: ***' 行。"
+            else
+                echo "   (未检测到具体失败包)"
+            fi
         fi
-        rm -f "$failed_pkgs_list"
+        rm -f "$failed_pkgs_file"
         echo "----------------------------------------"
         echo ""
 
@@ -7262,7 +7288,7 @@ quick_error_check() {
             echo "❌ 未生成任何有效固件，构建失败。"
             echo ""
             echo "💡 排查建议:"
-            [ -n "$unique_failed" ] && echo "   🔧 失败的包: $(echo $unique_failed | tr '\n' ' ')"
+            [ -n "$unique_failed_lines" ] && echo "   🔧 失败的包: $(echo $unique_failed_lines | tr '\n' ' ')"
             [ -n "$missing_files" ] && echo "   🔧 缺失文件可能导致部分包编译失败。"
             [ -n "$dl_errors" ] && echo "   🔧 下载失败，请检查网络或更换源。"
         fi
