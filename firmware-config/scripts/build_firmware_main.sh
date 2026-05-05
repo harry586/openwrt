@@ -1285,8 +1285,28 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    log "🔧 预创建所有可能缺失的文件..."
+    # ---------- 新增：Hanwckf 模式保留原有 feeds ----------
+    local is_hanwckf=0
+    if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
+        is_hanwckf=1
+    fi
     
+    if [ $is_hanwckf -eq 1 ]; then
+        log "🔧 Hanwckf 模式：保留源码自带的 feeds.conf.default"
+        if [ -f "feeds.conf.default" ]; then
+            cp "feeds.conf.default" "feeds.conf.default.bak"
+            log "  ✅ 已备份原有 feeds 配置"
+        fi
+        # 直接进行更新和安装，不重写 feeds 文件
+        log "=== 更新Feeds ==="
+        ./scripts/feeds update -a || log "⚠️ feeds更新有警告，继续"
+        ./scripts/feeds install -a || log "⚠️ feeds安装有警告，继续"
+        log "✅ Feeds配置完成"
+        return 0
+    fi
+    
+    # ---------- 以下为原有标准流程 ----------
+    log "🔧 预创建所有可能缺失的文件..."
     mkdir -p staging_dir/target-*/root-*/etc 2>/dev/null || true
     for target_dir in staging_dir/target-*; do
         if [ -d "$target_dir" ]; then
@@ -1605,10 +1625,11 @@ generate_config() {
             handle_error "Hanwckf 预置配置缺失"
         fi
         
-        # 添加额外包
+        # ---------- 修复：同时兼容逗号和分号分隔 ----------
         if [ -n "$extra_packages" ]; then
             log "📦 添加额外包: $extra_packages"
-            IFS=',' read -ra PKG_ARRAY <<< "$extra_packages"
+            local fixed_packages=$(echo "$extra_packages" | sed 's/;/,/g')
+            IFS=',' read -ra PKG_ARRAY <<< "$fixed_packages"
             for pkg in "${PKG_ARRAY[@]}"; do
                 pkg=$(echo "$pkg" | xargs)
                 [ -z "$pkg" ] && continue
@@ -1625,8 +1646,6 @@ generate_config() {
         
         # TurboACC 在 Hanwckf 模式下不添加（MTK 闭源驱动已包含硬件加速）
         log "ℹ️ Hanwckf 模式：跳过 TurboACC（已集成 MTK 硬件加速）"
-        
-        # ath10k-ct 强制（不适用于此平台，跳过）
         
         # 禁用 IPv6（与通用流程一致）
         if [ "${DISABLE_IPV6:-true}" = "true" ]; then
@@ -7018,7 +7037,8 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 终极全面日志版（含Feed警告、多重回退）
+# 全流程错误检查函数 - 终极精准版
+# 仅统计致命错误，分步清晰，排除误报
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7044,7 +7064,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 终极全面日志版"
+        echo "🔍 全流程错误检查 - 精准版"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7053,7 +7073,7 @@ quick_error_check() {
         echo "输入设备: ${DEVICE:-unknown}"
         echo "================================================================="
 
-        # 收集所有日志：构建目录下所有 *.log 文件 + /tmp/build-logs
+        # 收集所有日志
         declare -A log_sources
         for f in "$build_dir"/*.log; do
             [ -f "$f" ] && log_sources["$f"]="构建目录"
@@ -7071,20 +7091,20 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
-        # --- BUILD_MARK 标记 ---
+        # ===== 解析 BUILD_MARK =====
         echo "📌 编译流程执行标记:"
         echo "----------------------------------------"
+        local any_mark=0
         for f in "${!log_sources[@]}"; do
-            grep ">>> BUILD_MARK:" "$f" 2>/dev/null | while IFS= read -r line; do
+            grep ">>> BUILD_MARK:" "$f" 2>/dev/null | sort -u | while IFS= read -r line; do
                 printf "   %s\n" "$line"
             done
+            grep -q ">>> BUILD_MARK:" "$f" 2>/dev/null && any_mark=1
         done
-        if [ -z "$(for f in "${!log_sources[@]}"; do grep ">>> BUILD_MARK:" "$f" 2>/dev/null; done)" ]; then
-            echo "   ⚠️ 未找到任何 BUILD_MARK 标记"
-        fi
+        [ $any_mark -eq 0 ] && echo "   ⚠️ 未找到任何 BUILD_MARK 标记"
         echo ""
 
-        # --- Makefile 目标验证 ---
+        # ===== Makefile 目标 =====
         echo "📌 源码 Makefile 关键目标检查:"
         echo "----------------------------------------"
         local makefile_issues=0
@@ -7099,7 +7119,7 @@ quick_error_check() {
         [ $makefile_issues -gt 0 ] && echo "   🔧 有 $makefile_issues 个目标缺失，编译可能出错"
         echo ""
 
-        # Feed 及依赖警告摘要
+        # ===== Feed 警告 =====
         echo "📌 Feed 安装及依赖警告摘要:"
         echo "----------------------------------------"
         local feed_warnings=$(grep -hE "WARNING: Makefile.*has a (dependency|build dependency) on" "$build_dir"/*.log 2>/dev/null | sort -u | head -10)
@@ -7111,23 +7131,26 @@ quick_error_check() {
         fi
         echo ""
 
-        # 精确收集缺失文件
-        local all_missing_files=""
-        for f in "${!log_sources[@]}"; do
-            local missing_lines=$(grep -oP '(/[^ ]+|[^ ]+/[^ ]*)\s*:\s*No such file or directory' "$f" 2>/dev/null | sed 's/: No such file or directory//' | sort -u)
-            [ -n "$missing_lines" ] && all_missing_files+=$'\n'"$missing_lines"
-        done
-        local unique_missing=($(echo "$all_missing_files" | sort -u | head -15))
+        # ===== 缺失文件 + 下载失败 =====
+        echo "🚨 关键异常摘要:"
+        echo "----------------------------------------"
+        local missing_files=$(for f in "${!log_sources[@]}"; do
+            grep -oP '(/[^ ]+|[^ ]+/[^ ]*)\s*:\s*No such file or directory' "$f" 2>/dev/null | sed 's/: No such file or directory//' | sort -u
+        done | head -5)
+        if [ -n "$missing_files" ]; then
+            echo "  ❌ 缺失文件/头文件:"
+            echo "$missing_files" | while read mf; do echo "      - $mf"; done
+        fi
+        local dl_errors=$(for f in "${!log_sources[@]}"; do
+            grep -E 'Download failed|curl: \([0-9]+\) |wget: .*error|404 Not Found' "$f" 2>/dev/null | sort -u
+        done | head -5)
+        if [ -n "$dl_errors" ]; then
+            echo "  ❌ 下载错误:"
+            echo "$dl_errors" | while read dl; do echo "      $dl"; done
+        fi
+        echo ""
 
-        # 下载失败记录
-        local all_dl_fails=""
-        for f in "${!log_sources[@]}"; do
-            local dl_fails=$(grep -E 'curl: \([0-9]+\) |wget: .*error|Download failed|404 Not Found|401 Unauthorized' "$f" 2>/dev/null | sort -u)
-            [ -n "$dl_fails" ] && all_dl_fails+=$'\n'"$dl_fails"
-        done
-        readarray -t unique_dl_fails <<< "$(echo "$all_dl_fails" | head -5)"
-
-        # 固件状态
+        # ===== 固件状态 =====
         echo "🔍 固件生成状态检查"
         echo "----------------------------------------"
         local full_target="${TARGET:-$target_platform}"
@@ -7136,13 +7159,13 @@ quick_error_check() {
         [ ! -d "$target_dir" ] && target_dir=$(find bin/targets -type d -name "*$full_target*" 2>/dev/null | head -1)
         echo "检查路径: $target_dir"
         echo ""
-        local found_firmware=0 valid_sysupgrade=0 valid_factory=0 firmware_details=() warnings=()
+        local found_firmware=0 valid_sysupgrade=0 valid_factory=0 firmware_details=()
 
         if [ -d "$target_dir" ]; then
             while IFS= read -r file; do
                 [ -z "$file" ] && continue
                 local fname=$(basename "$file")
-                [[ "$fname" == *"initramfs"* ]] || [[ "$fname" == *".manifest" ]] || [[ "$fname" == *"sha256sums"* ]] || [[ "$fname" == *".fip" ]] && continue
+                [[ "$fname" == *"initramfs"* ]] || [[ "$fname" == *".manifest" ]] || [[ "$fname" == *"sha256sums"* ]] && continue
 
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
@@ -7153,21 +7176,18 @@ quick_error_check() {
                 [[ "$fname" == *"sysupgrade"* ]] && ftype="sysupgrade"
                 [[ "$fname" == *"factory"* ]] && ftype="factory"
 
-                local size_warning=""
-                if [ $fsize_mb -lt 10 ] && [ "$ftype" != "other" ]; then
-                    size_warning="⚠️ 固件偏小(${fsize_mb}MB)，可能裁剪过度或生成失败"
-                    warnings+=("${fname}: ${size_warning}")
-                fi
-
                 if [ $fsize_mb -ge 5 ]; then
                     if [ "$ftype" != "other" ]; then
-                        [ -n "$size_warning" ] && echo "⚠️ $fname" || echo "✅ $fname"
-                        echo "   大小: $fsize_human (${fsize_mb}MB)"
+                        if [ $fsize_mb -lt 10 ]; then
+                            echo "⚠️ $fname"
+                            echo "   大小: $fsize_human (${fsize_mb}MB) - 固件偏小，可能功能精简"
+                        else
+                            echo "✅ $fname"
+                        fi
                         echo "   SHA256: $fhash"
-                        [ -n "$size_warning" ] && echo "   $size_warning"
-                        [ "$ftype" = "sysupgrade" ] && valid_sysupgrade=$((valid_sysupgrade+1))
-                        [ "$ftype" = "factory" ] && valid_factory=$((valid_factory+1))
-                        firmware_details+=("$fname|$fsize_human|$fhash|$ftype|$size_warning")
+                        [ "$ftype" = "sysupgrade" ] && valid_sysupgrade=$((valid_sysupgrade + 1))
+                        [ "$ftype" = "factory" ] && valid_factory=$((valid_factory + 1))
+                        firmware_details+=("$fname|$fsize_human|$fhash|$ftype")
                     else
                         echo "📄 $fname - $fsize_human (其他文件)"
                     fi
@@ -7178,109 +7198,69 @@ quick_error_check() {
             done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | sort)
 
             [ $found_firmware -eq 0 ] && echo "❌ 目录存在但未找到固件文件" && echo "📋 目录内容:" && ls -la "$target_dir" 2>/dev/null | head -20 | sed 's/^/   /'
-            [ $valid_sysupgrade -eq 0 ] && [ $found_firmware -gt 0 ] && warnings+=("缺少 sysupgrade.bin 固件") && echo "⚠️ 缺少 sysupgrade.bin 固件" && echo ""
+            [ $valid_sysupgrade -eq 0 ] && [ $found_firmware -gt 0 ] && echo "⚠️ 缺少 sysupgrade.bin 固件" && echo ""
         else
             echo "❌ 目标目录不存在: $target_dir"
-            warnings+=("固件目录不存在")
         fi
         echo "----------------------------------------"
         echo ""
 
-        # 缺失文件报告
-        if [ ${#unique_missing[@]} -gt 0 ]; then
-            echo "🚨 发现缺失文件/目录:"
-            echo "----------------------------------------"
-            for mf in "${unique_missing[@]}"; do echo "   ❌ $mf"; done
-            echo ""
-            echo "💡 常见原因与修复:"
-            echo "${unique_missing[*]}" | grep -q "opkg" && echo "   - opkg 缺失: 脚本已动态编译，若仍缺失请检查 package/Makefile"
-            echo "${unique_missing[*]}" | grep -q "root-" && echo "   - root 目录缺失: 检查 ensure_root_dirs 正确性"
-            echo ""
-        fi
-
-        # Error 127 诊断
-        local err127_lines=""
-        for f in "${!log_sources[@]}"; do
-            local found127=$(grep -B2 "Error 127" "$f" 2>/dev/null)
-            [ -n "$found127" ] && err127_lines+=$'\n'"$found127"
-        done
-        if [ -n "$err127_lines" ]; then
-            echo "🚨 检测到 Error 127 (命令未找到):"
-            echo "----------------------------------------"
-            echo "$err127_lines" | tail -20
-            echo ""
-            echo "💡 修复建议: 缺失 host 工具，请确保步骤0成功安装了 opkg 等工具"
-            echo ""
-        fi
-
-        # 下载失败
-        if [ ${#unique_dl_fails[@]} -gt 0 ]; then
-            echo "🚨 下载失败记录:"
-            echo "----------------------------------------"
-            for dl in "${unique_dl_fails[@]}"; do echo "   🔗 $dl"; done
-            echo "💡 请检查网络连接或更换镜像源。"
-            echo ""
-        fi
-
-        # staging_dir 工具完整性
-        if [ -d "staging_dir" ]; then
-            local missing_host_tools=()
-            for tool in opkg fakeroot mkhash; do
-                [ ! -f "staging_dir/host/bin/$tool" ] && missing_host_tools+=("$tool")
-            done
-            if [ ${#missing_host_tools[@]} -gt 0 ]; then
-                echo "⚠️ staging_dir 关键 host 工具缺失: ${missing_host_tools[*]}"
-                echo "   🔧 请检查步骤0是否成功编译安装这些工具"
-                echo ""
-            fi
-        fi
-
-        # 按步骤错误扫描
-        echo "🔍 按步骤错误扫描:"
+        # ===== 按步骤致命错误扫描 =====
+        echo "🔍 分步编译致命错误统计:"
         echo "----------------------------------------"
-        declare -A step_patterns
-        step_patterns["步骤01-04: 初始化和环境"]="*"
-        step_patterns["步骤09: 编译工具链"]="*toolchain*|*tools*|build_step1*"
-        step_patterns["步骤12: 配置Feeds"]="*feeds*"
-        step_patterns["步骤21: 下载依赖包"]="*download*"
-        step_patterns["步骤25: 编译固件"]="build_step*"
-        step_patterns["其他步骤"]="*"
-
-        local total_step_errors=0
-        local error_patterns=(
-            "致命错误:make:.*\*\*\*.*Error|make: \*\*\* .*Error"
-            "构建失败:ERROR:.*failed to build"
-            "设备匹配问题:无法.*获取平台信息|环境文件不存在|DEVICE.*为空"
-            "源码克隆失败:git clone.*fatal|fatal:.*git clone"
-            "补丁失败:Patch failed|Hunk FAILED"
-            "编译错误:error:|undefined reference|implicit declaration"
-            "下载失败:Download failed|curl.*error|wget.*error|404 Not Found"
-            "磁盘空间不足:No space left"
-            "Feeds问题:feeds.*Error|feeds.*fatal"
-            "Git错误:fatal:|error:.*git"
+        # 只统计真正的致命错误
+        local fatal_patterns=(
+            'make\[[0-9]*\]: \*\*\* \[.*\] Error [0-9]+'   # 构建规则错误
+            'ERROR:.*failed to build'                       # 包构建失败
+            'fatal error:'                                  # 编译致命错误
+            'undefined reference to'                        # 链接未定义
+            'No rule to make target'                        # 缺少目标
+            'cannot find -l'                                # 库缺失
+            'recipe for target.*failed'                     # 目标失败
         )
+        declare -A step_errors
+        map_log_to_step() {
+            local fname=$(basename "$1")
+            case "$fname" in
+                build_tools*|build_tools_compile.log|build_tools_install.log) echo "STEP0" ;;
+                build_step1.log) echo "STEP1" ;;
+                build_step2*) echo "STEP2" ;;
+                build_step3.log) echo "STEP3" ;;
+                build_step4.log) echo "STEP4" ;;
+                build_step5*) echo "STEP5" ;;
+                *) echo "OTHER" ;;
+            esac
+        }
 
-        for log_file_to_check in "${!log_sources[@]}"; do
-            local log_name=$(basename "$log_file_to_check")
-            local matched_step="其他步骤"
-            for step_name in "${!step_patterns[@]}"; do
-                local pat="${step_patterns[$step_name]}"
-                local regex=$(echo "$pat" | sed 's/\*/.*/g')
-                [[ "$log_name" =~ $regex ]] && matched_step="$step_name" && break
+        local total_fatal=0
+        for log_to_check in "${!log_sources[@]}"; do
+            [[ "$(basename "$log_to_check")" == "build_marks.log" ]] && continue
+            local step_label=$(map_log_to_step "$log_to_check")
+            local err_count=0
+            for pat in "${fatal_patterns[@]}"; do
+                err_count=$((err_count + $(grep -cE "$pat" "$log_to_check" 2>/dev/null || echo 0) ))
             done
-            local step_has_error=0
-            for pattern_pair in "${error_patterns[@]}"; do
-                local err_name="${pattern_pair%%:*}"
-                local err_pattern="${pattern_pair##*:}"
-                local match_count=$(grep -E -i -c "$err_pattern" "$log_file_to_check" 2>/dev/null || echo "0")
-                [ "$match_count" -gt 0 ] && [ $step_has_error -eq 0 ] && echo "⚠️ $matched_step ($log_name):" && step_has_error=1 && echo "   $err_name (共 $match_count 处)" && total_step_errors=$((total_step_errors + match_count))
-            done
-            [ $step_has_error -eq 1 ] && echo ""
+            if [ $err_count -gt 0 ]; then
+                echo "   🚨 ${step_label} ($(basename "$log_to_check")): $err_count 个致命错误"
+            fi
+            step_errors[$step_label]=$((step_errors[$step_label] + err_count))
+            total_fatal=$((total_fatal + err_count))
         done
-        [ $total_step_errors -eq 0 ] && echo "✅ 所有步骤未检测到错误" || echo "📊 全流程错误/警告总数: $total_step_errors"
+
+        if [ $total_fatal -eq 0 ]; then
+            echo "   ✅ 未发现致命编译错误"
+        else
+            echo ""
+            echo "📊 各阶段致命错误总数: $total_fatal"
+            for seg in "STEP0" "STEP1" "STEP2" "STEP3" "STEP4" "STEP5" "OTHER"; do
+                [ ${step_errors[$seg]:-0} -gt 0 ] && echo "   $seg: ${step_errors[$seg]} 个"
+            done
+            echo ""
+            echo "⚠️ 建议：查看对应步骤日志，定位首个错误。"
+        fi
         echo ""
 
-        # 关键组件状态
+        # ===== 关键组件 =====
         echo "🔍 关键组件状态检查:"
         echo "----------------------------------------"
         [ -d "staging_dir" ] && echo "✅ staging_dir 存在 ($(du -sh staging_dir 2>/dev/null | awk '{print $1}'))" || echo "❌ staging_dir 不存在"
@@ -7297,46 +7277,43 @@ quick_error_check() {
         fi
         echo ""
 
-        # 最后30行日志（三重回退）
-        echo "🔍 最后30行日志摘要:"
+        # 最后30行日志（过滤标记）
+        echo "🔍 最后30行日志 (已过滤 BUILD_MARK):"
         echo "----------------------------------------"
         if [ -f "$log_file" ]; then
-            tail -30 "$log_file" | sed 's/^/   /'
+            grep -v ">>> BUILD_MARK:" "$log_file" | tail -30 | sed 's/^/   /'
         else
             local best_log=$(ls -t "$build_dir"/build_step5_attempt*.log "$build_dir"/build_step*.log "$build_dir"/*.log 2>/dev/null | head -1)
             if [ -f "$best_log" ]; then
-                echo "   文件: $(basename "$best_log")"
-                tail -30 "$best_log" | sed 's/^/   /'
+                echo "   文件: $(basename "$best_log") (已过滤)"
+                grep -v ">>> BUILD_MARK:" "$best_log" | tail -30 | sed 's/^/   /'
             else
                 echo "   (无可用的构建日志)"
             fi
         fi
         echo ""
 
-        # 构建总结
+        # 总结
         echo "================================================================="
-        echo "📊 构建结果总结:"
-        local valid_total=$((valid_sysupgrade + valid_factory))
-        if [ $valid_total -gt 0 ]; then
-            echo "🎉🎉🎉 编译成功！生成了 $valid_total 个有效固件 🎉🎉🎉"
+        echo "📊 构建结论:"
+        if [ $((valid_sysupgrade + valid_factory)) -gt 0 ]; then
+            echo "🎉 固件已成功生成，有效文件: sysupgrade $valid_sysupgrade 个，factory $valid_factory 个"
+            if [ $total_fatal -gt 0 ]; then
+                echo "⚠️ 但检测到 $total_fatal 个致命编译错误（可能有部分软件包未编译成功），请核查功能。"
+            fi
         else
-            echo "❌❌❌ 构建结果: 无有效固件 ❌❌❌"
+            echo "❌ 构建失败，未生成任何有效固件。"
             echo ""
-            echo "💡 诊断建议:"
-            [ ${#unique_missing[@]} -gt 0 ] && echo "   🔧 文件缺失: 请检查上方缺失列表。"
-            [ -n "$err127_lines" ] && echo "   🔧 Error 127: 缺失关键命令，请检查宿主工具安装。"
-            [ $makefile_issues -gt 0 ] && echo "   🔧 Makefile 目标缺失: 源码可能不完整。"
-            for f in "${!log_sources[@]}"; do
-                grep -l "No space left" "$f" 2>/dev/null && echo "   🔧 磁盘空间不足"
-                grep -l "Download failed" "$f" 2>/dev/null && echo "   🔧 下载失败"
-            done
+            echo "💡 排查建议:"
+            [ -n "$missing_files" ] && echo "   🔧 缺失文件可能导致部分包编译失败。"
+            [ -n "$dl_errors" ] && echo "   🔧 下载失败，请检查网络或更换源。"
+            [ $total_fatal -gt 0 ] && echo "   🔧 请查看上方分步错误，从最早阶段开始修复。"
         fi
-        echo ""
         echo "================================================================="
     } | tee "$output_file"
 
     echo "✅ 错误检查报告已保存到: $output_file"
-    return $(( valid_total > 0 ? 0 : 1 ))
+    return $(( (valid_sysupgrade + valid_factory) > 0 ? 0 : 1 ))
 }
 #【build_firmware_main.sh-43-end】
 
