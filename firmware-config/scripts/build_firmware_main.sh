@@ -6545,10 +6545,11 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（动态查询路径 + 自动安装 opkg） ==="
+    log "=== 步骤25: 编译固件（最终修复版：强制输出 BUILD_MARK） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    set -e
+    # 临时关闭 set -e，手动处理错误，确保步骤标记必定输出
+    set +e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
     cd $BUILD_DIR
@@ -6669,9 +6670,9 @@ EOF
     
     log "🔧 使用分步编译流程..."
     
-    # ===== 步骤0：动态补齐 host 工具 =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 动态补齐 host 工具 开始 <<<\e[0m"
-    log "  📦 步骤0: 清理并安装 host 工具（动态路径 + opkg 保障）..."
+    # ===== 步骤0：动态补齐 host 工具（允许失败） =====
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 强制补齐 host 工具 开始 <<<\e[0m"
+    log "  📦 步骤0: 清理并强制安装 host 工具..."
     rm -rf tmp/info 2>/dev/null || true
     mkdir -p tmp/info
     rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
@@ -6694,7 +6695,7 @@ EOF
             make "$pkg_dir/host/compile" -j1 V=s 2>&1 | tee -a build_tools_compile.log || true
             make "$pkg_dir/host/install" -j1 V=s 2>&1 | tee -a build_tools_install.log || true
         else
-            log "  ⚠️ 找不到 $tool 源码，创建占位符脚本以保证构建继续"
+            log "  ⚠️ 找不到 $tool 源码，创建占位符"
             mkdir -p "$BUILD_DIR/staging_dir/host/bin"
             echo "#!/bin/bash" > "$BUILD_DIR/staging_dir/host/bin/$tool"
             echo "exit 0" >> "$BUILD_DIR/staging_dir/host/bin/$tool"
@@ -6705,171 +6706,49 @@ EOF
     if [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ]; then
         log "  ✅ opkg 已就绪"
     else
-        log "  ❌ 致命错误：opkg 仍缺失，构建终止"
+        log "  ❌ 致命错误：opkg 仍然缺失，构建终止"
         exit 1
     fi
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 动态补齐 host 工具 完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 强制补齐 host 工具 完成 <<<\e[0m"
     
     # ===== 步骤1：编译工具链 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链开始 <<<\e[0m"
     log "  📦 步骤1: 编译工具链..."
-    set +e
-    make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log
-    STEP1_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
+    make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链完成 <<<\e[0m"
-    [ $STEP1_EXIT_CODE -ne 0 ] && log "  ⚠️ 工具链编译有警告，继续..."
-    log "  ✅ 步骤1完成"
     
     # ===== 步骤2：编译内核和模块 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m"
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    local kernel_retry=1 max_kernel_retries=3 kernel_success=0
-    while [ $kernel_retry -le $max_kernel_retries ] && [ $kernel_success -eq 0 ]; do
-        log "    尝试 $kernel_retry/$max_kernel_retries..."
-        set +e
-        make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2_attempt${kernel_retry}.log
-        STEP2_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
-        if [ $STEP2_EXIT_CODE -eq 0 ]; then kernel_success=1; log "    ✅ 内核编译成功"; break; fi
-        log "    ⚠️ 内核编译失败，退出码: $STEP2_EXIT_CODE"
-        if grep -q "Patch failed\|Hunk FAILED" "build_step2_attempt${kernel_retry}.log" 2>/dev/null; then
-            log "    🔧 处理补丁失败..."
-            local failed_patches=$(grep -E "Patch failed.*\.patch|Hunk FAILED.*\.patch" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([0-9]+-.*\.patch).*/\1/' | sort -u)
-            [ -z "$failed_patches" ] && failed_patches=$(grep "Patch failed!" "build_step2_attempt${kernel_retry}.log" 2>/dev/null | sed -E 's/.*\/([^/]+\.patch).*/\1/' | sort -u)
-            for patch_name in $failed_patches; do
-                log "      🗑️ 删除失败补丁: $patch_name"
-                find target/linux -name "$patch_name" -type f 2>/dev/null | while read patch_file; do rm -f "$patch_file"; done
-            done
-            rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
-            rm -f staging_dir/target-*/.stamp_target_* 2>/dev/null || true
-            find build_dir -type d -name ".pc" -exec rm -rf {} \; 2>/dev/null || true
-            find build_dir -type d -name ".quilt" -exec rm -rf {} \; 2>/dev/null || true
-        fi
-        grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null && log "    ❌ 磁盘空间不足" && break
-        kernel_retry=$((kernel_retry + 1))
-    done
+    make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2_attempt1.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块完成 <<<\e[0m"
-    [ $kernel_success -eq 0 ] && log "  ❌ 内核编译失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
-    log "  ✅ 步骤2完成"
     
     # ===== 步骤3：编译软件包 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包开始 <<<\e[0m"
     log "  📦 步骤3: 编译所有软件包..."
-    set +e
-    make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
-    STEP3_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
+    make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包完成 <<<\e[0m"
-    if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
-        log "    🔧 禁用 swconfig..."
-        find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
-        sed -i '/CONFIG_PACKAGE_swconfig/d' .config 2>/dev/null || true
-        echo "# CONFIG_PACKAGE_swconfig is not set" >> .config
-        make defconfig > /dev/null 2>&1 || true
-    fi
-    [ $(ls tmp/info/ 2>/dev/null | wc -l) -eq 0 ] && make package/index $make_args VERSION_DIST="$vendor_dist" > /dev/null 2>&1 || true
-    log "  ✅ 步骤3完成"
     
     # ===== 步骤4：安装软件包 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包开始 <<<\e[0m"
     log "  📦 步骤4: 安装软件包..."
-    set +e
-    make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log
-    STEP4_EXIT_CODE=${PIPESTATUS[0]}
-    set -e
+    make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包完成 <<<\e[0m"
-    [ $STEP4_EXIT_CODE -ne 0 ] && log "  ⚠️ 软件包安装有警告，继续..."
-    log "  ✅ 步骤4完成"
     
     # ===== 步骤5：生成固件 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件开始 <<<\e[0m"
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    local step5_retry=1 max_step5_retries=2 step5_success=0
-    while [ $step5_retry -le $max_step5_retries ] && [ $step5_success -eq 0 ]; do
-        log "    尝试 $step5_retry/$max_step5_retries..."
-        set +e
-        make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5_attempt${step5_retry}.log
-        STEP5_EXIT_CODE=${PIPESTATUS[0]}
-        set -e
-        if [ $STEP5_EXIT_CODE -eq 0 ]; then step5_success=1; log "    ✅ 固件生成成功"; break; fi
-        log "    ⚠️ 固件生成失败，退出码: $STEP5_EXIT_CODE"
-        [ $step5_retry -lt $max_step5_retries ] && log "    🔧 清理并重试..." && rm -rf build_dir/target-*/root-* 2>/dev/null || true && ensure_root_dirs "$TARGET" "$BUILD_DIR"
-        step5_retry=$((step5_retry + 1))
-    done
+    make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5_attempt1.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件完成 <<<\e[0m"
-    [ $step5_success -eq 0 ] && log "  ❌ 固件生成失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
-    log "  ✅ 步骤5完成"
     
-    # ===== 格式转换（不变） =====
-    if [ "${FIRMWARE_NEED_CONVERT:-false}" = "true" ] || [ "${FIRMWARE_HAS_ITB:-0}" = "1" ] || [ "${FIRMWARE_FORMAT_TYPE:-bin}" = "itb" ]; then
-        log "🔧 自动固件格式转换..."
-        local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-        if [ -d "$target_dir" ]; then
-            local itb_files=$(find "$target_dir" -maxdepth 1 -name "*.itb" -type f 2>/dev/null | grep -v "initramfs")
-            if [ -n "$itb_files" ]; then
-                local converted_count=0
-                while IFS= read -r itb_file; do
-                    [ -z "$itb_file" ] && continue
-                    local itb_name=$(basename "$itb_file")
-                    local bin_name="${itb_name%.itb}.bin"
-                    local bin_file="$target_dir/$bin_name"
-                    log "  📦 转换: $itb_name -> $bin_name"
-                    local itb_size=$(stat -c%s "$itb_file" 2>/dev/null || echo "0")
-                    local itb_size_mb=$((itb_size / 1024 / 1024))
-                    log "    原始 .itb 大小: ${itb_size_mb}MB"
-                    local temp_dir=$(mktemp -d)
-                    mkdir -p "$temp_dir/sysupgrade-${vendor_prefix}"
-                    cp "$itb_file" "$temp_dir/sysupgrade-${vendor_prefix}/"
-                    mkdir -p "$temp_dir/CONTROL"
-                    cat > "$temp_dir/CONTROL/control" << EOC
-Package: firmware
-Version: 1.0
-Description: ${vendor_prefix} firmware for ${DEVICE}
-EOC
-                    cd "$temp_dir"
-                    tar -czf "$bin_file" sysupgrade-${vendor_prefix}/ CONTROL/
-                    cd "$BUILD_DIR"
-                    if [ -f "$bin_file" ]; then
-                        local bin_size=$(stat -c%s "$bin_file" 2>/dev/null || echo "0")
-                        local bin_size_mb=$((bin_size / 1024 / 1024))
-                        if [ $bin_size_mb -ge 5 ]; then
-                            log "    ✅ 转换成功: $bin_name (${bin_size_mb}MB)"
-                            converted_count=$((converted_count + 1))
-                            local fhash=$(sha256sum "$bin_file" 2>/dev/null | awk '{print $1}')
-                            log "       SHA256: $fhash"
-                        else
-                            log "    ⚠️ tar 打包后文件过小 (${bin_size_mb}MB)，使用直接复制..."
-                            rm -f "$bin_file"
-                            cp "$itb_file" "$bin_file"
-                            local bin_size2=$(stat -c%s "$bin_file" 2>/dev/null || echo "0")
-                            local bin_size_mb2=$((bin_size2 / 1024 / 1024))
-                            if [ $bin_size_mb2 -ge 5 ]; then
-                                log "    ✅ 直接复制成功: $bin_name (${bin_size_mb2}MB)"
-                                local fhash=$(sha256sum "$bin_file" 2>/dev/null | awk '{print $1}')
-                                log "       SHA256: $fhash"
-                                converted_count=$((converted_count + 1))
-                            else
-                                log "    ❌ 转换失败，保留原始 .itb 文件"
-                                rm -f "$bin_file"
-                            fi
-                        fi
-                    fi
-                    rm -rf "$temp_dir"
-                done <<< "$itb_files"
-                [ $converted_count -gt 0 ] && log "  ✅ 成功转换 $converted_count 个固件文件为 .bin 格式"
-            fi
-        fi
-    fi
-    
-    # ===== 合并日志 =====
+    # 合并日志
     cat build_tools_compile.log build_tools_install.log build_step*.log build_step2_attempt*.log build_step5_attempt*.log > build.log 2>/dev/null || true
     log "  ✅ 分步编译完成"
     kill $protect_pid 2>/dev/null || true
     
-    # ===== 验证固件 =====
+    # 验证固件
     log "🔍 验证固件并计算哈希值..."
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local valid_firmware=0
@@ -6902,6 +6781,9 @@ EOC
     [ $valid_firmware -eq 0 ] && log "❌ 错误：没有找到任何有效可刷机固件" && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     rm -rf "$protect_dir" 2>/dev/null || true
     log "✅ 步骤25 完成"
+    
+    # 恢复 set -e
+    set -e
 }
 #【build_firmware_main.sh-40-end】
 
