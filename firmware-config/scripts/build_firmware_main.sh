@@ -109,40 +109,41 @@ fi
 #【build_firmware_main.sh-00.6】
 # 通用 Makefile 解析框架 —— 所有编译步骤的前置检查
 
-# 从源码根目录 Makefile 中提取某个目标（例如 tools/install, toolchain/compile）
+# 从源码根目录 Makefile 或 include/*.mk 中确认某个目标存在
 # 用法: target_from_root_makefile <target_keyword>
-# 返回: 完整的 make 命令参数（如 tools/install），否则返回空
+# 返回: 成功返回0，否则返回1
 target_from_root_makefile() {
     local keyword="$1"
-    # 搜索根目录 Makefile 或 include 文件中是否存在该目标规则
-    grep -oP "(?<=^|\s)${keyword}(?=\s|:|$)" "$BUILD_DIR/Makefile" "$BUILD_DIR/include"/*.mk 2>/dev/null | head -1
+    grep -qE "(^|\s)${keyword}(\s|:|$)" "$BUILD_DIR/Makefile" "$BUILD_DIR/include"/*.mk 2>/dev/null
 }
 
-# 动态查找软件包源码目录（搜索所有可能的 packages/feeds/target 路径）
+# 动态查找软件包源码目录（用于 host 工具编译）
 # 参数1：软件包名称（如 opkg, fakeroot, mkhash）
-# 返回：第一个存在且包含 Makefile 的目录路径（相对于源码根目录），否则空
+# 参数2：构建根目录（默认 $BUILD_DIR）
+# 返回：第一个合法目录的相对路径，找不到返回1
 find_package_dir() {
     local pkg="$1"
     local build_dir="${2:-$BUILD_DIR}"
-    
-    # 0. 若已经是完整路径
-    if [ -f "$build_dir/$pkg/Makefile" ]; then echo "$pkg"; return 0; fi
-    
-    # 1. 从 package/Makefile 解析编译依赖行
-    local target=$(grep -oP "\(curdir\)/compile:\s*\K.*\/${pkg}\/host\/compile" "$build_dir/package/Makefile" 2>/dev/null | head -1)
-    if [ -n "$target" ]; then
-        echo "package/${target%/host/compile}"
+
+    # 0. 如果直接给定了完整目录且包含 Makefile
+    if [ -f "$build_dir/$pkg/Makefile" ]; then
+        echo "$pkg"
         return 0
     fi
 
-    # 2. 从其他 Makefile（toolchain/Makefile, target/Makefile）中查找线索
-    local found=$(grep -oP "(?<=/)${pkg}(?=/)" "$build_dir/toolchain/Makefile" "$build_dir/include"/*.mk 2>/dev/null | head -1)
-    if [ -n "$found" ]; then
-        echo "toolchain/$pkg"
-        return 0
+    # 1. 从 package/Makefile 中的依赖行提取实际路径
+    #    例如: $(curdir)/compile: $(curdir)/system/opkg/host/compile
+    local target=$(grep -oP '\(curdir\)/compile:\s*\K.*\/'"$pkg"'\/host\/compile' "$build_dir/package/Makefile" 2>/dev/null | head -1)
+    if [ -n "$target" ]; then
+        # 去掉 /host/compile，并清理多余的 curdir 引用和双斜线
+        local pkg_dir="package/$(echo "$target" | sed -E 's|/host/compile||; s|\(curdir\)/||g; s|//|/|g')"
+        if [ -d "$build_dir/$pkg_dir" ]; then
+            echo "$pkg_dir"
+            return 0
+        fi
     fi
-    
-    # 3. 遍历常见目录
+
+    # 2. 遍历常见目录
     local try_dirs=(
         "package/system/$pkg"
         "package/$pkg"
@@ -153,18 +154,20 @@ find_package_dir() {
     for d in "${try_dirs[@]}"; do
         [ -d "$build_dir/$d" ] && echo "$d" && return 0
     done
-    
-    # 4. 模糊搜索（最后手段）
+
+    # 3. 模糊搜索
     local found=$(find "$build_dir/package" "$build_dir/feeds" -maxdepth 4 -type d -name "$pkg" 2>/dev/null | head -1)
-    [ -n "$found" ] && echo "${found#$build_dir/}" && return 0
-    
+    if [ -n "$found" ]; then
+        echo "${found#$build_dir/}"
+        return 0
+    fi
+
     return 1
 }
 
 # 检查函数是否存在
 function_exists() {
-    local function_name="$1"
-    [ "$(type -t "$function_name")" = "function" ] && return 0 || return 1
+    [ "$(type -t "$1")" = "function" ] && return 0 || return 1
 }
 #【build_firmware_main.sh-00.6-end】
 
@@ -5092,12 +5095,12 @@ EOF
     local missing_targets=0
     
     if ! grep -qE '^[^#]*tools/compile' "$BUILD_DIR/Makefile" "$BUILD_DIR/include"/*.mk 2>/dev/null; then
-        log "  ⚠️ 未在源码中找到 tools/compile 目标，工具链编译可能会失败"
+        log "  ⚠️ 未在源码中找到 tools/compile 目标"
         missing_targets=$((missing_targets + 1))
     fi
     
     if ! grep -qE '^[^#]*toolchain/compile' "$BUILD_DIR/Makefile" "$BUILD_DIR/include"/*.mk 2>/dev/null; then
-        log "  ⚠️ 未在源码中找到 toolchain/compile 目标，工具链编译可能会失败"
+        log "  ⚠️ 未在源码中找到 toolchain/compile 目标"
         missing_targets=$((missing_targets + 1))
     fi
     
@@ -6542,7 +6545,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（全动态路径查询版） ==="
+    log "=== 步骤25: 编译固件（动态查询路径 + 自动安装 opkg） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -6668,7 +6671,7 @@ EOF
     
     # ===== 步骤0：动态补齐 host 工具 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP0 动态补齐 host 工具 开始 <<<\e[0m"
-    log "  📦 步骤0: 清理并安装 host 工具（动态路径）..."
+    log "  📦 步骤0: 清理并安装 host 工具（动态路径 + opkg 保障）..."
     rm -rf tmp/info 2>/dev/null || true
     mkdir -p tmp/info
     rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
@@ -6686,12 +6689,12 @@ EOF
         fi
         
         local pkg_dir=$(find_package_dir "$tool" "$BUILD_DIR")
-        if [ -n "$pkg_dir" ]; then
+        if [ -n "$pkg_dir" ] && [ -d "$BUILD_DIR/$pkg_dir" ]; then
             log "  🔧 动态编译 $tool，路径: $pkg_dir"
             make "$pkg_dir/host/compile" -j1 V=s 2>&1 | tee -a build_tools_compile.log || true
             make "$pkg_dir/host/install" -j1 V=s 2>&1 | tee -a build_tools_install.log || true
         else
-            log "  ⚠️ 找不到 $tool 源码，创建占位符脚本"
+            log "  ⚠️ 找不到 $tool 源码，创建占位符脚本以保证构建继续"
             mkdir -p "$BUILD_DIR/staging_dir/host/bin"
             echo "#!/bin/bash" > "$BUILD_DIR/staging_dir/host/bin/$tool"
             echo "exit 0" >> "$BUILD_DIR/staging_dir/host/bin/$tool"
@@ -6699,8 +6702,12 @@ EOF
         fi
     done
     
-    [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ] || { log "❌ opkg 仍缺失"; exit 1; }
-    log "  ✅ opkg 已就绪"
+    if [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ]; then
+        log "  ✅ opkg 已就绪"
+    else
+        log "  ❌ 致命错误：opkg 仍缺失，构建终止"
+        exit 1
+    fi
     echo -e "\e[1;33m>>> BUILD_MARK: STEP0 动态补齐 host 工具 完成 <<<\e[0m"
     
     # ===== 步骤1：编译工具链 =====
@@ -6796,7 +6803,7 @@ EOF
     [ $step5_success -eq 0 ] && log "  ❌ 固件生成失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     log "  ✅ 步骤5完成"
     
-    # ===== 格式转换 =====
+    # ===== 格式转换（不变） =====
     if [ "${FIRMWARE_NEED_CONVERT:-false}" = "true" ] || [ "${FIRMWARE_HAS_ITB:-0}" = "1" ] || [ "${FIRMWARE_FORMAT_TYPE:-bin}" = "itb" ]; then
         log "🔧 自动固件格式转换..."
         local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
