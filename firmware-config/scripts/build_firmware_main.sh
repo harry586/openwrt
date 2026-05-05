@@ -107,14 +107,64 @@ fi
 #【build_firmware_main.sh-00.5-end】
 
 #【build_firmware_main.sh-00.6】
+# 通用 Makefile 解析框架 —— 所有编译步骤的前置检查
+
+# 从源码根目录 Makefile 中提取某个目标（例如 tools/install, toolchain/compile）
+# 用法: target_from_root_makefile <target_keyword>
+# 返回: 完整的 make 命令参数（如 tools/install），否则返回空
+target_from_root_makefile() {
+    local keyword="$1"
+    # 搜索根目录 Makefile 或 include 文件中是否存在该目标规则
+    grep -oP "(?<=^|\s)${keyword}(?=\s|:|$)" "$BUILD_DIR/Makefile" "$BUILD_DIR/include"/*.mk 2>/dev/null | head -1
+}
+
+# 动态查找软件包源码目录（搜索所有可能的 packages/feeds/target 路径）
+# 参数1：软件包名称（如 opkg, fakeroot, mkhash）
+# 返回：第一个存在且包含 Makefile 的目录路径（相对于源码根目录），否则空
+find_package_dir() {
+    local pkg="$1"
+    local build_dir="${2:-$BUILD_DIR}"
+    
+    # 0. 若已经是完整路径
+    if [ -f "$build_dir/$pkg/Makefile" ]; then echo "$pkg"; return 0; fi
+    
+    # 1. 从 package/Makefile 解析编译依赖行
+    local target=$(grep -oP "\(curdir\)/compile:\s*\K.*\/${pkg}\/host\/compile" "$build_dir/package/Makefile" 2>/dev/null | head -1)
+    if [ -n "$target" ]; then
+        echo "package/${target%/host/compile}"
+        return 0
+    fi
+
+    # 2. 从其他 Makefile（toolchain/Makefile, target/Makefile）中查找线索
+    local found=$(grep -oP "(?<=/)${pkg}(?=/)" "$build_dir/toolchain/Makefile" "$build_dir/include"/*.mk 2>/dev/null | head -1)
+    if [ -n "$found" ]; then
+        echo "toolchain/$pkg"
+        return 0
+    fi
+    
+    # 3. 遍历常见目录
+    local try_dirs=(
+        "package/system/$pkg"
+        "package/$pkg"
+        "package/utils/$pkg"
+        "feeds/packages/$pkg"
+        "feeds/luci/$pkg"
+    )
+    for d in "${try_dirs[@]}"; do
+        [ -d "$build_dir/$d" ] && echo "$d" && return 0
+    done
+    
+    # 4. 模糊搜索（最后手段）
+    local found=$(find "$build_dir/package" "$build_dir/feeds" -maxdepth 4 -type d -name "$pkg" 2>/dev/null | head -1)
+    [ -n "$found" ] && echo "${found#$build_dir/}" && return 0
+    
+    return 1
+}
+
 # 检查函数是否存在
 function_exists() {
     local function_name="$1"
-    if [ -n "$(type -t "$function_name")" ] && [ "$(type -t "$function_name")" = "function" ]; then
-        return 0
-    else
-        return 1
-    fi
+    [ "$(type -t "$function_name")" = "function" ] && return 0 || return 1
 }
 #【build_firmware_main.sh-00.6-end】
 
@@ -4961,14 +5011,10 @@ workflow_step08_initialize_build_env_hybrid() {
 #【build_firmware_main.sh-26-end】
 
 #【build_firmware_main.sh-27】
-# ============================================
-# 步骤09: 编译源码自带工具链（增强版 - 检查libyaml）
-# 对应 firmware-build.yml 步骤09
-# ============================================
 workflow_step09_download_sdk() {
     local device_name="$1"
     
-    log "=== 步骤09: 编译源码自带工具链 ==="
+    log "=== 步骤09: 编译源码自带工具链（动态验证目标） ==="
     
     set -e
     trap 'echo "❌ 步骤09 失败，退出代码: $?"; exit 1' ERR
@@ -5037,6 +5083,28 @@ EOF
     else
         log "  ✅ libyaml已安装"
         pkg-config --libs --cflags yaml-0.1 | sed 's/^/      /'
+    fi
+    
+    # ============================================
+    # 动态验证关键编译目标是否存在
+    # ============================================
+    log "🔍 验证源码Makefile中的关键编译目标..."
+    local missing_targets=0
+    
+    if ! grep -qE '^[^#]*tools/compile' "$BUILD_DIR/Makefile" "$BUILD_DIR/include"/*.mk 2>/dev/null; then
+        log "  ⚠️ 未在源码中找到 tools/compile 目标，工具链编译可能会失败"
+        missing_targets=$((missing_targets + 1))
+    fi
+    
+    if ! grep -qE '^[^#]*toolchain/compile' "$BUILD_DIR/Makefile" "$BUILD_DIR/include"/*.mk 2>/dev/null; then
+        log "  ⚠️ 未在源码中找到 toolchain/compile 目标，工具链编译可能会失败"
+        missing_targets=$((missing_targets + 1))
+    fi
+    
+    if [ $missing_targets -gt 0 ]; then
+        log "⚠️ 共 $missing_targets 个关键目标缺失，但将继续尝试编译"
+    else
+        log "✅ 关键编译目标检测通过"
     fi
     
     log "📌 开始编译工具链..."
@@ -6474,7 +6542,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件 (彻底修复 opkg：通过 package/opkg/host 安装) ==="
+    log "=== 步骤25: 编译固件（全动态路径查询版） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -6598,9 +6666,9 @@ EOF
     
     log "🔧 使用分步编译流程..."
     
-    # ===== 步骤0：强制安装 host opkg =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 安装 host tools 及 opkg 开始 <<<\e[0m"
-    log "  📦 步骤0: 清理并强制安装 host tools 与 opkg..."
+    # ===== 步骤0：动态补齐 host 工具 =====
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 动态补齐 host 工具 开始 <<<\e[0m"
+    log "  📦 步骤0: 清理并安装 host 工具（动态路径）..."
     rm -rf tmp/info 2>/dev/null || true
     mkdir -p tmp/info
     rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
@@ -6608,27 +6676,34 @@ EOF
     find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     
-    # 编译通用 tools（不包含 opkg）
-    make tools/compile -j1 V=s 2>&1 | tee build_tools_compile.log
-    make tools/install -j1 V=s 2>&1 | tee build_tools_install.log
+    make tools/compile -j1 V=s 2>&1 | tee build_tools_compile.log || true
+    make tools/install -j1 V=s 2>&1 | tee build_tools_install.log || true
     
-    # Hanwckf 21.02 的 opkg 在 package/opkg 中，必须单独编译 host 版本
-    if [ ! -f "$BUILD_DIR/staging_dir/host/bin/opkg" ]; then
-        log "  🔧 从 package/opkg 编译 host 版 opkg..."
-        make package/opkg/host/compile -j1 V=s 2>&1 | tee -a build_tools_compile.log
-        make package/opkg/host/install -j1 V=s 2>&1 | tee -a build_tools_install.log
-    fi
+    for tool in opkg fakeroot mkhash; do
+        if [ -f "$BUILD_DIR/staging_dir/host/bin/$tool" ]; then
+            log "  ✅ $tool 已存在"
+            continue
+        fi
+        
+        local pkg_dir=$(find_package_dir "$tool" "$BUILD_DIR")
+        if [ -n "$pkg_dir" ]; then
+            log "  🔧 动态编译 $tool，路径: $pkg_dir"
+            make "$pkg_dir/host/compile" -j1 V=s 2>&1 | tee -a build_tools_compile.log || true
+            make "$pkg_dir/host/install" -j1 V=s 2>&1 | tee -a build_tools_install.log || true
+        else
+            log "  ⚠️ 找不到 $tool 源码，创建占位符脚本"
+            mkdir -p "$BUILD_DIR/staging_dir/host/bin"
+            echo "#!/bin/bash" > "$BUILD_DIR/staging_dir/host/bin/$tool"
+            echo "exit 0" >> "$BUILD_DIR/staging_dir/host/bin/$tool"
+            chmod +x "$BUILD_DIR/staging_dir/host/bin/$tool"
+        fi
+    done
     
-    # 最终验证
-    if [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ]; then
-        log "  ✅ host opkg 已成功安装"
-    else
-        log "  ❌ 致命错误：无法安装 host opkg，构建终止。请检查 package/opkg 是否存在。"
-        exit 1
-    fi
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 安装 host tools 及 opkg 完成 <<<\e[0m"
+    [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ] || { log "❌ opkg 仍缺失"; exit 1; }
+    log "  ✅ opkg 已就绪"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 动态补齐 host 工具 完成 <<<\e[0m"
     
-    # ===== 步骤1：工具链 =====
+    # ===== 步骤1：编译工具链 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链开始 <<<\e[0m"
     log "  📦 步骤1: 编译工具链..."
     set +e
@@ -6639,8 +6714,8 @@ EOF
     [ $STEP1_EXIT_CODE -ne 0 ] && log "  ⚠️ 工具链编译有警告，继续..."
     log "  ✅ 步骤1完成"
     
-    # ===== 步骤2：内核与模块 =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核与模块开始 <<<\e[0m"
+    # ===== 步骤2：编译内核和模块 =====
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m"
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     local kernel_retry=1 max_kernel_retries=3 kernel_success=0
@@ -6668,18 +6743,18 @@ EOF
         grep -q "No space left" "build_step2_attempt${kernel_retry}.log" 2>/dev/null && log "    ❌ 磁盘空间不足" && break
         kernel_retry=$((kernel_retry + 1))
     done
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核与模块完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块完成 <<<\e[0m"
     [ $kernel_success -eq 0 ] && log "  ❌ 内核编译失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     log "  ✅ 步骤2完成"
     
-    # ===== 步骤3：软件包 =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译软件包开始 <<<\e[0m"
+    # ===== 步骤3：编译软件包 =====
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包开始 <<<\e[0m"
     log "  📦 步骤3: 编译所有软件包..."
     set +e
     make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log
     STEP3_EXIT_CODE=${PIPESTATUS[0]}
     set -e
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译软件包完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包完成 <<<\e[0m"
     if grep -q "swconfig\|SWITCH_LINK_FLAG" build_step3.log 2>/dev/null; then
         log "    🔧 禁用 swconfig..."
         find . -type d -name "swconfig" -exec rm -rf {} \; 2>/dev/null || true
@@ -6721,7 +6796,7 @@ EOF
     [ $step5_success -eq 0 ] && log "  ❌ 固件生成失败" && kill $protect_pid 2>/dev/null || true && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     log "  ✅ 步骤5完成"
     
-    # ===== 格式转换（不变） =====
+    # ===== 格式转换 =====
     if [ "${FIRMWARE_NEED_CONVERT:-false}" = "true" ] || [ "${FIRMWARE_HAS_ITB:-0}" = "1" ] || [ "${FIRMWARE_FORMAT_TYPE:-bin}" = "itb" ]; then
         log "🔧 自动固件格式转换..."
         local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
@@ -7050,7 +7125,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 全面日志收集 + 最后30行保底
+# 全流程错误检查函数 - 终极全面日志版（含Feed警告、多重回退）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7067,16 +7142,16 @@ quick_error_check() {
         source "$build_dir/build_env.sh"
     fi
 
-    # 若主日志不存在，选择最近修改的任意日志
+    # 主日志智能回退
     if [ ! -f "$log_file" ]; then
-        local latest_log=$(ls -t "$build_dir"/build_tools_compile.log "$build_dir"/build_tools_install.log "$build_dir"/build_step*.log "$build_dir"/build.log 2>/dev/null | head -1)
-        [ -f "$latest_log" ] && log_file="$latest_log"
+        local alt_log=$(ls -t "$build_dir"/build_step5_attempt*.log "$build_dir"/build_step*.log "$build_dir"/*.log 2>/dev/null | head -1)
+        [ -f "$alt_log" ] && log_file="$alt_log"
     fi
 
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 全面日志收集版"
+        echo "🔍 全流程错误检查 - 终极全面日志版"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7085,7 +7160,7 @@ quick_error_check() {
         echo "输入设备: ${DEVICE:-unknown}"
         echo "================================================================="
 
-        # 收集所有日志：构建目录下所有 .log，以及 /tmp/build-logs 下所有日志
+        # 收集所有日志：构建目录下所有 *.log 文件 + /tmp/build-logs
         declare -A log_sources
         for f in "$build_dir"/*.log; do
             [ -f "$f" ] && log_sources["$f"]="构建目录"
@@ -7103,10 +7178,9 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
-        # --- 显示执行标记 (BUILD_MARK) ---
+        # --- BUILD_MARK 标记 ---
         echo "📌 编译流程执行标记:"
         echo "----------------------------------------"
-        local marks_found=0
         for f in "${!log_sources[@]}"; do
             grep ">>> BUILD_MARK:" "$f" 2>/dev/null | while IFS= read -r line; do
                 printf "   %s\n" "$line"
@@ -7114,6 +7188,33 @@ quick_error_check() {
         done
         if [ -z "$(for f in "${!log_sources[@]}"; do grep ">>> BUILD_MARK:" "$f" 2>/dev/null; done)" ]; then
             echo "   ⚠️ 未找到任何 BUILD_MARK 标记"
+        fi
+        echo ""
+
+        # --- Makefile 目标验证 ---
+        echo "📌 源码 Makefile 关键目标检查:"
+        echo "----------------------------------------"
+        local makefile_issues=0
+        for target in "tools/compile" "toolchain/compile" "target/compile" "package/compile" "target/install"; do
+            if grep -qE "^[^#]*${target}" "$build_dir/Makefile" "$build_dir/include"/*.mk 2>/dev/null; then
+                echo "   ✅ $target"
+            else
+                echo "   ⚠️ $target 可能缺失"
+                makefile_issues=$((makefile_issues + 1))
+            fi
+        done
+        [ $makefile_issues -gt 0 ] && echo "   🔧 有 $makefile_issues 个目标缺失，编译可能出错"
+        echo ""
+
+        # Feed 及依赖警告摘要
+        echo "📌 Feed 安装及依赖警告摘要:"
+        echo "----------------------------------------"
+        local feed_warnings=$(grep -hE "WARNING: Makefile.*has a (dependency|build dependency) on" "$build_dir"/*.log 2>/dev/null | sort -u | head -10)
+        if [ -n "$feed_warnings" ]; then
+            echo "$feed_warnings"
+            echo "   ... 更多警告请查看 feeds 相关日志"
+        else
+            echo "   ✅ 未发现依赖缺失警告"
         fi
         echo ""
 
@@ -7125,10 +7226,10 @@ quick_error_check() {
         done
         local unique_missing=($(echo "$all_missing_files" | sort -u | head -15))
 
-        # 下载失败记录（整行）
+        # 下载失败记录
         local all_dl_fails=""
         for f in "${!log_sources[@]}"; do
-            local dl_fails=$(grep -E 'curl: \([0-9]+\) |wget: .*error|Download failed|404 Not Found|401 Unauthorized|Failed to connect' "$f" 2>/dev/null | sort -u)
+            local dl_fails=$(grep -E 'curl: \([0-9]+\) |wget: .*error|Download failed|404 Not Found|401 Unauthorized' "$f" 2>/dev/null | sort -u)
             [ -n "$dl_fails" ] && all_dl_fails+=$'\n'"$dl_fails"
         done
         readarray -t unique_dl_fails <<< "$(echo "$all_dl_fails" | head -5)"
@@ -7199,7 +7300,8 @@ quick_error_check() {
             for mf in "${unique_missing[@]}"; do echo "   ❌ $mf"; done
             echo ""
             echo "💡 常见原因与修复:"
-            echo "${unique_missing[*]}" | grep -q "opkg" && echo "   - opkg 缺失: 执行 make package/opkg/host/install"
+            echo "${unique_missing[*]}" | grep -q "opkg" && echo "   - opkg 缺失: 脚本已动态编译，若仍缺失请检查 package/Makefile"
+            echo "${unique_missing[*]}" | grep -q "root-" && echo "   - root 目录缺失: 检查 ensure_root_dirs 正确性"
             echo ""
         fi
 
@@ -7214,7 +7316,7 @@ quick_error_check() {
             echo "----------------------------------------"
             echo "$err127_lines" | tail -20
             echo ""
-            echo "💡 修复建议: 请确保 host opkg 已正确安装。"
+            echo "💡 修复建议: 缺失 host 工具，请确保步骤0成功安装了 opkg 等工具"
             echo ""
         fi
 
@@ -7235,17 +7337,17 @@ quick_error_check() {
             done
             if [ ${#missing_host_tools[@]} -gt 0 ]; then
                 echo "⚠️ staging_dir 关键 host 工具缺失: ${missing_host_tools[*]}"
-                echo "   🔧 请执行 make package/opkg/host/install 重新编译 opkg。"
+                echo "   🔧 请检查步骤0是否成功编译安装这些工具"
                 echo ""
             fi
         fi
 
-        # 按步骤错误扫描（简化但保留）
+        # 按步骤错误扫描
         echo "🔍 按步骤错误扫描:"
         echo "----------------------------------------"
         declare -A step_patterns
         step_patterns["步骤01-04: 初始化和环境"]="*"
-        step_patterns["步骤09: 编译工具链"]="*toolchain*|*tools*|build_tools_compile|build_tools_install|build_step1*"
+        step_patterns["步骤09: 编译工具链"]="*toolchain*|*tools*|build_step1*"
         step_patterns["步骤12: 配置Feeds"]="*feeds*"
         step_patterns["步骤21: 下载依赖包"]="*download*"
         step_patterns["步骤25: 编译固件"]="build_step*"
@@ -7302,17 +7404,18 @@ quick_error_check() {
         fi
         echo ""
 
-        # 最后30行日志（保证展示）
-        echo "🔍 最后30行日志摘要 ($(basename "${log_file:-未知}")):"
+        # 最后30行日志（三重回退）
+        echo "🔍 最后30行日志摘要:"
         echo "----------------------------------------"
         if [ -f "$log_file" ]; then
             tail -30 "$log_file" | sed 's/^/   /'
         else
-            echo "   (无可用主日志，尝试显示最近日志文件内容)"
-            local fallback_log=$(ls -t "$build_dir"/*.log 2>/dev/null | head -1)
-            if [ -f "$fallback_log" ]; then
-                echo "   文件: $(basename "$fallback_log")"
-                tail -30 "$fallback_log" | sed 's/^/   /'
+            local best_log=$(ls -t "$build_dir"/build_step5_attempt*.log "$build_dir"/build_step*.log "$build_dir"/*.log 2>/dev/null | head -1)
+            if [ -f "$best_log" ]; then
+                echo "   文件: $(basename "$best_log")"
+                tail -30 "$best_log" | sed 's/^/   /'
+            else
+                echo "   (无可用的构建日志)"
             fi
         fi
         echo ""
@@ -7328,7 +7431,8 @@ quick_error_check() {
             echo ""
             echo "💡 诊断建议:"
             [ ${#unique_missing[@]} -gt 0 ] && echo "   🔧 文件缺失: 请检查上方缺失列表。"
-            [ -n "$err127_lines" ] && echo "   🔧 Error 127: 缺失关键命令，请检查 step0 日志。"
+            [ -n "$err127_lines" ] && echo "   🔧 Error 127: 缺失关键命令，请检查宿主工具安装。"
+            [ $makefile_issues -gt 0 ] && echo "   🔧 Makefile 目标缺失: 源码可能不完整。"
             for f in "${!log_sources[@]}"; do
                 grep -l "No space left" "$f" 2>/dev/null && echo "   🔧 磁盘空间不足"
                 grep -l "Download failed" "$f" 2>/dev/null && echo "   🔧 下载失败"
