@@ -6566,6 +6566,10 @@ workflow_step25_build_firmware() {
     log "  📌 固件格式类型: ${FIRMWARE_FORMAT_TYPE:-bin}"
     log "  📌 需要转换: ${FIRMWARE_NEED_CONVERT:-false}"
     
+    # 创建 BUILD_MARK 标记文件，后续合并到 build.log 中确保错误检查能找到
+    BUILD_MARKS_FILE="build_marks.log"
+    > "$BUILD_MARKS_FILE"  # 清空文件
+    
     log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
@@ -6671,7 +6675,7 @@ EOF
     log "🔧 使用分步编译流程..."
     
     # ===== 步骤0：动态补齐 host 工具（允许失败） =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 强制补齐 host 工具 开始 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 强制补齐 host 工具 开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤0: 清理并强制安装 host 工具..."
     rm -rf tmp/info 2>/dev/null || true
     mkdir -p tmp/info
@@ -6709,42 +6713,42 @@ EOF
         log "  ❌ 致命错误：opkg 仍然缺失，构建终止"
         exit 1
     fi
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 强制补齐 host 工具 完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 强制补齐 host 工具 完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
     # ===== 步骤1：编译工具链 =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链开始 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤1: 编译工具链..."
     make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log || true
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
     # ===== 步骤2：编译内核和模块 =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤2: 编译内核和模块..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2_attempt1.log || true
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
     # ===== 步骤3：编译软件包 =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包开始 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤3: 编译所有软件包..."
     make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log || true
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
     # ===== 步骤4：安装软件包 =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包开始 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤4: 安装软件包..."
     make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log || true
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
     # ===== 步骤5：生成固件 =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件开始 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5_attempt1.log || true
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件完成 <<<\e[0m"
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
-    # 合并日志
-    cat build_tools_compile.log build_tools_install.log build_step*.log build_step2_attempt*.log build_step5_attempt*.log > build.log 2>/dev/null || true
+    # 合并日志，同时加入 BUILD_MARK 标记文件
+    cat build_tools_compile.log build_tools_install.log build_step*.log build_step2_attempt*.log build_step5_attempt*.log "$BUILD_MARKS_FILE" > build.log 2>/dev/null || true
     log "  ✅ 分步编译完成"
     kill $protect_pid 2>/dev/null || true
     
@@ -7593,6 +7597,22 @@ workflow_step_hanwckf_build() {
 # 主函数 - 命令分发
 # ============================================
 #【build_firmware_main.sh-99】
+# 以下三个辅助函数弥补之前遗漏的定义，确保 support.sh 等调用无误
+save_source_code_info() {
+    log "保存源代码信息（函数尚未完整实现，仅占位）"
+    # 可在此添加 git log、repo info 等，当前保留基础信息
+    return 0
+}
+
+verify_config_files() {
+    log "验证配置文件（函数尚未实现）"
+    return 0
+}
+
+check_usb_drivers_integrity() {
+    workflow_step17_check_usb_drivers
+}
+
 main() {
     local command="$1"
     local arg1="$2"
