@@ -6474,7 +6474,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（已内置强制补齐 host 工具） ==="
+    log "=== 步骤25: 编译固件（终极版：强制单线程补齐 host 工具） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
     set -e
@@ -6608,10 +6608,10 @@ EOF
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     log "  ✅ 环境清理完成"
     
-    # 强制补齐 host 工具（解决 opkg 缺失问题的关键步骤）
-    log "  🔧 强制重新编译并安装 host tools 以确保 opkg、fakeroot 等工具存在..."
-    make tools/compile -j$(nproc) V=s 2>&1 | tee build_tools_compile.log
-    make tools/install -j$(nproc) V=s 2>&1 | tee build_tools_install.log
+    # 终极强制补齐 host 工具（单线程，显式日志）
+    log "  🔧 终极强制重新编译并安装 host tools..."
+    make tools/compile -j1 V=s 2>&1 | tee build_tools_compile.log
+    make tools/install -j1 V=s 2>&1 | tee build_tools_install.log
     log "  ✅ host tools 重新编译安装完成"
     
     # 步骤1: 编译工具链
@@ -6759,7 +6759,7 @@ EOC
     fi
     
     # 合并日志
-    cat build_step*.log build_step2_attempt*.log build_step5_attempt*.log > build.log 2>/dev/null || true
+    cat build_tools_compile.log build_tools_install.log build_step*.log build_step2_attempt*.log build_step5_attempt*.log > build.log 2>/dev/null || true
     log "  ✅ 分步编译完成"
     kill $protect_pid 2>/dev/null || true
     
@@ -7026,7 +7026,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 最终无噪声版
+# 全流程错误检查函数 - 终极无分词版
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7051,7 +7051,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 最终无噪声版"
+        echo "🔍 全流程错误检查 - 终极无分词版"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7060,9 +7060,9 @@ quick_error_check() {
         echo "输入设备: ${DEVICE:-unknown}"
         echo "================================================================="
 
-        # 收集日志
+        # 收集所有日志
         declare -A log_sources
-        for pattern in "build_step"*.log "build_phase"*.log "build.log" "download.log"; do
+        for pattern in "build_tools_compile" "build_tools_install" "build_step"*.log "build_phase"*.log "build.log" "download.log"; do
             for f in "$build_dir/"$pattern; do
                 [ -f "$f" ] && log_sources["$f"]="构建目录"
             done
@@ -7084,10 +7084,10 @@ quick_error_check() {
         done
         local unique_missing=($(echo "$all_missing_files" | sort -u | head -15))
 
-        # 收集下载失败（整行，不再拆分）
+        # 收集下载失败（整行，不拆分）
         local all_dl_fails=""
         for f in "${!log_sources[@]}"; do
-            local dl_fails=$(grep -E 'curl:.*[0-9]{3}|wget:.*error|Download failed|404 Not Found|401 Unauthorized|Failed to connect' "$f" 2>/dev/null | sort -u)
+            local dl_fails=$(grep -E 'curl: \([0-9]+\) |wget: .*error|Download failed|404 Not Found|401 Unauthorized|Failed to connect' "$f" 2>/dev/null | sort -u)
             [ -n "$dl_fails" ] && all_dl_fails+=$'\n'"$dl_fails"
         done
         local unique_dl_fails=($(echo "$all_dl_fails" | head -5))
@@ -7210,7 +7210,7 @@ quick_error_check() {
         echo "----------------------------------------"
         declare -A step_patterns
         step_patterns["步骤01-04: 初始化和环境"]="*"
-        step_patterns["步骤09: 编译工具链"]="*toolchain*|*tools*|build_step1*"
+        step_patterns["步骤09: 编译工具链"]="*toolchain*|*tools*|build_tools_compile|build_tools_install|build_step1*"
         step_patterns["步骤12: 配置Feeds"]="*feeds*"
         step_patterns["步骤21: 下载依赖包"]="*download*"
         step_patterns["步骤25: 编译固件"]="build_step*"
