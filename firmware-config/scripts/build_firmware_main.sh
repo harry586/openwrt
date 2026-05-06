@@ -6476,7 +6476,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
 
-    log "=== 步骤25: 编译固件（含通用补丁自动修复） ==="
+    log "=== 步骤25: 编译固件（通用补丁自动删除修复版） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
 
     set +e
@@ -6514,23 +6514,24 @@ workflow_step25_build_firmware() {
     export VERSION_DIST="$vendor_dist"
     export CONFIG_VERSION_DIST="$vendor_dist"
 
-    # ---------- 通用补丁自动禁用函数 ----------
+    # ---------- 通用补丁自动删除函数 ----------
     auto_disable_failed_patches() {
         local log_to_check="$1"
-        local disabled=0
-        # 提取冲突补丁的绝对路径
+        local deleted=0
         local patches=$(grep "Patch failed!" "$log_to_check" 2>/dev/null | sed -n 's/.*Please fix \([^!]*\).*/\1/p')
-        [ -z "$patches" ] && patches=$(grep -oP '[^ ]+\.patch' "$log_to_check" 2>/dev/null | head -1)
+        if [ -z "$patches" ]; then
+            patches=$(grep -oP '[^ ]+\.patch' "$log_to_check" 2>/dev/null | head -1)
+        fi
         [ -z "$patches" ] && return 1
         for patch in $patches; do
             patch=$(echo "$patch" | xargs)
             if [ -f "$patch" ]; then
-                log "  🧩 自动禁用冲突补丁: $patch -> $patch.disabled"
-                mv "$patch" "$patch.disabled"
-                disabled=$((disabled + 1))
+                log "  🧩 删除冲突补丁: $patch"
+                rm -f "$patch"
+                deleted=$((deleted + 1))
             fi
         done
-        return $disabled
+        return $deleted
     }
 
     # ---------- 编译主逻辑（最多尝试2次） ----------
@@ -6559,9 +6560,9 @@ workflow_step25_build_firmware() {
         # 检查是否为补丁冲突
         if grep -qE "Patch failed|Hunk FAILED" build.log; then
             auto_disable_failed_patches build.log
-            local disabled_count=$?
-            if [ $disabled_count -gt 0 ]; then
-                log "  🔄 已禁用 $disabled_count 个补丁，准备重试..."
+            local deleted_count=$?
+            if [ $deleted_count -gt 0 ]; then
+                log "  🔄 已删除 $deleted_count 个冲突补丁，准备重试..."
             else
                 log "  ❌ 补丁冲突但未能自动处理，放弃重试"
                 break
