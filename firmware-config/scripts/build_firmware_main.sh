@@ -4019,12 +4019,10 @@ integrate_custom_files() {
                 continue
             }
             
-            # 解包 IPK（尝试多种方式）
+            # 解包 IPK
             local unpack_success=0
             local unpack_method=""
             
-            # 方式1：使用 ar 命令（标准 IPK 格式）
-            # 有些系统需要安装 binutils 才有 ar 命令
             if command -v ar >/dev/null 2>&1; then
                 if ar x "$ipk_file" 2>/dev/null; then
                     if [ -f "debian-binary" ] || [ -f "control.tar.gz" ] || [ -f "data.tar.gz" ]; then
@@ -4034,11 +4032,7 @@ integrate_custom_files() {
                 fi
             fi
             
-            # 方式2：使用 tar 直接提取（绕过 ar）
             if [ $unpack_success -eq 0 ]; then
-                # 尝试用 tar 跳过 ar 头直接解压
-                # ar 格式的文件头是 "!<arch>\n"，后面跟着文件内容
-                # 我们可以用 dd 跳过头部，但更简单的是用 7z（如果可用）
                 if command -v 7z >/dev/null 2>&1; then
                     if 7z x "$ipk_file" -o"$temp_dir" >/dev/null 2>&1; then
                         unpack_success=1
@@ -4047,7 +4041,6 @@ integrate_custom_files() {
                 fi
             fi
             
-            # 方式3：尝试用 dpkg-deb（如果系统有）
             if [ $unpack_success -eq 0 ] && command -v dpkg-deb >/dev/null 2>&1; then
                 if dpkg-deb -x "$ipk_file" . 2>/dev/null; then
                     dpkg-deb -e "$ipk_file" 2>/dev/null || true
@@ -4056,7 +4049,6 @@ integrate_custom_files() {
                 fi
             fi
             
-            # 方式4：使用 python 解包（GitHub Actions 默认有 python3）
             if [ $unpack_success -eq 0 ] && command -v python3 >/dev/null 2>&1; then
                 cat > "$temp_dir/unpack_ipk.py" << 'PYEOF'
 import sys
@@ -4066,30 +4058,21 @@ import io
 def unpack_ipk(ipk_path, output_dir):
     try:
         with open(ipk_path, 'rb') as f:
-            # 读取 ar 头
             header = f.read(8)
             if header != b'!<arch>\n':
                 return False
             
             while True:
-                # 读取文件头
                 file_header = f.read(60)
                 if len(file_header) < 60:
                     break
-                
-                # 解析文件名（16字节）
                 name = file_header[0:16].decode('ascii').strip()
-                # 解析文件大小（10字节）
                 size_str = file_header[48:58].decode('ascii').strip()
                 size = int(size_str) if size_str else 0
-                
                 if name and size > 0:
                     data = f.read(size)
-                    # 跳过对齐字节（奇数大小补一个字节）
                     if size % 2 == 1:
                         f.read(1)
-                    
-                    # 保存文件
                     if name == 'debian-binary':
                         with open(f'{output_dir}/debian-binary', 'wb') as out:
                             out.write(data)
@@ -4118,7 +4101,6 @@ PYEOF
             if [ $unpack_success -eq 1 ]; then
                 local needs_repack=0
                 
-                # 解压数据文件
                 if [ -f "data.tar.gz" ]; then
                     tar -xzf data.tar.gz 2>/dev/null || true
                 elif [ -f "data.tar.xz" ]; then
@@ -4127,7 +4109,6 @@ PYEOF
                     tar -xf data.tar 2>/dev/null || true
                 fi
                 
-                # 检查冲突文件
                 for pattern in "${conflict_patterns[@]}"; do
                     if [ -f "./$pattern" ]; then
                         echo "      🗑️ 发现冲突: $pattern"
@@ -4138,29 +4119,20 @@ PYEOF
                     fi
                 done
                 
-                # 检查是否有其他文件
                 local file_count_after=$(find . -type f ! -name "debian-binary" ! -name "control.tar.gz" ! -name "data.tar.gz" ! -name "data.tar.xz" ! -name "data.tar" ! -name "*.py" 2>/dev/null | wc -l)
                 
                 if [ $needs_repack -eq 1 ] && [ $file_count_after -gt 0 ]; then
-                    # 重新打包 data.tar.gz
                     rm -f data.tar.gz data.tar.xz data.tar 2>/dev/null
-                    
-                    # 收集所有文件（排除控制文件）
                     local files_to_pack=$(find . -type f ! -name "debian-binary" ! -name "control.tar.gz" ! -name "*.py" 2>/dev/null)
-                    
                     if [ -n "$files_to_pack" ]; then
                         tar -czf data.tar.gz ./* --exclude=debian-binary --exclude=control.tar.gz --exclude=*.py 2>/dev/null || tar -czf data.tar.gz ./* 2>/dev/null
                     fi
-                    
-                    # 重新生成 IPK
                     if [ -f "data.tar.gz" ] && [ -f "control.tar.gz" ] && [ -f "debian-binary" ]; then
                         rm -f "$ipk_file"
-                        
                         if ar rcs "$ipk_file" debian-binary control.tar.gz data.tar.gz 2>/dev/null; then
                             ipk_fixed=1
                             fixed_count=$((fixed_count + 1))
                             total_deleted_files=$((total_deleted_files + ${#deleted_list[@]}))
-                            
                             echo "      ✅ 修复成功！已删除 ${#deleted_list[@]} 个冲突文件"
                             for deleted in "${deleted_list[@]}"; do
                                 echo "         - $deleted"
@@ -4212,7 +4184,6 @@ PYEOF
         fi
         echo ""
     fi
-    # ============================================
     
     echo ""
     log "🔧 步骤1: 创建自定义文件目录"
@@ -4320,9 +4291,6 @@ if [ -d "$CUSTOM_DIR" ]; then
             echo "  🔧 正在安装 [$IPK_COUNT]: $rel_path" >> $LOG_FILE
             echo "      开始时间: $(date '+%H:%M:%S')" >> $LOG_FILE
             
-            # 使用 --force-overwrite 避免文件冲突
-            # 原因：自定义 IPK 可能包含与系统包相同的文件（如 luci-lib-fs 的 fs.lua）
-            # 由于文件内容相同，覆盖是安全的
             if opkg install --force-overwrite "$file" >> $LOG_FILE 2>&1; then
                 echo "      ✅ 安装成功（使用 --force-overwrite）" >> $LOG_FILE
                 IPK_SUCCESS=$((IPK_SUCCESS + 1))
@@ -4497,8 +4465,14 @@ echo "=== 自定义文件安装脚本执行完成 ===" >> $LOG_FILE
 exit 0
 FIRSTBOOT_EOF
     
-    chmod +x "$first_boot_script"
-    log "✅ 创建第一次开机安装脚本: $first_boot_script"
+    # 检查脚本语法，若失败则删除脚本并提示
+    if ! sh -n "$first_boot_script" 2>/dev/null; then
+        log "❌ 开机脚本 99-custom-files 语法错误，已自动移除，避免影响 base-files 编译"
+        rm -f "$first_boot_script"
+    else
+        chmod +x "$first_boot_script"
+        log "✅ 创建第一次开机安装脚本: $first_boot_script"
+    fi
     
     echo ""
     log "🔧 步骤4: 创建文件名检查脚本"
@@ -6502,10 +6476,9 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
     
-    log "=== 步骤25: 编译固件（最终修复版：强制输出 BUILD_MARK） ==="
+    log "=== 步骤25: 编译固件（通用补丁自动修复版） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    # 临时关闭 set -e，手动处理错误，确保步骤标记必定输出
     set +e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
     
@@ -6515,7 +6488,6 @@ workflow_step25_build_firmware() {
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
     
-    # 加载环境变量
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
     fi
@@ -6523,11 +6495,9 @@ workflow_step25_build_firmware() {
     log "  📌 固件格式类型: ${FIRMWARE_FORMAT_TYPE:-bin}"
     log "  📌 需要转换: ${FIRMWARE_NEED_CONVERT:-false}"
     
-    # 创建 BUILD_MARK 标记文件，后续合并到 build.log 中确保错误检查能找到
     BUILD_MARKS_FILE="build_marks.log"
-    > "$BUILD_MARKS_FILE"  # 清空文件
+    > "$BUILD_MARKS_FILE"
     
-    log "🔧 创建双固件保护脚本..."
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
     cat > "$protect_dir/protect.sh" << 'EOF'
@@ -6555,24 +6525,6 @@ EOF
     local protect_pid=$!
     log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
     
-    cat > "$protect_dir/recover.sh" << 'EOF'
-#!/bin/bash
-PROTECT_DIR="$1"
-BUILD_DIR="$2"
-[ -f "$BUILD_DIR/build_env.sh" ] && source "$BUILD_DIR/build_env.sh"
-TARGET="${TARGET:-ath79}"
-SUBTARGET="${SUBTARGET:-generic}"
-TARGET_DIR="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
-mkdir -p "$TARGET_DIR"
-RECOVERED=0
-find "$PROTECT_DIR" -name "*.backup" 2>/dev/null | while read backup; do
-    filename=$(basename "$backup" .backup)
-    [ ! -f "$TARGET_DIR/$filename" ] && cp -f "$backup" "$TARGET_DIR/$filename" && RECOVERED=$((RECOVERED + 1))
-done
-echo "📊 恢复文件数: $RECOVERED"
-EOF
-    chmod +x "$protect_dir/recover.sh"
-    
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
     echo ""
@@ -6590,7 +6542,6 @@ EOF
     esac
     export VERSION_DIST="$vendor_dist"
     export CONFIG_VERSION_DIST="$vendor_dist"
-    log "  📌 编译时 VERSION_DIST 环境变量: $VERSION_DIST"
     
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
@@ -6608,7 +6559,6 @@ EOF
         log "⚠️ 使用单线程编译"
     fi
     
-    # 动态目录创建函数（通用）
     ensure_root_dirs() {
         local target="$1"
         local build_dir="$2"
@@ -6616,95 +6566,108 @@ EOF
         for tdir in $target_dirs; do
             local root_name="root-${target}"
             local root_path="$tdir/$root_name"
-            if [ ! -d "$root_path" ]; then
-                mkdir -p "$root_path"
-                mkdir -p "$root_path/etc" "$root_path/lib" "$root_path/usr" "$root_path/tmp"
-            fi
+            [ ! -d "$root_path" ] && mkdir -p "$root_path"/{etc,lib,usr,tmp}
             local orig_root_path="$tdir/root.orig-${target}"
-            if [ ! -d "$orig_root_path" ]; then
-                mkdir -p "$orig_root_path"
-                mkdir -p "$orig_root_path/tmp"
-                chmod 1777 "$orig_root_path/tmp" 2>/dev/null || true
+            [ ! -d "$orig_root_path" ] && mkdir -p "$orig_root_path/tmp" && chmod 1777 "$orig_root_path/tmp"
+        done
+    }
+    
+    # ---------- 通用补丁自动修复函数 ----------
+    auto_disable_failed_patches() {
+        local log_to_check="$1"
+        local disabled=0
+        # 从日志中提取 Patch failed! 并定位补丁文件
+        grep "Patch failed!" "$log_to_check" 2>/dev/null | while read line; do
+            local patch_path=$(echo "$line" | grep -oP 'Please fix \K[^ ]+' | head -1)
+            if [ -n "$patch_path" ] && [ -f "$patch_path" ]; then
+                log "  🧩 自动禁用冲突补丁: $patch_path -> $patch_path.disabled"
+                mv "$patch_path" "$patch_path.disabled"
+                disabled=1
             fi
         done
+        return $disabled
     }
     
     log "🔧 使用分步编译流程..."
     
-    # ===== 步骤0：动态补齐 host 工具（允许失败） =====
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 强制补齐 host 工具 开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-    log "  📦 步骤0: 清理并强制安装 host 工具..."
-    rm -rf tmp/info 2>/dev/null || true
+    # ===== STEP0 =====
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 host 工具 开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
+    log "  📦 步骤0: 补齐 host 工具..."
+    rm -rf tmp/info
     mkdir -p tmp/info
-    rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null || true
-    rm -f staging_dir/target-*/stamp/.package_install 2>/dev/null || true
-    find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null || true
+    rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
+    find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    
     make tools/compile -j1 V=s 2>&1 | tee build_tools_compile.log || true
     make tools/install -j1 V=s 2>&1 | tee build_tools_install.log || true
     
     for tool in opkg fakeroot mkhash; do
-        if [ -f "$BUILD_DIR/staging_dir/host/bin/$tool" ]; then
-            log "  ✅ $tool 已存在"
-            continue
-        fi
-        
-        local pkg_dir=$(find_package_dir "$tool" "$BUILD_DIR")
-        if [ -n "$pkg_dir" ] && [ -d "$BUILD_DIR/$pkg_dir" ]; then
-            log "  🔧 动态编译 $tool，路径: $pkg_dir"
-            make "$pkg_dir/host/compile" -j1 V=s 2>&1 | tee -a build_tools_compile.log || true
-            make "$pkg_dir/host/install" -j1 V=s 2>&1 | tee -a build_tools_install.log || true
-        else
-            log "  ⚠️ 找不到 $tool 源码，创建占位符"
-            mkdir -p "$BUILD_DIR/staging_dir/host/bin"
-            echo "#!/bin/bash" > "$BUILD_DIR/staging_dir/host/bin/$tool"
-            echo "exit 0" >> "$BUILD_DIR/staging_dir/host/bin/$tool"
-            chmod +x "$BUILD_DIR/staging_dir/host/bin/$tool"
+        if [ ! -f "$BUILD_DIR/staging_dir/host/bin/$tool" ]; then
+            local pkg_dir=$(find_package_dir "$tool" "$BUILD_DIR")
+            if [ -n "$pkg_dir" ]; then
+                log "  🔧 动态编译 $tool: $pkg_dir"
+                make "$pkg_dir/host/compile" -j1 V=s 2>&1 | tee -a build_tools_compile.log || true
+                make "$pkg_dir/host/install" -j1 V=s 2>&1 | tee -a build_tools_install.log || true
+            else
+                log "  ⚠️ 找不到 $tool 源码，创建占位符"
+                mkdir -p "$BUILD_DIR/staging_dir/host/bin"
+                echo -e "#!/bin/bash\nexit 0" > "$BUILD_DIR/staging_dir/host/bin/$tool"
+                chmod +x "$BUILD_DIR/staging_dir/host/bin/$tool"
+            fi
         fi
     done
+    [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ] || { log "❌ opkg 缺失"; exit 1; }
+    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 host 工具 完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
-    if [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ]; then
-        log "  ✅ opkg 已就绪"
-    else
-        log "  ❌ 致命错误：opkg 仍然缺失，构建终止"
-        exit 1
-    fi
-    echo -e "\e[1;33m>>> BUILD_MARK: STEP0 强制补齐 host 工具 完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-    
-    # ===== 步骤1：编译工具链 =====
+    # ===== STEP1 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤1: 编译工具链..."
     make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
-    # ===== 步骤2：编译内核和模块 =====
+    # ===== STEP2（内核编译，含补丁自动修复重试） =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-    log "  📦 步骤2: 编译内核和模块..."
-    ensure_root_dirs "$TARGET" "$BUILD_DIR"
-    make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2_attempt1.log || true
+    log "  📦 步骤2: 编译内核和模块（含补丁冲突自动修复）..."
+    local max_retries=2
+    local attempt=1
+    while [ $attempt -le $max_retries ]; do
+        ensure_root_dirs "$TARGET" "$BUILD_DIR"
+        make -j$MAKE_JOBS target/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step2_attempt${attempt}.log
+        local ret=$?
+        if [ $ret -eq 0 ]; then
+            break
+        fi
+        # 检查是否有补丁冲突
+        if grep -q "Patch failed!" build_step2_attempt${attempt}.log; then
+            auto_disable_failed_patches build_step2_attempt${attempt}.log
+            log "  🔄 补丁已禁用，重试内核编译... (尝试 $attempt/$max_retries)"
+            attempt=$((attempt + 1))
+        else
+            log "  ❌ 内核编译失败，未检测到补丁冲突，放弃重试"
+            break
+        fi
+    done
     echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
-    # ===== 步骤3：编译软件包 =====
+    # ===== STEP3 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤3: 编译所有软件包..."
     make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
-    # ===== 步骤4：安装软件包 =====
+    # ===== STEP4 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤4: 安装软件包..."
     make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
-    # ===== 步骤5：生成固件 =====
+    # ===== STEP5 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5_attempt1.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     
-    # 合并日志，同时加入 BUILD_MARK 标记文件
     cat build_tools_compile.log build_tools_install.log build_step*.log build_step2_attempt*.log build_step5_attempt*.log "$BUILD_MARKS_FILE" > build.log 2>/dev/null || true
     log "  ✅ 分步编译完成"
     kill $protect_pid 2>/dev/null || true
@@ -6743,7 +6706,6 @@ EOF
     rm -rf "$protect_dir" 2>/dev/null || true
     log "✅ 步骤25 完成"
     
-    # 恢复 set -e
     set -e
     return 0
 }
@@ -6976,7 +6938,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 精准版（过滤干扰项）
+# 全流程错误检查函数 - 最终增强版（补丁冲突诊断）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7001,7 +6963,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 精准版"
+        echo "🔍 全流程错误检查 - 增强版"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -7069,7 +7031,7 @@ quick_error_check() {
             grep -oP '(/[^ ]+|[^ ]+/[^ ]*)\s*:\s*No such file or directory' "$f" 2>/dev/null | sed 's/: No such file or directory//' | sort -u 2>/dev/null
         done | sort -u 2>/dev/null | head -5)
         if [ -n "$missing_files" ]; then
-            echo "  ❌ 缺失文件/头文件:"
+            echo "  ❌ 缺失文件:"
             echo "$missing_files" | while read mf; do echo "      - $mf"; done
         fi
         local dl_errors=$(for f in "${!log_sources[@]}"; do
@@ -7078,6 +7040,17 @@ quick_error_check() {
         if [ -n "$dl_errors" ]; then
             echo "  ❌ 下载错误:"
             echo "$dl_errors" | while read dl; do echo "      $dl"; done
+        fi
+        # 补丁冲突检查
+        local patch_fails=$(for f in "${!log_sources[@]}"; do
+            grep "Patch failed!" "$f" 2>/dev/null
+        done | head -5)
+        if [ -n "$patch_fails" ]; then
+            echo "  🧩 内核补丁冲突 (Patch failed):"
+            echo "$patch_fails" | while read pl; do
+                local bad_patch=$(echo "$pl" | grep -oP '(?<=Please fix )[^!]+' | xargs)
+                [ -n "$bad_patch" ] && echo "      $bad_patch"
+            done
         fi
         echo ""
 
@@ -7183,7 +7156,6 @@ quick_error_check() {
             grep -Poh 'make(?:\[[0-9]+\])?: \*\*\* \[\K[^\]]+(?=\])' "$f" 2>/dev/null >> "$failed_pkgs_file"
             grep -ohP 'ERROR: \K.*failed to build' "$f" 2>/dev/null >> "$failed_pkgs_file"
         done
-        # 过滤掉 .installed .built .autoremove 等临时目标
         local unique_failed=$(sort -u "$failed_pkgs_file" | grep -v -E '\.(installed|built|autoremove|stamp|info)$' | grep -v '/Makefile:')
         local shown=0
         while IFS= read -r line; do
@@ -7218,16 +7190,26 @@ quick_error_check() {
         fi
         rm -f "$failed_pkgs_file"
 
-        # ----- base-files 专项诊断 -----
+        # 补丁冲突专项指引
+        if [ -n "$patch_fails" ]; then
+            echo ""
+            echo "🔎 检测到内核补丁冲突，请按以下步骤修复："
+            for f in "${!log_sources[@]}"; do
+                grep "Patch failed!" "$f" 2>/dev/null | while read pl; do
+                    local bad_patch_path=$(echo "$pl" | grep -oP '(?<=Please fix )[^!]+' | xargs)
+                    [ -n "$bad_patch_path" ] && echo "   冲突补丁: $bad_patch_path"
+                done
+            done | sort -u
+            echo "   可执行以下命令暂时禁用该补丁（下一版本再更新补丁）："
+            echo "     mv <冲突补丁路径> <冲突补丁路径>.disabled"
+            echo "   然后重新运行编译。"
+        fi
+
         if echo "$unique_failed" | grep -q "base-files"; then
             echo ""
-            echo "🔎 检测到 base-files 编译失败，可能原因及修复："
-            echo "   1. 自定义文件脚本 files/etc/uci-defaults/99-custom-files 中有语法错误。"
-            echo "   请检查该文件是否存在非法字符、不兼容的 shell 语法。"
-            echo "   可临时移除该文件，待修复后重新编译："
+            echo "🔎 检测到 base-files 编译失败，可能原因：自定义文件脚本语法错误。"
+            echo "   请检查文件 files/etc/uci-defaults/99-custom-files，或临时移除："
             echo "     rm -f /mnt/openwrt-build/files/etc/uci-defaults/99-custom-files"
-            echo "   2. 若使用自定义 IPK 包，请确保它们与目标架构兼容。"
-            echo "   3. 如果上述无效，可尝试在配置阶段禁用自定义文件集成。"
         fi
         echo "----------------------------------------"
         echo ""
@@ -7276,6 +7258,7 @@ quick_error_check() {
             echo "❌ 未生成任何有效固件，构建失败。"
             echo ""
             echo "💡 排查建议:"
+            [ -n "$patch_fails" ] && echo "   🔧 内核补丁冲突（见上方补丁冲突详情），请禁用冲突的补丁后重试。"
             [ -n "$unique_failed" ] && echo "   🔧 失败的包: $(echo $unique_failed | tr '\n' ' ')"
             [ -n "$missing_files" ] && echo "   🔧 缺失文件可能导致部分包编译失败。"
             [ -n "$dl_errors" ] && echo "   🔧 下载失败，请检查网络或更换源。"
