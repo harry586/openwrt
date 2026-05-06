@@ -6975,7 +6975,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 精准版（明确列出失败包）
+# 全流程错误检查函数 - 精准版（含 base-files 诊断）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6992,7 +6992,6 @@ quick_error_check() {
         source "$build_dir/build_env.sh"
     fi
 
-    # 主日志智能回退
     if [ ! -f "$log_file" ]; then
         local alt_log=$(ls -t "$build_dir"/build_step5_attempt*.log "$build_dir"/build_step*.log "$build_dir"/*.log 2>/dev/null | head -1)
         [ -f "$alt_log" ] && log_file="$alt_log"
@@ -7010,7 +7009,6 @@ quick_error_check() {
         echo "输入设备: ${DEVICE:-unknown}"
         echo "================================================================="
 
-        # 收集所有日志
         declare -A log_sources
         for f in "$build_dir"/*.log; do
             [ -f "$f" ] && log_sources["$f"]="构建目录"
@@ -7028,7 +7026,6 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
-        # ===== BUILD_MARK =====
         echo "📌 编译流程执行标记:"
         echo "----------------------------------------"
         local any_mark=0
@@ -7041,7 +7038,6 @@ quick_error_check() {
         [ $any_mark -eq 0 ] && echo "   ⚠️ 未找到任何 BUILD_MARK 标记"
         echo ""
 
-        # ===== Makefile 目标 =====
         echo "📌 源码 Makefile 关键目标检查:"
         echo "----------------------------------------"
         local makefile_issues=0
@@ -7056,7 +7052,6 @@ quick_error_check() {
         [ $makefile_issues -gt 0 ] && echo "   🔧 有 $makefile_issues 个目标缺失，编译可能出错"
         echo ""
 
-        # ===== Feed 警告 =====
         echo "📌 Feed 安装及依赖警告摘要:"
         echo "----------------------------------------"
         local feed_warnings=$(grep -hE "WARNING: Makefile.*has a (dependency|build dependency) on" "$build_dir"/*.log 2>/dev/null | sort -u | head -10)
@@ -7067,7 +7062,6 @@ quick_error_check() {
         fi
         echo ""
 
-        # ===== 缺失文件 + 下载失败 =====
         echo "🚨 关键异常摘要:"
         echo "----------------------------------------"
         local missing_files=$(for f in "${!log_sources[@]}"; do
@@ -7086,7 +7080,6 @@ quick_error_check() {
         fi
         echo ""
 
-        # ===== 固件状态 =====
         echo "🔍 固件生成状态检查"
         echo "----------------------------------------"
         local full_target="${TARGET:-$target_platform}"
@@ -7135,7 +7128,6 @@ quick_error_check() {
         echo "----------------------------------------"
         echo ""
 
-        # ===== 分步致命错误统计 =====
         echo "🔍 分步编译致命错误统计:"
         echo "----------------------------------------"
         local fatal_patterns=(
@@ -7182,66 +7174,62 @@ quick_error_check() {
         [ $total_fatal -eq 0 ] && echo "   ✅ 未发现致命编译错误"
         echo ""
 
-        # ===== 失败包详情（增强提取） =====
         echo "🔧 编译失败包详情:"
         echo "----------------------------------------"
         local failed_pkgs_file="/tmp/failed_pkgs_$$.txt"
         > "$failed_pkgs_file"
-
-        # 1. 提取所有 make 错误目标（支持 make[1]: *** [路径] 和 make: *** [路径]）
         for f in "${!log_sources[@]}"; do
             grep -Poh 'make(?:\[[0-9]+\])?: \*\*\* \[\K[^\]]+(?=\])' "$f" 2>/dev/null >> "$failed_pkgs_file"
-        done
-        # 2. 提取 ERROR: ... failed to build
-        for f in "${!log_sources[@]}"; do
             grep -ohP 'ERROR: \K.*failed to build' "$f" 2>/dev/null >> "$failed_pkgs_file"
         done
-
-        local unique_failed_lines=$(sort -u "$failed_pkgs_file" | grep -v '/Makefile:')
-        # 从每一行中提取包名（取最后一个 /compile 或 /install 之前的目录名）
-        local shown_failures=0
+        local unique_failed=$(sort -u "$failed_pkgs_file" | grep -v '/Makefile:')
+        local shown=0
         while IFS= read -r line; do
             [ -z "$line" ] && continue
-            # 跳过已经包含 'toplevel.mk' 的全局错误，避免重复
-            if echo "$line" | grep -q 'toplevel.mk'; then
-                continue
-            fi
-            local pkg_name=""
+            if echo "$line" | grep -q 'toplevel.mk'; then continue; fi
+            local pkg=""
             if echo "$line" | grep -q '/compile\|/install'; then
-                pkg_name=$(echo "$line" | sed 's:/compile$::; s:/install$::; s:/host/compile$::; s:/host/install$::' | awk -F/ '{print $NF}')
+                pkg=$(echo "$line" | sed 's:/host/compile$::; s:/host/install$::; s:/compile$::; s:/install$::' | awk -F/ '{print $NF}')
             else
-                # 对于 ERROR: package/xxx failed to build 这种
-                pkg_name=$(echo "$line" | sed 's/ failed to build$//' | awk -F/ '{print $NF}')
+                pkg=$(echo "$line" | sed 's/ failed to build$//' | awk -F/ '{print $NF}')
             fi
-            [ -z "$pkg_name" ] && pkg_name="$(basename "$line")"
-            echo "   📦 $pkg_name  ($line)"
-            # 在日志中搜索该包附近的错误信息（最多3行）
+            [ -z "$pkg" ] && pkg="$(basename "$line")"
+            echo "   📦 $pkg  ($line)"
             local detail=$(for f in "${!log_sources[@]}"; do
-                grep -A2 -i "error:" "$f" 2>/dev/null | grep -i "$pkg_name" | head -2
+                grep -A2 -i "error:" "$f" 2>/dev/null | grep -i "$pkg" | head -2
             done | sort -u)
             if [ -n "$detail" ]; then
                 echo "$detail" | while read d; do echo "      $d"; done
             fi
-            shown_failures=$((shown_failures + 1))
-            [ $shown_failures -ge 15 ] && break
-        done <<< "$unique_failed_lines"
+            shown=$((shown + 1))
+            [ $shown -ge 12 ] && break
+        done < <(echo "$unique_failed" | sort -u)
 
-        # 如果没有有效包，再显示顶级 make 错误作为提示
-        if [ $shown_failures -eq 0 ]; then
-            local top_error=$(grep -h 'make: \*\*\* .* Error' "$build_dir"/build_step3.log "$build_dir"/build.log 2>/dev/null | head -1)
-            if [ -n "$top_error" ]; then
-                echo "   ⚠️ 未提取到具体包，顶层错误: $top_error"
-                echo "   💡 这通常表示某个软件包编译失败，但日志中未包含详细包名。"
-                echo "   请查看 build_step3.log 末尾附近的 'ERROR:' 或 'make[...]: ***' 行。"
+        if [ $shown -eq 0 ]; then
+            local top_err=$(grep 'make: \*\*\* .* Error' "$build_dir"/build_step3.log "$build_dir"/build.log 2>/dev/null | head -1)
+            if [ -n "$top_err" ]; then
+                echo "   ⚠️ 顶层错误: $top_err"
+                echo "   💡 请查看 build_step3.log 末尾附近的详细错误。"
             else
                 echo "   (未检测到具体失败包)"
             fi
         fi
         rm -f "$failed_pkgs_file"
+
+        # ----- base-files 专项诊断 -----
+        if echo "$unique_failed" | grep -q "base-files"; then
+            echo ""
+            echo "🔎 检测到 base-files 编译失败，可能原因及修复："
+            echo "   1. 自定义文件脚本 files/etc/uci-defaults/99-custom-files 中有语法错误。"
+            echo "   请检查该文件是否存在非法字符、不兼容的 shell 语法。"
+            echo "   可临时移除该文件，待修复后重新编译："
+            echo "     rm -f /mnt/openwrt-build/files/etc/uci-defaults/99-custom-files"
+            echo "   2. 若使用自定义 IPK 包，请确保它们与目标架构兼容。"
+            echo "   3. 如果上述无效，可尝试在配置阶段禁用自定义文件集成。"
+        fi
         echo "----------------------------------------"
         echo ""
 
-        # ===== 关键组件 =====
         echo "🔍 关键组件状态检查:"
         echo "----------------------------------------"
         [ -d "staging_dir" ] && echo "✅ staging_dir 存在 ($(du -sh staging_dir 2>/dev/null | awk '{print $1}'))" || echo "❌ staging_dir 不存在"
@@ -7258,7 +7246,6 @@ quick_error_check() {
         fi
         echo ""
 
-        # 最后30行日志
         echo "🔍 最后30行日志 (已过滤 BUILD_MARK):"
         echo "----------------------------------------"
         if [ -f "$log_file" ]; then
@@ -7274,7 +7261,6 @@ quick_error_check() {
         fi
         echo ""
 
-        # 总结
         echo "================================================================="
         echo "📊 构建结论:"
         if [ $((valid_sysupgrade + valid_factory)) -gt 0 ]; then
@@ -7282,13 +7268,13 @@ quick_error_check() {
             [ -n "$factory_size" ] && echo "   factory 固件: $factory_size"
             echo "🎉 固件已成功生成，可正常刷机使用。"
             if [ $total_fatal -gt 0 ]; then
-                echo "⚠️ 检测到 $total_fatal 个编译错误（已在上方列出失败包），请根据日志修复。"
+                echo "⚠️ 检测到 $total_fatal 个编译错误（上方已列出失败包及修复建议）。"
             fi
         else
             echo "❌ 未生成任何有效固件，构建失败。"
             echo ""
             echo "💡 排查建议:"
-            [ -n "$unique_failed_lines" ] && echo "   🔧 失败的包: $(echo $unique_failed_lines | tr '\n' ' ')"
+            [ -n "$unique_failed" ] && echo "   🔧 失败的包: $(echo $unique_failed | tr '\n' ' ')"
             [ -n "$missing_files" ] && echo "   🔧 缺失文件可能导致部分包编译失败。"
             [ -n "$dl_errors" ] && echo "   🔧 下载失败，请检查网络或更换源。"
         fi
