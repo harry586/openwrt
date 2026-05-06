@@ -6475,24 +6475,17 @@ workflow_step23_pre_build_check() {
 #【build_firmware_main.sh-40】
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
-    
-    log "=== 步骤25: 编译固件（自动复用工具链） ==="
+
+    log "=== 步骤25: 编译固件（含通用补丁自动修复） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
-    
+
     set +e
-    trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
-    
     cd $BUILD_DIR
-    
+
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
-    
-    # 加载环境变量
-    if [ -f "$BUILD_DIR/build_env.sh" ]; then
-        source "$BUILD_DIR/build_env.sh"
-    fi
-    
+
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
     echo ""
@@ -6500,8 +6493,17 @@ workflow_step25_build_firmware() {
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
-    
-    # 设置发行版名称
+
+    local MAKE_JOBS=1
+    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
+        if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then MAKE_JOBS=4
+        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then MAKE_JOBS=2
+        else MAKE_JOBS=1; fi
+        log "🚀 使用 $MAKE_JOBS 个并行任务"
+    else
+        log "⚠️ 使用单线程编译"
+    fi
+
     local vendor_dist=""
     case "$SOURCE_REPO_TYPE" in
         "immortalwrt") vendor_dist="ImmortalWrt" ;;
@@ -6511,44 +6513,72 @@ workflow_step25_build_firmware() {
     esac
     export VERSION_DIST="$vendor_dist"
     export CONFIG_VERSION_DIST="$vendor_dist"
-    log "  📌 编译时 VERSION_DIST 环境变量: $VERSION_DIST"
-    
-    # 设置并行任务数
-    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
-        if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then MAKE_JOBS=4
-        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then MAKE_JOBS=2
-        else MAKE_JOBS=1; fi
-        log "🚀 使用 $MAKE_JOBS 个并行任务"
-    else
-        MAKE_JOBS=1
-        log "⚠️ 使用单线程编译"
-    fi
-    
-    BUILD_MARKS_FILE="build_marks.log"
-    > "$BUILD_MARKS_FILE"
-    
-    # ===== 直接全量编译（OpenWrt 会自动复用已编译的工具链） =====
-    echo -e "\e[1;33m>>> BUILD_MARK: 开始编译固件 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-    log "🔧 开始编译固件..."
-    START_TIME=$(date +%s)
-    
-    make -j$MAKE_JOBS V=s VERSION_DIST="$vendor_dist" 2>&1 | tee build.log
-    MAKE_EXIT_CODE=${PIPESTATUS[0]}
-    
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
-    log "⏱️ 编译耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-    echo -e "\e[1;33m>>> BUILD_MARK: 编译固件完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-    
-    # 合并 BUILD_MARK 到主日志
-    cat "$BUILD_MARKS_FILE" >> build.log 2>/dev/null || true
-    
-    if [ $MAKE_EXIT_CODE -ne 0 ]; then
-        log "⚠️ make 返回非零退出码 ($MAKE_EXIT_CODE)，检查固件是否生成..."
-    fi
-    
-    # 验证固件并计算哈希值
+
+    # ---------- 通用补丁自动禁用函数 ----------
+    auto_disable_failed_patches() {
+        local log_to_check="$1"
+        local disabled=0
+        # 提取冲突补丁的绝对路径
+        local patches=$(grep "Patch failed!" "$log_to_check" 2>/dev/null | sed -n 's/.*Please fix \([^!]*\).*/\1/p')
+        [ -z "$patches" ] && patches=$(grep -oP '[^ ]+\.patch' "$log_to_check" 2>/dev/null | head -1)
+        [ -z "$patches" ] && return 1
+        for patch in $patches; do
+            patch=$(echo "$patch" | xargs)
+            if [ -f "$patch" ]; then
+                log "  🧩 自动禁用冲突补丁: $patch -> $patch.disabled"
+                mv "$patch" "$patch.disabled"
+                disabled=$((disabled + 1))
+            fi
+        done
+        return $disabled
+    }
+
+    # ---------- 编译主逻辑（最多尝试2次） ----------
+    local attempt=1
+    local max_attempts=2
+    local make_exit_code=0
+
+    while [ $attempt -le $max_attempts ]; do
+        log "🔧 开始编译（尝试 $attempt/$max_attempts）..."
+        START_TIME=$(date +%s)
+
+        make -j$MAKE_JOBS V=s VERSION_DIST="$vendor_dist" 2>&1 | tee build.log
+        make_exit_code=${PIPESTATUS[0]}
+
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        log "⏱️ 编译耗时: $((DURATION / 60))分$((DURATION % 60))秒"
+
+        if [ $make_exit_code -eq 0 ]; then
+            log "✅ make 成功退出"
+            break
+        fi
+
+        log "⚠️ make 返回非零退出码 ($make_exit_code)，尝试修复..."
+
+        # 检查是否为补丁冲突
+        if grep -qE "Patch failed|Hunk FAILED" build.log; then
+            auto_disable_failed_patches build.log
+            local disabled_count=$?
+            if [ $disabled_count -gt 0 ]; then
+                log "  🔄 已禁用 $disabled_count 个补丁，准备重试..."
+            else
+                log "  ❌ 补丁冲突但未能自动处理，放弃重试"
+                break
+            fi
+        else
+            log "  ❌ 非补丁冲突错误，放弃重试"
+            break
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    # ---------- 验证固件 ----------
     log "🔍 验证固件并计算哈希值..."
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+    fi
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
     local valid_firmware=0
     local hash_file="$target_dir/firmware-sha256sums.txt"
@@ -6567,7 +6597,6 @@ workflow_step25_build_firmware() {
                     valid_firmware=$((valid_firmware + 1))
                     local fhash=$(sha256sum "$file" | awk '{print $1}')
                     echo "$fhash  $fname" >> "$hash_file"
-                    log "      SHA256: $fhash"
                 else
                     log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
                 fi
@@ -6577,13 +6606,12 @@ workflow_step25_build_firmware() {
             fi
         done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null)
     fi
-    
+
     if [ $valid_firmware -eq 0 ]; then
         log "❌ 错误：没有找到任何有效可刷机固件"
         exit 1
     fi
-    
-    log "✅ 找到 $valid_firmware 个有效可刷机固件"
+
     log "✅ 步骤25 完成"
     set -e
     return 0
