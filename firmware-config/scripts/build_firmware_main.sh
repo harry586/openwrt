@@ -6476,7 +6476,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
 
-    log "=== 步骤25: 编译固件（通用补丁自动修复版） ==="
+    log "=== 步骤25: 编译固件（通用补丁修复 + 宿主工具预置） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
 
     set +e
@@ -6573,21 +6573,19 @@ EOF
         done
     }
 
-    # ---------- 通用补丁冲突自动修复函数 ----------
+    # ----- 通用补丁自动禁用函数 -----
     auto_disable_failed_patches() {
         local log_to_check="$1"
         local disabled=0
-        # 方法1：标准 OpenWrt 格式 "Please fix <path>"
         local patches=$(grep "Patch failed!" "$log_to_check" 2>/dev/null | sed -n 's/.*Please fix \([^!]*\).*/\1/p')
         if [ -z "$patches" ]; then
-            # 方法2：提取错误行中最后一个以 .patch 结尾的路径
             patches=$(grep "Patch failed\|Hunk FAILED" "$log_to_check" 2>/dev/null | grep -oP '[^ ]+\.patch' | head -1)
         fi
         if [ -z "$patches" ]; then
             return 0
         fi
         for patch in $patches; do
-            patch=$(echo "$patch" | xargs)   # 去除前后空格
+            patch=$(echo "$patch" | xargs)
             if [ -f "$patch" ]; then
                 log "  🧩 自动禁用冲突补丁: $patch -> $patch.disabled"
                 mv "$patch" "$patch.disabled"
@@ -6599,17 +6597,35 @@ EOF
 
     log "🔧 开始分步编译..."
 
-    # ===== STEP0：编译并补齐 host 工具 =====
+    # ===== STEP0：预置宿主基础工具并编译 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP0 host 工具 开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-    log "  📦 步骤0: 编译 host 工具..."
+    log "  📦 步骤0: 预置宿主基础工具并编译..."
+
+    # 1. 预先创建宿主工具目录并链接系统基础命令
+    log "  🔧 预置基础宿主工具..."
+    mkdir -p "$BUILD_DIR/staging_dir/host/bin"
+    for cmd in sed awk grep gettext msgfmt xgettext; do
+        if [ ! -f "$BUILD_DIR/staging_dir/host/bin/$cmd" ] && [ ! -f "$BUILD_DIR/staging_dir/hostpkg/bin/$cmd" ]; then
+            local syspath=$(which $cmd 2>/dev/null)
+            if [ -n "$syspath" ]; then
+                ln -sf "$syspath" "$BUILD_DIR/staging_dir/host/bin/$cmd"
+                log "    ✅ 已链接系统 $cmd -> $syspath"
+            fi
+        fi
+    done
+
+    # 2. 清理之前的残留并创建必要的目录
     rm -rf tmp/info
     mkdir -p tmp/info
     rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
     find build_dir -type d -name "ipkg-*" -exec rm -rf {} \; 2>/dev/null
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
+
+    # 3. 编译并安装 tools
     make tools/compile -j1 V=s 2>&1 | tee build_tools_compile.log || true
     make tools/install -j1 V=s 2>&1 | tee build_tools_install.log || true
 
+    # 4. 确保关键工具（opkg 等）存在
     for tool in opkg fakeroot mkhash; do
         if [ ! -f "$BUILD_DIR/staging_dir/host/bin/$tool" ]; then
             local pkg_dir=$(find_package_dir "$tool" "$BUILD_DIR")
@@ -6626,26 +6642,6 @@ EOF
         fi
     done
 
-    # 补齐可能缺失的基础系统工具
-    log "  🔧 补齐可能缺失的基础 host 工具..."
-    local missing_tools=()
-    for cmd in sed awk grep gettext msgfmt xgettext; do
-        if [ ! -f "$BUILD_DIR/staging_dir/host/bin/$cmd" ] && [ ! -f "$BUILD_DIR/staging_dir/hostpkg/bin/$cmd" ]; then
-            local syspath=$(which $cmd 2>/dev/null)
-            if [ -n "$syspath" ]; then
-                mkdir -p "$BUILD_DIR/staging_dir/host/bin"
-                ln -sf "$syspath" "$BUILD_DIR/staging_dir/host/bin/$cmd"
-                log "    ✅ 已链接系统 $cmd -> $syspath"
-            else
-                missing_tools+=("$cmd")
-            fi
-        fi
-    done
-    if [ ${#missing_tools[@]} -gt 0 ]; then
-        log "  ⚠️ 以下基础工具系统也未找到: ${missing_tools[*]}"
-        log "  可尝试在 '安装基础工具' 步骤中添加对应的 apt 包。"
-    fi
-
     [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ] || { log "❌ opkg 缺失"; exit 1; }
     echo -e "\e[1;33m>>> BUILD_MARK: STEP0 host 工具 完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
 
@@ -6655,7 +6651,7 @@ EOF
     make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
 
-    # ===== STEP2：内核编译，含补丁自动修复重试 =====
+    # ===== STEP2（内核编译，含补丁自动修复重试） =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤2: 编译内核和模块（补丁冲突自动修复）..."
     local max_retries=2
@@ -6667,8 +6663,6 @@ EOF
         if [ $ret -eq 0 ]; then
             break
         fi
-
-        # 检查是否为补丁冲突
         if grep -qE "Patch failed|Hunk FAILED" build_step2_attempt${attempt}.log; then
             auto_disable_failed_patches build_step2_attempt${attempt}.log
             local disabled_count=$?
@@ -6682,8 +6676,6 @@ EOF
             log "  ❌ 内核编译失败（非补丁冲突），放弃重试"
             break
         fi
-        # 清理编译残留，确保下次重试干净
-        rm -rf build_dir/target-*/linux-${TARGET}* 2>/dev/null || true
         attempt=$((attempt + 1))
     done
     echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
