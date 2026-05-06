@@ -6475,30 +6475,30 @@ workflow_step23_pre_build_check() {
 #【build_firmware_main.sh-40】
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
-
-    log "=== 步骤25: 编译固件（补丁自动修复版） ==="
+    
+    log "=== 步骤25: 编译固件（增强工具链补齐） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
-
+    
     set +e
     trap 'echo "❌ 步骤25 失败，退出代码: $?"; exit 1' ERR
-
+    
     cd $BUILD_DIR
-
+    
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
-
+    
     if [ -f "$BUILD_DIR/build_env.sh" ]; then
         source "$BUILD_DIR/build_env.sh"
     fi
-
+    
     log "  📌 固件格式类型: ${FIRMWARE_FORMAT_TYPE:-bin}"
     log "  📌 需要转换: ${FIRMWARE_NEED_CONVERT:-false}"
-
+    
     BUILD_MARKS_FILE="build_marks.log"
     > "$BUILD_MARKS_FILE"
-
-    # 双固件保护脚本
+    
+    # 双固件保护
     local protect_dir="$BUILD_DIR/.firmware_protect"
     mkdir -p "$protect_dir"
     cat > "$protect_dir/protect.sh" << 'EOF'
@@ -6525,7 +6525,7 @@ EOF
     "$protect_dir/protect.sh" "$protect_dir" "$BUILD_DIR" &
     local protect_pid=$!
     log "  ✅ 双固件保护已启动 (PID: $protect_pid)"
-
+    
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
     echo ""
@@ -6533,7 +6533,7 @@ EOF
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
-
+    
     local vendor_dist=""
     case "$SOURCE_REPO_TYPE" in
         "immortalwrt") vendor_dist="ImmortalWrt" ;;
@@ -6543,13 +6543,13 @@ EOF
     esac
     export VERSION_DIST="$vendor_dist"
     export CONFIG_VERSION_DIST="$vendor_dist"
-
+    
     local make_args="V=s"
     case "$SOURCE_REPO_TYPE" in
         "openwrt"|"lede") make_args="V=s FORCE_UNSAFE_CONFIGURE=1" ;;
         "immortalwrt") make_args="V=s" ;;
     esac
-
+    
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
         if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then MAKE_JOBS=4
         elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then MAKE_JOBS=2
@@ -6559,7 +6559,7 @@ EOF
         MAKE_JOBS=1
         log "⚠️ 使用单线程编译"
     fi
-
+    
     ensure_root_dirs() {
         local target="$1"
         local build_dir="$2"
@@ -6572,33 +6572,31 @@ EOF
             [ ! -d "$orig_root_path" ] && mkdir -p "$orig_root_path/tmp" && chmod 1777 "$orig_root_path/tmp"
         done
     }
-
-    # ========== 通用补丁自动禁用函数（安全实现） ==========
+    
+    # ----- 通用补丁自动禁用函数 -----
     auto_disable_failed_patches() {
         local log_to_check="$1"
         local disabled=0
-        # 提取 Patch failed! 后面提示的补丁路径
         local patches=$(grep "Patch failed!" "$log_to_check" 2>/dev/null | sed -n 's/.*Please fix \([^!]*\).*/\1/p')
         if [ -z "$patches" ]; then
             return 0
         fi
         for patch in $patches; do
-            # 清除可能的尾随空格/引号
             patch=$(echo "$patch" | xargs)
             if [ -f "$patch" ]; then
-                echo "  🧩 自动禁用冲突补丁: $patch -> $patch.disabled"
+                log "  🧩 自动禁用冲突补丁: $patch -> $patch.disabled"
                 mv "$patch" "$patch.disabled"
                 disabled=$((disabled + 1))
             fi
         done
         return $disabled
     }
-
-    log "🔧 使用分步编译流程..."
-
-    # ===== STEP0 =====
+    
+    log "🔧 开始分步编译..."
+    
+    # ===== STEP0：编译并补齐 host 工具 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP0 host 工具 开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-    log "  📦 步骤0: 补齐 host 工具..."
+    log "  📦 步骤0: 编译 host 工具..."
     rm -rf tmp/info
     mkdir -p tmp/info
     rm -f staging_dir/target-*/.stamp_package_install 2>/dev/null
@@ -6606,7 +6604,7 @@ EOF
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     make tools/compile -j1 V=s 2>&1 | tee build_tools_compile.log || true
     make tools/install -j1 V=s 2>&1 | tee build_tools_install.log || true
-
+    
     for tool in opkg fakeroot mkhash; do
         if [ ! -f "$BUILD_DIR/staging_dir/host/bin/$tool" ]; then
             local pkg_dir=$(find_package_dir "$tool" "$BUILD_DIR")
@@ -6622,16 +6620,38 @@ EOF
             fi
         fi
     done
+    
+    # 强化补齐：确保常见基础命令存在（sed, awk, grep, gettext 等）
+    log "  🔧 补齐可能缺失的基础 host 工具..."
+    local missing_tools=()
+    for cmd in sed awk grep gettext msgfmt xgettext; do
+        if [ ! -f "$BUILD_DIR/staging_dir/host/bin/$cmd" ] && [ ! -f "$BUILD_DIR/staging_dir/hostpkg/bin/$cmd" ]; then
+            # 从系统路径查找
+            local syspath=$(which $cmd 2>/dev/null)
+            if [ -n "$syspath" ]; then
+                mkdir -p "$BUILD_DIR/staging_dir/host/bin"
+                ln -sf "$syspath" "$BUILD_DIR/staging_dir/host/bin/$cmd"
+                log "    ✅ 已链接系统 $cmd -> $syspath"
+            else
+                missing_tools+=("$cmd")
+            fi
+        fi
+    done
+    if [ ${#missing_tools[@]} -gt 0 ]; then
+        log "  ⚠️ 以下基础工具系统也未找到: ${missing_tools[*]}"
+        log "  可尝试在 '安装基础工具' 步骤中添加对应的 apt 包。"
+    fi
+    
     [ -f "$BUILD_DIR/staging_dir/host/bin/opkg" ] || { log "❌ opkg 缺失"; exit 1; }
     echo -e "\e[1;33m>>> BUILD_MARK: STEP0 host 工具 完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-
+    
     # ===== STEP1 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤1: 编译工具链..."
     make -j$MAKE_JOBS toolchain/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step1.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP1 编译工具链完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-
-    # ===== STEP2（内核编译，含补丁自动修复重试） =====
+    
+    # ===== STEP2（含补丁自动修复） =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤2: 编译内核和模块（补丁冲突自动修复）..."
     local max_retries=2
@@ -6643,7 +6663,6 @@ EOF
         if [ $ret -eq 0 ]; then
             break
         fi
-        # 检查是否补丁冲突
         if grep -q "Patch failed!" build_step2_attempt${attempt}.log; then
             auto_disable_failed_patches build_step2_attempt${attempt}.log
             local disabled_count=$?
@@ -6660,31 +6679,31 @@ EOF
         attempt=$((attempt + 1))
     done
     echo -e "\e[1;33m>>> BUILD_MARK: STEP2 编译内核和模块完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-
+    
     # ===== STEP3 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤3: 编译所有软件包..."
     make -j$MAKE_JOBS package/compile $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step3.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP3 编译所有软件包完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-
+    
     # ===== STEP4 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤4: 安装软件包..."
     make -j1 package/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step4.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP4 安装软件包完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-
+    
     # ===== STEP5 =====
     echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件开始 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
     log "  📦 步骤5: 生成固件..."
     ensure_root_dirs "$TARGET" "$BUILD_DIR"
     make -j1 target/install $make_args VERSION_DIST="$vendor_dist" 2>&1 | tee build_step5_attempt1.log || true
     echo -e "\e[1;33m>>> BUILD_MARK: STEP5 生成固件完成 <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
-
+    
     # 合并日志
     cat build_tools_compile.log build_tools_install.log build_step*.log build_step2_attempt*.log build_step5_attempt*.log "$BUILD_MARKS_FILE" > build.log 2>/dev/null || true
     log "  ✅ 分步编译完成"
     kill $protect_pid 2>/dev/null || true
-
+    
     # 验证固件
     log "🔍 验证固件并计算哈希值..."
     local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
@@ -6718,7 +6737,7 @@ EOF
     [ $valid_firmware -eq 0 ] && log "❌ 错误：没有找到任何有效可刷机固件" && rm -rf "$protect_dir" 2>/dev/null || true && exit 1
     rm -rf "$protect_dir" 2>/dev/null || true
     log "✅ 步骤25 完成"
-
+    
     set -e
     return 0
 }
