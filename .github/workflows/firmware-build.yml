@@ -574,15 +574,28 @@ jobs:
           fi
       #【firmware-build.yml-23-end】
 
-      #【firmware-build.yml-24】
-      - name: "24. 编译固件"
-        run: |
-          echo "=== 步骤24: 编译固件 ==="
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step25_build_firmware \
-            "${{ env.ENABLE_PARALLEL }}"
-      #【firmware-build.yml-24-end】
+#【firmware-build.yml-24】
+- name: "24. 编译固件"
+  run: |
+    echo "=== 步骤24: 编译固件 ==="
+    set +e
+    ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+      step25_build_firmware \
+      "${{ env.ENABLE_PARALLEL }}"
+    BUILD_EXIT_CODE=$?
+    
+    # 检查是否生成了有效的 sysupgrade 固件（大小 > 5MB）
+    SYS_FILE=$(find /mnt/openwrt-build/bin/targets -name "*sysupgrade*.bin" -size +5M 2>/dev/null | head -1)
+    if [ -n "$SYS_FILE" ]; then
+      echo "✅ 固件已生成: $SYS_FILE"
+      echo "   大小: $(ls -lh "$SYS_FILE" | awk '{print $5}')"
+      exit 0
+    else
+      echo "❌ 未找到有效的 sysupgrade 固件文件！"
+      echo "   请检查编译日志 build_step3.log 和 build_step5*.log"
+      exit 1
+    fi
+#【firmware-build.yml-24-end】
 
       #【firmware-build.yml-25】
       - name: "25. 检查构建产物"
