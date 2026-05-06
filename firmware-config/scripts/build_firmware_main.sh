@@ -6745,6 +6745,7 @@ EOF
     
     # 恢复 set -e
     set -e
+    return 0
 }
 #【build_firmware_main.sh-40-end】
 
@@ -6975,7 +6976,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 精准版（含 base-files 诊断）
+# 全流程错误检查函数 - 精准版（过滤干扰项）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -7182,7 +7183,8 @@ quick_error_check() {
             grep -Poh 'make(?:\[[0-9]+\])?: \*\*\* \[\K[^\]]+(?=\])' "$f" 2>/dev/null >> "$failed_pkgs_file"
             grep -ohP 'ERROR: \K.*failed to build' "$f" 2>/dev/null >> "$failed_pkgs_file"
         done
-        local unique_failed=$(sort -u "$failed_pkgs_file" | grep -v '/Makefile:')
+        # 过滤掉 .installed .built .autoremove 等临时目标
+        local unique_failed=$(sort -u "$failed_pkgs_file" | grep -v -E '\.(installed|built|autoremove|stamp|info)$' | grep -v '/Makefile:')
         local shown=0
         while IFS= read -r line; do
             [ -z "$line" ] && continue
