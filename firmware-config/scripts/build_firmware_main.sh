@@ -2077,7 +2077,18 @@ EOF
         local force_ath10k=0
         case "$TARGET" in
             ipq40xx|ipq806x|qcom) force_ath10k=1 ;;
-            ath79) force_ath10k=1 ;;
+            ath79)
+                # ath79 平台并非所有设备都需要 ath10k-ct，需进一步判断
+                # 默认均不启用，仅当设备名明确需要时才启用
+                case "$correct_device" in
+                    netgear_wndr3800|netgear_wndr4300|netgear_wndr3700*)
+                        force_ath10k=0
+                        ;;
+                    *)
+                        force_ath10k=0
+                        ;;
+                esac
+                ;;
         esac
         if [ $force_ath10k -eq 1 ]; then
             sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
@@ -2089,7 +2100,7 @@ EOF
             echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
             log "✅ ath10k-ct驱动已强制启用"
         else
-            log "ℹ️ 当前平台 $TARGET 不需要 ath10k-ct，跳过强制启用"
+            log "ℹ️ 当前设备 $correct_device 不需要 ath10k-ct，跳过强制启用"
         fi
     fi
     
