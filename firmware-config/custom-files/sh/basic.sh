@@ -84,20 +84,21 @@ if [ "$RUNTIME_MODE" = "true" ]; then
         
         uci commit network
         
-        # 设置WAN为静态地址
+        # 设置WAN为DHCP客户端，DNS为127.0.0.1
         if uci get network.wan >/dev/null 2>&1; then
-            uci set network.wan.proto='static'
-            uci set network.wan.ipaddr='192.168.1.11'
-            uci set network.wan.netmask='255.255.255.0'
-            uci set network.wan.gateway='192.168.1.1'
-            # 清空DNS设置
+            uci set network.wan.proto='dhcp'
+            # 删除原有的静态IP配置（如果有）
+            uci delete network.wan.ipaddr 2>/dev/null
+            uci delete network.wan.netmask 2>/dev/null
+            uci delete network.wan.gateway 2>/dev/null
+            # 设置DNS为127.0.0.1
             uci delete network.wan.dns 2>/dev/null
-            uci add_list network.wan.dns=''
+            uci add_list network.wan.dns='127.0.0.1'
             # 禁用IPv6相关
             uci set network.wan.ip6assign=''
             uci set network.wan6.proto='none' 2>/dev/null || uci delete network.wan6 2>/dev/null
             uci commit network
-            echo "WAN已设置为静态IP: 192.168.1.11/24，网关: 192.168.1.1，DNS为空"
+            echo "WAN已设置为DHCP客户端，DNS: 127.0.0.1"
         fi
         
         # 修改DHCP配置，禁用IPv6相关服务
@@ -130,7 +131,7 @@ else
     echo "$LAN_CONFIG" > "${INSTALL_DIR}etc/config/network-lan"
     echo "LAN IP配置已集成到固件"
     
-    # 创建默认的完整network配置（禁用IPv6）
+    # 创建默认的完整network配置（禁用IPv6，WAN为DHCP客户端）
     cat > "${INSTALL_DIR}etc/config/network" << 'EOF'
 config interface 'loopback'
 	option ifname 'lo'
@@ -152,17 +153,14 @@ config interface 'lan'
 
 config interface 'wan'
 	option ifname 'eth1'
-	option proto 'static'
-	option ipaddr '192.168.1.11'
-	option netmask '255.255.255.0'
-	option gateway '192.168.1.1'
+	option proto 'dhcp'
 	option ip6assign ''
-	list dns ''
+	list dns '127.0.0.1'
 
 config interface 'wan6'
 	option proto 'none'
 EOF
-    echo "网络配置已集成到固件：WAN静态IP 192.168.1.11，全面禁用IPv6"
+    echo "网络配置已集成到固件：WAN DHCP客户端, DNS 127.0.0.1，全面禁用IPv6"
 fi
 
 # ==================== 3. 设置自定义计划任务（追加方式） ====================
@@ -367,20 +365,20 @@ if uci get network.lan >/dev/null 2>&1; then
         echo "✓ LAN IP地址已经是192.168.10.1"
     fi
     
-    # 设置WAN为静态地址
+    # 设置WAN为DHCP客户端，DNS为127.0.0.1
     if uci get network.wan >/dev/null 2>&1; then
-        uci set network.wan.proto='static'
-        uci set network.wan.ipaddr='192.168.1.11'
-        uci set network.wan.netmask='255.255.255.0'
-        uci set network.wan.gateway='192.168.1.1'
+        uci set network.wan.proto='dhcp'
+        uci delete network.wan.ipaddr 2>/dev/null
+        uci delete network.wan.netmask 2>/dev/null
+        uci delete network.wan.gateway 2>/dev/null
         uci set network.wan.ip6assign=''
-        # 清空DNS设置
+        # 设置DNS为127.0.0.1
         uci delete network.wan.dns 2>/dev/null
-        uci add_list network.wan.dns=''
+        uci add_list network.wan.dns='127.0.0.1'
         # 禁用WAN6
         uci set network.wan6.proto='none' 2>/dev/null || uci delete network.wan6 2>/dev/null
         uci commit network
-        echo "✓ WAN已设置为静态IP: 192.168.1.11/24，网关: 192.168.1.1，DNS为空"
+        echo "✓ WAN已设置为DHCP客户端，DNS: 127.0.0.1"
     fi
     
     # 配置DHCP，禁用IPv6服务
@@ -470,10 +468,8 @@ echo "【配置摘要】:"
 echo "  ✓ 主机名: Neptune"
 echo "  ✓ LAN IP地址: 192.168.10.1/24"
 echo "  ✓ LAN DNS: 127.0.0.1（指向路由器自身）"
-echo "  ✓ WAN类型: 静态IP"
-echo "  ✓ WAN IP: 192.168.1.11/24"
-echo "  ✓ WAN 网关: 192.168.1.1"
-echo "  ✓ WAN DNS: 无（留空）"
+echo "  ✓ WAN类型: DHCP客户端"
+echo "  ✓ WAN DNS: 127.0.0.1"
 echo "  ✓ IPv6: 已全面禁用"
 echo "  ✓ DHCP范围: 192.168.10.100-250"
 echo "  ✓ 计划任务: 已追加自定义任务"
@@ -494,10 +490,9 @@ echo "  • 防火墙（disable_ipv6=1）"
 echo "  • 内核参数（sysctl配置）"
 echo ""
 echo "【WAN配置说明】:"
-echo "  WAN口已设置为静态IP: 192.168.1.11"
-echo "  子网掩码: 255.255.255.0"
-echo "  网关: 192.168.1.1"
-echo "  DNS: 留空（不使用DNS服务器）"
+echo "  WAN口已设置为DHCP客户端"
+echo "  自动获取IP地址"
+echo "  DNS: 127.0.0.1"
 echo "================================"
 EOF
     chmod +x "$dest"
@@ -556,10 +551,8 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     echo "  ✓ 主机名: Neptune"
     echo "  ✓ LAN IP地址: 192.168.10.1/24"
     echo "  ✓ LAN DNS: 127.0.0.1"
-    echo "  ✓ WAN类型: 静态IP"
-    echo "  ✓ WAN IP: 192.168.1.11/24"
-    echo "  ✓ WAN 网关: 192.168.1.1"
-    echo "  ✓ WAN DNS: 无（留空）"
+    echo "  ✓ WAN类型: DHCP客户端"
+    echo "  ✓ WAN DNS: 127.0.0.1"
     echo "  ✓ IPv6: 已全面禁用"
     echo "  ✓ DHCP服务: 已配置（100-250），IPv6服务已禁用"
     echo "  ✓ 计划任务: 已追加（不覆盖原有任务）"
@@ -568,7 +561,7 @@ if [ "$RUNTIME_MODE" = "true" ]; then
     echo ""
     echo "【注意事项】:"
     echo "  1. IP地址更改需要重启网络或系统才能生效"
-    echo "  2. WAN口已设为静态IP，请确保与上级网络兼容"
+    echo "  2. WAN口已设为DHCP客户端，DNS指向路由器自身(127.0.0.1)"
     echo "  3. IPv6已在所有层面完全禁用"
     echo "  4. 无线配置因硬件差异需要手动配置"
     echo "  5. 静态路由需要确保网关192.168.5.100可达"
@@ -587,8 +580,8 @@ else
     echo "  ✓ 主机名配置"
     echo "  ✓ LAN IP地址配置（192.168.10.1）"
     echo "  ✓ LAN DNS配置（127.0.0.1）"
-    echo "  ✓ WAN静态IP配置（192.168.1.11/24，网关192.168.1.1）"
-    echo "  ✓ WAN DNS留空配置"
+    echo "  ✓ WAN DHCP客户端配置"
+    echo "  ✓ WAN DNS: 127.0.0.1"
     echo "  ✓ 全面禁用IPv6配置"
     echo "  ✓ DHCP服务配置（IPv6服务已禁用）"
     echo "  ✓ 自定义计划任务（需手动追加）"
@@ -599,8 +592,8 @@ else
     echo "【固件特性】:"
     echo "  刷入此固件后，系统将:"
     echo "  1. 默认LAN IP地址: 192.168.10.1"
-    echo "  2. WAN口静态IP: 192.168.1.11/24"
-    echo "  3. WAN口网关: 192.168.1.1"
+    echo "  2. WAN口DHCP自动获取IP"
+    echo "  3. WAN口DNS: 127.0.0.1"
     echo "  4. 主机名自动设置为Neptune"
     echo "  5. DHCP服务自动开启（100-250）"
     echo "  6. IPv6全面禁用"
