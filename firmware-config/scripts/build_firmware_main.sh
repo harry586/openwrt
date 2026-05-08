@@ -5087,6 +5087,15 @@ EOF
         return 0
     fi
     
+    # ============================================
+    # 备份完整的 .config，编译工具链会临时覆盖它
+    # ============================================
+    local saved_config="$BUILD_DIR/.config.full"
+    if [ -f "$BUILD_DIR/.config" ]; then
+        cp "$BUILD_DIR/.config" "$saved_config"
+        log "  📋 已备份当前 .config 为 .config.full（后续将恢复）"
+    fi
+    
     # 步骤1: 更新feeds
     log ""
     log "🔄 步骤1: 更新feeds..."
@@ -5161,6 +5170,16 @@ EOF
     
     log ""
     log "✅ 工具链编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
+    
+    # ============================================
+    # 恢复完整的 .config，保证后续编译固件使用正确配置
+    # ============================================
+    if [ -f "$saved_config" ]; then
+        cp "$saved_config" "$BUILD_DIR/.config"
+        log "  ✅ 已恢复完整的 .config（后续将编译完整固件）"
+    else
+        log "  ⚠️ 未找到 .config 备份，后续步骤可能缺少正确配置"
+    fi
     
     # 验证工具链
     log ""
