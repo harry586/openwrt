@@ -2200,7 +2200,6 @@ EOF
             cat >> .config << 'EOF'
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
 CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
 EOF
             log "  ✅ ATH79平台配置"
             ;;
