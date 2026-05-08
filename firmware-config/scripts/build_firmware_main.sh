@@ -2694,13 +2694,27 @@ EOF
     fi
     
     # ============================================
-    # WNDR3800 专用处理：用 samba36 替换 samba4（必须在 defconfig 之前执行）
+    # WNDR3800 专用处理（samba36 替换 + initramfs 移除）
     # ============================================
     if echo "$correct_device" | grep -q "wndr3800"; then
-        log "🔧 WNDR3800 设备：强制替换 samba4 → samba36（节省空间）"
+        log "🔧 WNDR3800 设备专用修复"
+        
+        # 1. 替换 samba4 → samba36
+        log "  1/2 强制替换 samba4 → samba36（节省空间）"
         sed -i '/CONFIG_PACKAGE.*samba4/d' .config
         sed -i '/CONFIG_PACKAGE.*SAMBA4/d' .config
         echo "CONFIG_PACKAGE_luci-app-samba36=y" >> .config
+        
+        # 2. 移除 initramfs 生成
+        log "  2/2 移除 initramfs 生成（避免固件过大）"
+        local mk_file="target/linux/ath79/image/generic.mk"
+        if [ -f "$mk_file" ]; then
+            cp "$mk_file" "$mk_file.bak"
+            sed -i '/define Device\/netgear_wndr3800/,/endef/ s/ initramfs-kernel\.bin//g' "$mk_file"
+            log "  ✅ 已从设备定义文件中移除 initramfs-kernel.bin"
+        else
+            log "  ⚠️ 未找到设备定义文件，跳过 initramfs 修复"
+        fi
     fi
     
     log "✅ 禁用完成"
