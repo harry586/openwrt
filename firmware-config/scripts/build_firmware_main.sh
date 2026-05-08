@@ -1625,7 +1625,6 @@ generate_config() {
             handle_error "Hanwckf 预置配置缺失"
         fi
         
-        # 不再在此添加额外包、TCP BBR、禁用 IPv6 等，全部交给后续通用流程
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
@@ -2072,23 +2071,13 @@ EOF
         log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
-    # WNDR3800 专用处理：使用 samba36 替代 samba4 (固件体积限制)
-    if echo "$correct_device" | grep -q "wndr3800"; then
-        log "🔧 WNDR3800 设备：将 samba4 替换为 samba36（节省空间）"
-        echo "CONFIG_PACKAGE_luci-app-samba36=y" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
-        echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
-        echo "# CONFIG_PACKAGE_samba4-libs is not set" >> .config
-    fi
-    
     # 强制启用 ath10k-ct（只对真正可能使用 ath10k 的平台）
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         local force_ath10k=0
         case "$TARGET" in
             ipq40xx|ipq806x|qcom) force_ath10k=1 ;;
             ath79)
-                # ath79 平台并非所有设备都需要 ath10k-ct，需进一步判断
-                # 默认均不启用，仅当设备名明确需要时才启用
+                # ath79 平台默认均不启用 ath10k-ct
                 case "$correct_device" in
                     netgear_wndr3800|netgear_wndr4300|netgear_wndr3700*)
                         force_ath10k=0
@@ -2703,6 +2692,16 @@ EOF
     if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
         log "  ✅ 已启用 vsftpd"
+    fi
+    
+    # ============================================
+    # WNDR3800 专用处理：用 samba36 替换 samba4（必须在 defconfig 之前执行）
+    # ============================================
+    if echo "$correct_device" | grep -q "wndr3800"; then
+        log "🔧 WNDR3800 设备：强制替换 samba4 → samba36（节省空间）"
+        sed -i '/CONFIG_PACKAGE.*samba4/d' .config
+        sed -i '/CONFIG_PACKAGE.*SAMBA4/d' .config
+        echo "CONFIG_PACKAGE_luci-app-samba36=y" >> .config
     fi
     
     log "✅ 禁用完成"
