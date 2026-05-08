@@ -2072,6 +2072,15 @@ EOF
         log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
+    # WNDR3800 专用处理：使用 samba36 替代 samba4 (固件体积限制)
+    if echo "$correct_device" | grep -q "wndr3800"; then
+        log "🔧 WNDR3800 设备：将 samba4 替换为 samba36（节省空间）"
+        echo "CONFIG_PACKAGE_luci-app-samba36=y" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
+        echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
+        echo "# CONFIG_PACKAGE_samba4-libs is not set" >> .config
+    fi
+    
     # 强制启用 ath10k-ct（只对真正可能使用 ath10k 的平台）
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         local force_ath10k=0
@@ -6487,7 +6496,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
 
-    log "=== 步骤25: 编译固件（通用补丁自动删除修复版） ==="
+    log "=== 步骤25: 编译固件（补丁自动修复，含BUILD_MARK） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
 
     set +e
@@ -6496,6 +6505,9 @@ workflow_step25_build_firmware() {
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
+
+    BUILD_MARKS_FILE="build_marks.log"
+    > "$BUILD_MARKS_FILE"
 
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
@@ -6552,6 +6564,8 @@ workflow_step25_build_firmware() {
 
     while [ $attempt -le $max_attempts ]; do
         log "🔧 开始编译（尝试 $attempt/$max_attempts）..."
+
+        echo -e "\e[1;33m>>> BUILD_MARK: 开始编译固件 (尝试 $attempt) <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
         START_TIME=$(date +%s)
 
         make -j$MAKE_JOBS V=s VERSION_DIST="$vendor_dist" 2>&1 | tee build.log
@@ -6560,6 +6574,7 @@ workflow_step25_build_firmware() {
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
         log "⏱️ 编译耗时: $((DURATION / 60))分$((DURATION % 60))秒"
+        echo -e "\e[1;33m>>> BUILD_MARK: 编译固件完成 (退出码: $make_exit_code) <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
 
         if [ $make_exit_code -eq 0 ]; then
             log "✅ make 成功退出"
@@ -6568,7 +6583,6 @@ workflow_step25_build_firmware() {
 
         log "⚠️ make 返回非零退出码 ($make_exit_code)，尝试修复..."
 
-        # 检查是否为补丁冲突
         if grep -qE "Patch failed|Hunk FAILED" build.log; then
             auto_disable_failed_patches build.log
             local deleted_count=$?
