@@ -1625,6 +1625,7 @@ generate_config() {
             handle_error "Hanwckf 预置配置缺失"
         fi
         
+        # 不再在此添加额外包、TCP BBR、禁用 IPv6 等，全部交给后续通用流程
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
@@ -2076,17 +2077,7 @@ EOF
         local force_ath10k=0
         case "$TARGET" in
             ipq40xx|ipq806x|qcom) force_ath10k=1 ;;
-            ath79)
-                # ath79 平台默认均不启用 ath10k-ct
-                case "$correct_device" in
-                    netgear_wndr3800|netgear_wndr4300|netgear_wndr3700*)
-                        force_ath10k=0
-                        ;;
-                    *)
-                        force_ath10k=0
-                        ;;
-                esac
-                ;;
+            ath79) force_ath10k=1 ;;
         esac
         if [ $force_ath10k -eq 1 ]; then
             sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
@@ -2098,7 +2089,7 @@ EOF
             echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
             log "✅ ath10k-ct驱动已强制启用"
         else
-            log "ℹ️ 当前设备 $correct_device 不需要 ath10k-ct，跳过强制启用"
+            log "ℹ️ 当前平台 $TARGET 不需要 ath10k-ct，跳过强制启用"
         fi
     fi
     
@@ -2200,6 +2191,7 @@ EOF
             cat >> .config << 'EOF'
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
 CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
 EOF
             log "  ✅ ATH79平台配置"
             ;;
@@ -2691,30 +2683,6 @@ EOF
     if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
         log "  ✅ 已启用 vsftpd"
-    fi
-    
-    # ============================================
-    # WNDR3800 专用处理（samba36 替换 + initramfs 移除）
-    # ============================================
-    if echo "$correct_device" | grep -q "wndr3800"; then
-        log "🔧 WNDR3800 设备专用修复"
-        
-        # 1. 替换 samba4 → samba36
-        log "  1/2 强制替换 samba4 → samba36（节省空间）"
-        sed -i '/CONFIG_PACKAGE.*samba4/d' .config
-        sed -i '/CONFIG_PACKAGE.*SAMBA4/d' .config
-        echo "CONFIG_PACKAGE_luci-app-samba36=y" >> .config
-        
-        # 2. 移除 initramfs 生成
-        log "  2/2 移除 initramfs 生成（避免固件过大）"
-        local mk_file="target/linux/ath79/image/generic.mk"
-        if [ -f "$mk_file" ]; then
-            cp "$mk_file" "$mk_file.bak"
-            sed -i '/define Device\/netgear_wndr3800/,/endef/ s/ initramfs-kernel\.bin//g' "$mk_file"
-            log "  ✅ 已从设备定义文件中移除 initramfs-kernel.bin"
-        else
-            log "  ⚠️ 未找到设备定义文件，跳过 initramfs 修复"
-        fi
     fi
     
     log "✅ 禁用完成"
@@ -5087,15 +5055,6 @@ EOF
         return 0
     fi
     
-    # ============================================
-    # 备份完整的 .config，编译工具链会临时覆盖它
-    # ============================================
-    local saved_config="$BUILD_DIR/.config.full"
-    if [ -f "$BUILD_DIR/.config" ]; then
-        cp "$BUILD_DIR/.config" "$saved_config"
-        log "  📋 已备份当前 .config 为 .config.full（后续将恢复）"
-    fi
-    
     # 步骤1: 更新feeds
     log ""
     log "🔄 步骤1: 更新feeds..."
@@ -5170,16 +5129,6 @@ EOF
     
     log ""
     log "✅ 工具链编译完成，耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-    
-    # ============================================
-    # 恢复完整的 .config，保证后续编译固件使用正确配置
-    # ============================================
-    if [ -f "$saved_config" ]; then
-        cp "$saved_config" "$BUILD_DIR/.config"
-        log "  ✅ 已恢复完整的 .config（后续将编译完整固件）"
-    else
-        log "  ⚠️ 未找到 .config 备份，后续步骤可能缺少正确配置"
-    fi
     
     # 验证工具链
     log ""
@@ -6527,7 +6476,7 @@ workflow_step23_pre_build_check() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
 
-    log "=== 步骤25: 编译固件（补丁自动修复，含BUILD_MARK） ==="
+    log "=== 步骤25: 编译固件（通用补丁自动删除修复版） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
 
     set +e
@@ -6536,9 +6485,6 @@ workflow_step25_build_firmware() {
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
-
-    BUILD_MARKS_FILE="build_marks.log"
-    > "$BUILD_MARKS_FILE"
 
     CPU_CORES=$(nproc)
     TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
@@ -6595,8 +6541,6 @@ workflow_step25_build_firmware() {
 
     while [ $attempt -le $max_attempts ]; do
         log "🔧 开始编译（尝试 $attempt/$max_attempts）..."
-
-        echo -e "\e[1;33m>>> BUILD_MARK: 开始编译固件 (尝试 $attempt) <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
         START_TIME=$(date +%s)
 
         make -j$MAKE_JOBS V=s VERSION_DIST="$vendor_dist" 2>&1 | tee build.log
@@ -6605,7 +6549,6 @@ workflow_step25_build_firmware() {
         END_TIME=$(date +%s)
         DURATION=$((END_TIME - START_TIME))
         log "⏱️ 编译耗时: $((DURATION / 60))分$((DURATION % 60))秒"
-        echo -e "\e[1;33m>>> BUILD_MARK: 编译固件完成 (退出码: $make_exit_code) <<<\e[0m" | tee -a "$BUILD_MARKS_FILE"
 
         if [ $make_exit_code -eq 0 ]; then
             log "✅ make 成功退出"
@@ -6614,6 +6557,7 @@ workflow_step25_build_firmware() {
 
         log "⚠️ make 返回非零退出码 ($make_exit_code)，尝试修复..."
 
+        # 检查是否为补丁冲突
         if grep -qE "Patch failed|Hunk FAILED" build.log; then
             auto_disable_failed_patches build.log
             local deleted_count=$?
