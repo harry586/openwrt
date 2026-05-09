@@ -54,14 +54,13 @@ on:
 
       # 单个内置补丁（当选择“单选内置补丁”时生效）
       builtin_patch_single:
-        description: "📌 选择单个内置补丁（ac42u-ath10k, wndr3800-led）"
+        description: "📌 选择单个内置补丁（ac42u-ath10k）"
         required: false
         type: choice
         default: "none"
         options:
           - "none"              # 不选择
           - "ac42u-ath10k"      # AC42U - ATH10K固件更新
-          - "wndr3800-led"      # WNDR3800 - LED修复
 
       # 多个内置补丁（当选择“手动输入多个内置补丁”时生效）
       builtin_patch_list:
