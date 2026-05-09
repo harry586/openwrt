@@ -1199,9 +1199,6 @@ show_patch_status() {
             "ac42u-ath10k")
                 check_patch_status_ac42u_ath10k
                 ;;
-            "wndr3800-led")
-                check_patch_status_wndr3800_led
-                ;;
             "usb-power-fix")
                 check_patch_status_usb_power_fix
                 ;;
@@ -1249,20 +1246,6 @@ check_patch_status_ac42u_ath10k() {
         else
             echo "   ⚠️ 未检测到明显的 ath10k 修改，补丁可能未生效"
         fi
-    fi
-}
-
-check_patch_status_wndr3800_led() {
-    local dts=$(find "$BUILD_DIR/target/linux/ath79" -type f -name "*wndr3800*" 2>/dev/null | head -1)
-    if [ -n "$dts" ]; then
-        if grep -q "default-on\|default-on" "$dts" 2>/dev/null; then
-            echo "   ✅ 设备树中 LED 配置已修改"
-            echo "   💡 生效判断：刷机后设备指示灯正常亮起/闪烁"
-        else
-            echo "   ⚠️ 可能未成功修改，请检查 $dts 内容"
-        fi
-    else
-        echo "   ⚠️ WNDR3800 设备树文件未找到，补丁可能未应用"
     fi
 }
 
@@ -6895,18 +6878,6 @@ quick_error_check() {
             return 1
         fi
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
-        echo ""
-
-        echo "📌 编译流程执行标记:"
-        echo "----------------------------------------"
-        local any_mark=0
-        for f in "${!log_sources[@]}"; do
-            grep ">>> BUILD_MARK:" "$f" 2>/dev/null | sort -u | while IFS= read -r line; do
-                printf "   %s\n" "$line"
-            done
-            grep -q ">>> BUILD_MARK:" "$f" 2>/dev/null && any_mark=1
-        done
-        [ $any_mark -eq 0 ] && echo "   ⚠️ 未找到任何 BUILD_MARK 标记"
         echo ""
 
         echo "📌 源码 Makefile 关键目标检查:"
