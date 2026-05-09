@@ -216,6 +216,17 @@ config host
 	option name 'rui-xisanqu-yeelink-light'
 	option dns '1'
 	option mac '04:CF:8C:8E:A5:46'
+
+config host
+	option name 'jinghong'
+	option dns '1'
+	option mac '50:98:39:38:89:0a'
+
+config host
+	option name 'jidinghe-xisanq'
+	option dns '1'
+	option mac '48:d8:90:9c:40:63'
+	
 EOF
 }
 
