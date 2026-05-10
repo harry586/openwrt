@@ -404,14 +404,11 @@ jobs:
 #【firmware-build.yml-08.5-end】
 
 #【firmware-build.yml-09】
-      - name: "09. 网络加速预置（自动选择方案）"
+      - name: "09. 网络加速预置（下载源修复 + 自动选择方案）"
         run: |
           echo "=== 步骤09: 网络加速预置 ==="
-          echo "系统将根据源码类型自动选择最佳网络加速方案："
-          echo "  - ImmortalWrt → TurboACC"
-          echo "  - LEDE → SFE (Shortcut-FE)"
-          echo "  - OpenWrt → 软件流量 Offloading"
-          echo "  - Hanwckf → 内置 MTK 硬件加速（跳过）"
+          echo "自动根据源码选择加速方案（ImmortalWrt→TurboACC，LEDE→内核流量分载，OpenWrt→内核Flow Offloading，Hanwckf→跳过）"
+          echo "本步骤同时修复 ImmortalWrt 相关下载源以保障编译顺利"
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step11_add_turboacc
@@ -427,11 +424,11 @@ jobs:
       #【firmware-build.yml-10-end】
 
 #【firmware-build.yml-11】
-      - name: "11. 安装网络加速包（仅 ImmortalWrt）"
+      - name: "11. 安装网络加速包（仅 ImmortalWrt 需要）"
         if: github.event.inputs.config_mode == 'normal'
         run: |
           echo "=== 步骤11: 安装网络加速包 ==="
-          echo "仅 ImmortalWrt 需要额外安装 TurboACC 相关包，其他源码在配置生成时自动处理。"
+          echo "仅 ImmortalWrt 正常模式需要额外安装 TurboACC 相关包，其他源码在配置生成时自动处理或不需额外包"
           
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step13_install_turboacc
