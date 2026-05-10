@@ -6835,7 +6835,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 最终增强版（修复目标检测误报）
+# 全流程错误检查函数 - 终极版（定位 package/install 错误）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6890,7 +6890,6 @@ quick_error_check() {
         echo "----------------------------------------"
         local makefile_issues=0
         for target in "tools/compile" "toolchain/compile" "target/compile" "package/compile" "target/install"; do
-            # 修复：使用更精确的模式匹配，兼容 tab/空格 和变量引用
             if grep -qE "^[[:space:]]*${target}[[:space:]]*:" "$build_dir/Makefile" "$build_dir/include"/*.mk 2>/dev/null; then
                 echo "   ✅ $target"
             else
@@ -7042,6 +7041,31 @@ quick_error_check() {
             grep -Poh 'make(?:\[[0-9]+\])?: \*\*\* \[\K[^\]]+(?=\])' "$f" 2>/dev/null >> "$failed_pkgs_file"
             grep -ohP 'ERROR: \K.*failed to build' "$f" 2>/dev/null >> "$failed_pkgs_file"
         done
+
+        local main_log=""
+        for f in "${!log_sources[@]}"; do
+            if [ "$(basename "$f")" = "$log_file" ]; then
+                main_log="$f"
+                break
+            fi
+        done
+        [ -z "$main_log" ] && main_log="$log_file"
+
+        # ---- 对 package/install 错误进行智能分析 ----
+        local install_error_block=""
+        if grep -q "package/install" "$main_log" 2>/dev/null; then
+            # 提取最后 50 行中 Configuring 的行和 Error 行
+            local context=$(tail -50 "$main_log" 2>/dev/null)
+            local last_config=$(echo "$context" | grep "Configuring" | tail -1)
+            if [ -n "$last_config" ]; then
+                local failed_pkg=$(echo "$last_config" | sed -n 's/.*Configuring \([^ ]*\).*/\1/p')
+                echo "   🧩 疑似 package/install 阶段失败，最后一个配置的包: $failed_pkg"
+                echo "   ⚠️ 该包的安装脚本可能返回了错误，请检查 package/feeds 下对应包的 install 脚本。"
+                echo "   💡 尝试单独编译/卸载该包：make package/$failed_pkg/compile V=s"
+                install_error_block="$failed_pkg"
+            fi
+        fi
+
         local unique_failed=$(sort -u "$failed_pkgs_file" | grep -v -E '\.(installed|built|autoremove|stamp|info)$' | grep -v '/Makefile:')
         local shown=0
         while IFS= read -r line; do
@@ -7054,6 +7078,8 @@ quick_error_check() {
                 pkg=$(echo "$line" | sed 's/ failed to build$//' | awk -F/ '{print $NF}')
             fi
             [ -z "$pkg" ] && pkg="$(basename "$line")"
+            # 过滤空包名和顶层 GNUmakefile 假阳性
+            [ "$pkg" = "GNUmakefile" ] && continue
             echo "   📦 $pkg  ($line)"
             local detail=$(for f in "${!log_sources[@]}"; do
                 grep -A2 -i "error:" "$f" 2>/dev/null | grep -i "$pkg" | head -2
@@ -7066,12 +7092,16 @@ quick_error_check() {
         done < <(echo "$unique_failed" | sort -u)
 
         if [ $shown -eq 0 ]; then
-            local top_err=$(grep 'make: \*\*\* .* Error' "$build_dir"/build_step3.log "$build_dir"/build.log 2>/dev/null | head -1)
-            if [ -n "$top_err" ]; then
-                echo "   ⚠️ 顶层错误: $top_err"
-                echo "   💡 请查看 build_step3.log 末尾附近的详细错误。"
+            if [ -n "$install_error_block" ]; then
+                echo "   (错误可能源于包安装阶段，已在上方指出)"
             else
-                echo "   (未检测到具体失败包)"
+                local top_err=$(grep 'make: \*\*\* .* Error' "$build_dir"/build_step3.log "$build_dir"/build.log 2>/dev/null | head -1)
+                if [ -n "$top_err" ]; then
+                    echo "   ⚠️ 顶层错误: $top_err"
+                    echo "   💡 请查看 build_step3.log 末尾附近的详细错误。"
+                else
+                    echo "   (未检测到具体失败包)"
+                fi
             fi
         fi
         rm -f "$failed_pkgs_file"
@@ -7145,6 +7175,7 @@ quick_error_check() {
             echo ""
             echo "💡 排查建议:"
             [ -n "$patch_fails" ] && echo "   🔧 内核补丁冲突（见上方补丁冲突详情），请禁用冲突的补丁后重试。"
+            [ -n "$install_error_block" ] && echo "   🔧 疑似包 '$install_error_block' 安装失败，请单独编译检查。"
             [ -n "$unique_failed" ] && echo "   🔧 失败的包: $(echo $unique_failed | tr '\n' ' ')"
             [ -n "$missing_files" ] && echo "   🔧 缺失文件可能导致部分包编译失败。"
             [ -n "$dl_errors" ] && echo "   🔧 下载失败，请检查网络或更换源。"
