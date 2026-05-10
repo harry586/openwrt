@@ -1580,6 +1580,7 @@ generate_config() {
             handle_error "Hanwckf 预置配置缺失"
         fi
         
+        # 不再在此添加额外包、TCP BBR、禁用 IPv6 等，全部交给后续通用流程
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
@@ -2025,7 +2026,8 @@ EOF
     fi
     
     # ============================================
-    # 网络加速自动选择（核心修改）
+    # 网络加速自动选择（根据源码类型，完全使用内核配置）
+    # 不会添加任何不存在的 .ipk 包，彻底避免 package/install 失败
     # ============================================
     if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$CONFIG_MODE" = "normal" ]; then
         case "$SOURCE_REPO_TYPE" in
@@ -2036,15 +2038,22 @@ EOF
                 echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
                 ;;
             "lede")
-                log "✅ LEDE 使用 SFE 加速"
-                echo "CONFIG_PACKAGE_luci-app-sfe=y" >> .config
-                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+                # LEDE 中 Flow Offloading 是内核功能，不使用独立软件包
+                log "✅ LEDE 使用内核软件流量分载 (Flow Offloading)"
+                cat >> .config << 'EOF'
+# 内核流量分载（不需要额外软件包，不会引发依赖错误）
+CONFIG_NF_FLOW_TABLE=y
+CONFIG_NF_FLOW_TABLE_IPV4=y
+# 已禁用 IPv6，故不开启 IPv6 流量分载
+# CONFIG_NF_FLOW_TABLE_IPV6 is not set
+EOF
                 ;;
             "openwrt")
-                log "✅ OpenWrt 官方使用软件流量 Offloading"
-                echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
-                echo "CONFIG_PACKAGE_luci-app-flowoffload=y" >> .config
+                log "✅ OpenWrt 官方使用内核软件流量分载"
+                cat >> .config << 'EOF'
+CONFIG_NF_FLOW_TABLE=y
+CONFIG_NF_FLOW_TABLE_IPV4=y
+EOF
                 ;;
             *)
                 log "⚠️ 未知源码类型，跳过网络加速"
@@ -2858,11 +2867,11 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "  🔧 LEDE 源码特殊处理..."
         if [ -f "feeds.conf.default" ]; then
-            sed -i 's/^# CONFIG_VERSION_DIST=.*/CONFIG_VERSION_DIST="LEDE"/g' feeds.conf.default 2>/dev/null || true
+            sed -i 's/^# CONFIG_VERSION_DIST=.*/CONFIG_VERSION_DIST=LEDE/g' feeds.conf.default 2>/dev/null || true
         fi
         if [ -f "package/base-files/files/etc/openwrt_release" ]; then
-            sed -i 's/DISTRIB_ID=.*/DISTRIB_ID="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
-            sed -i 's/DISTRIB_RELEASE=.*/DISTRIB_RELEASE="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
+            sed -i 's/DISTRIB_ID=.*/DISTRIB_ID=LEDE/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
+            sed -i 's/DISTRIB_RELEASE=.*/DISTRIB_RELEASE=LEDE/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
         fi
         log "    ✅ LEDE 特殊配置已应用"
     fi
