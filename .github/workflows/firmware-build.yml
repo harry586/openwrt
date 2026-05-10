@@ -416,17 +416,6 @@ jobs:
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step11_add_turboacc
       #【firmware-build.yml-09-end】
-      
-#【firmware-build.yml-11】
-      - name: "11. 安装网络加速包（仅 ImmortalWrt）"
-        if: github.event.inputs.config_mode == 'normal'
-        run: |
-          echo "=== 步骤11: 安装网络加速包 ==="
-          echo "仅 ImmortalWrt 需要额外安装 TurboACC 相关包，其他源码在配置生成时自动处理。"
-          
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-            step13_install_turboacc
-      #【firmware-build.yml-11-end】
 
       #【firmware-build.yml-10】
       - name: "10. 配置Feeds"
