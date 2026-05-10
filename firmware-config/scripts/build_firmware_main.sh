@@ -61,7 +61,7 @@ load_build_config() {
     
     export BUILD_DIR LOG_DIR BACKUP_DIR CONFIG_DIR
     export IMMORTALWRT_URL OPENWRT_URL LEDE_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
-    export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
+    export ENABLE_TURBOACC ENABLE_TCP_BBR ENABLE_FULLCONE_NAT FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
     export DISABLE_IPV6
     
@@ -849,19 +849,19 @@ add_turboacc_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 添加 TurboACC 支持 ==="
+    log "=== 网络加速预置（根据源码自动选择） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    # 特殊处理：Hanwckf 模式（RAX3000M + immortalwrt）不添加 TurboACC
+    # 特殊处理：Hanwckf 模式（RAX3000M + immortalwrt）已集成硬件加速，无需额外操作
     if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
-        log "ℹ️ 检测到 Hanwckf 源码 (RAX3000M)，跳过 TurboACC 添加（已集成 MTK 硬件加速）"
+        log "ℹ️ 检测到 Hanwckf 源码 (RAX3000M)，已集成 MTK 硬件加速，跳过"
         return 0
     fi
     
     # ============================================
-    # 彻底修复所有下载源
+    # 彻底修复所有下载源（网络加速不依赖此项，但保留通用修复）
     # ============================================
-    log "🔧 彻底修复所有下载源..."
+    log "🔧 修复编译下载源..."
     
     # 创建补丁目录
     mkdir -p package/firmware/trusted-firmware-a/patches
@@ -888,7 +888,6 @@ EOF
     find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
         if [ -f "$dir/Makefile" ]; then
             cp "$dir/Makefile" "$dir/Makefile.bak"
-            # 替换为可用的下载源
             sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
             sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
             log "  ✅ 修复 libxml2 下载源"
@@ -906,23 +905,8 @@ EOF
         fi
     done
     
-    # 使用配置文件中的开关
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-        log "🔧 为正常模式添加 TurboACC 支持"
-        
-        if [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
-            if [ ! -f "feeds.conf.default" ]; then
-                touch feeds.conf.default
-            fi
-            
-            if ! grep -q "turboacc" feeds.conf.default; then
-                echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-                log "✅ TurboACC feed 添加完成"
-            else
-                log "ℹ️ TurboACC feed 已存在"
-            fi
-        fi
-    fi
+    # 本函数不再添加任何外部 feed，加速方案由 generate_config 根据源码类型自动选择
+    log "✅ 网络加速预置完成，最终方案将在配置生成时根据源码类型确定"
 }
 #【build_firmware_main.sh-08-end】
 
@@ -1268,7 +1252,7 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    # ---------- 新增：Hanwckf 模式保留原有 feeds ----------
+    # ---------- Hanwckf 模式保留原有 feeds ----------
     local is_hanwckf=0
     if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
         is_hanwckf=1
@@ -1280,7 +1264,6 @@ configure_feeds() {
             cp "feeds.conf.default" "feeds.conf.default.bak"
             log "  ✅ 已备份原有 feeds 配置"
         fi
-        # 直接进行更新和安装，不重写 feeds 文件
         log "=== 更新Feeds ==="
         ./scripts/feeds update -a || log "⚠️ feeds更新有警告，继续"
         ./scripts/feeds install -a || log "⚠️ feeds安装有警告，继续"
@@ -1288,28 +1271,25 @@ configure_feeds() {
         return 0
     fi
     
-    # ---------- 以下为原有标准流程 ----------
-    log "🔧 预创建所有可能缺失的文件..."
+    # ---------- 标准流程 ----------
+    log "🔧 预创建环境文件..."
     mkdir -p staging_dir/target-*/root-*/etc 2>/dev/null || true
     for target_dir in staging_dir/target-*; do
-        if [ -d "$target_dir" ]; then
-            for root_dir in "$target_dir"/root-*; do
-                if [ -d "$root_dir" ]; then
-                    mkdir -p "$root_dir/etc"
-                    touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
-                fi
-            done
-        fi
+        [ -d "$target_dir" ] || continue
+        for root_dir in "$target_dir"/root-*; do
+            [ -d "$root_dir" ] || continue
+            mkdir -p "$root_dir/etc"
+            touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
+        done
     done
     
     mkdir -p build_dir/target-* 2>/dev/null || true
     for build_dir in build_dir/target-*; do
-        if [ -d "$build_dir" ]; then
-            find "$build_dir" -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
-                mkdir -p "$dir"
-                touch "$dir/Module.symvers" 2>/dev/null || true
-            done
-        fi
+        [ -d "$build_dir" ] || continue
+        find "$build_dir" -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
+            mkdir -p "$dir"
+            touch "$dir/Module.symvers" 2>/dev/null || true
+        done
     done
     
     if [ -f "feeds.conf.default" ]; then
@@ -1378,18 +1358,7 @@ EOF
             ;;
     esac
     
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-        case "$SOURCE_REPO_TYPE" in
-            "immortalwrt"|"lede")
-                echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-                log "✅ 添加TurboACC feed"
-                ;;
-            "openwrt")
-                log "⚠️ OpenWrt官方源码可能不支持TurboACC feed，已跳过"
-                ;;
-        esac
-    fi
-    
+    # 不再添加任何加速相关的额外 feed，全由源码自身和配置提供
     log "📋 feeds.conf.default 内容:"
     cat feeds.conf.default
     
@@ -1433,21 +1402,24 @@ install_turboacc_packages() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 安装 TurboACC 包 ==="
+    log "=== 安装网络加速包 ==="
     
-    # Hanwckf 源码（RAX3000M + immortalwrt）已集成硬件加速，无需安装 TurboACC 包
+    # Hanwckf 模式跳过
     if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
-        log "ℹ️ 检测到 Hanwckf 源码 (RAX3000M)，跳过 TurboACC 包安装"
+        log "ℹ️ Hanwckf 已集成硬件加速，跳过额外包安装"
         return 0
     fi
     
-    ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
-    
-    ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
-    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败"
-    ./scripts/feeds install -p turboacc kmod-fast-classifier || handle_error "安装kmod-fast-classifier失败"
-    
-    log "✅ TurboACC 包安装完成"
+    # 仅 ImmortalWrt 使用 TurboACC 时需要安装相应包（其他源码在 feeds install 阶段已处理）
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ] && [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        log "🔧 ImmortalWrt 正常模式，安装 TurboACC 相关包..."
+        ./scripts/feeds install -p packages luci-app-turboacc 2>/dev/null || log "⚠️ luci-app-turboacc 安装失败（可能已存在）"
+        ./scripts/feeds install -p packages kmod-shortcut-fe 2>/dev/null || true
+        ./scripts/feeds install -p packages kmod-fast-classifier 2>/dev/null || true
+        log "✅ TurboACC 包安装完成"
+    else
+        log "ℹ️ 当前源码 $SOURCE_REPO_TYPE 不需要单独安装加速包（配置生成时自动选定）"
+    fi
 }
 #【build_firmware_main.sh-10-end】
 
@@ -1608,7 +1580,6 @@ generate_config() {
             handle_error "Hanwckf 预置配置缺失"
         fi
         
-        # 不再在此添加额外包、TCP BBR、禁用 IPv6 等，全部交给后续通用流程
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
@@ -2040,19 +2011,45 @@ EOF
         done
     fi
     
+    # 启用 TCP BBR
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
         log "✅ TCP BBR已启用"
     fi
     
-    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
-        log "✅ TurboACC已启用"
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-    elif [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "ℹ️ OpenWrt官方源码跳过TurboACC"
+    # 启用全锥形NAT
+    if [ "${ENABLE_FULLCONE_NAT:-true}" = "true" ]; then
+        echo "CONFIG_PACKAGE_iptables-mod-fullconenat=y" >> .config
+        log "✅ 全锥形NAT已启用"
+    fi
+    
+    # ============================================
+    # 网络加速自动选择（核心修改）
+    # ============================================
+    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$CONFIG_MODE" = "normal" ]; then
+        case "$SOURCE_REPO_TYPE" in
+            "immortalwrt")
+                log "✅ ImmortalWrt 使用 TurboACC 加速"
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+                ;;
+            "lede")
+                log "✅ LEDE 使用 SFE 加速"
+                echo "CONFIG_PACKAGE_luci-app-sfe=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+                ;;
+            "openwrt")
+                log "✅ OpenWrt 官方使用软件流量 Offloading"
+                echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
+                echo "CONFIG_PACKAGE_luci-app-flowoffload=y" >> .config
+                ;;
+            *)
+                log "⚠️ 未知源码类型，跳过网络加速"
+                ;;
+        esac
     fi
     
     # 强制启用 ath10k-ct（只对真正可能使用 ath10k 的平台）
@@ -6829,7 +6826,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 最终增强版（补丁冲突诊断）
+# 全流程错误检查函数 - 最终增强版（修复目标检测误报）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6884,7 +6881,8 @@ quick_error_check() {
         echo "----------------------------------------"
         local makefile_issues=0
         for target in "tools/compile" "toolchain/compile" "target/compile" "package/compile" "target/install"; do
-            if grep -qE "^[^#]*${target}" "$build_dir/Makefile" "$build_dir/include"/*.mk 2>/dev/null; then
+            # 修复：使用更精确的模式匹配，兼容 tab/空格 和变量引用
+            if grep -qE "^[[:space:]]*${target}[[:space:]]*:" "$build_dir/Makefile" "$build_dir/include"/*.mk 2>/dev/null; then
                 echo "   ✅ $target"
             else
                 echo "   ⚠️ $target 可能缺失"
