@@ -1545,9 +1545,7 @@ generate_config() {
     local correct_device="$DEVICE"
     log "🔧 使用传入的设备名: $correct_device"
     
-    # ============================================
     # Hanwckf 特殊处理：immortalwrt + rax3000m → 使用预置配置
-    # ============================================
     local IS_HANWCKF_RAX3000M=0
     if echo "$correct_device" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
         IS_HANWCKF_RAX3000M=1
@@ -1560,7 +1558,6 @@ generate_config() {
             cp "defconfig/mt7981-ax3000.config" ".config"
             log "✅ 已应用 Hanwckf 预置配置: defconfig/mt7981-ax3000.config"
         
-            # 锁定设备为 cmcc_rax3000m（NAND）
             sed -i '/^CONFIG_TARGET_mediatek_mt7981_DEVICE_/d' .config
             echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
             echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_emmc is not set" >> .config
@@ -1568,7 +1565,6 @@ generate_config() {
             make defconfig > /tmp/build-logs/defconfig_hanwckf.log 2>&1
             log "✅ 已锁定设备: cmcc_rax3000m (NAND)"
             
-            # 设置正确的平台变量，后续步骤引用
             TARGET="mediatek"
             SUBTARGET="mt7981"
             actual_subtarget="mt7981"
@@ -1583,13 +1579,7 @@ generate_config() {
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
-    # ============================================
-    # 以下为通用流程（immortalwrt/openwrt/lede 均适用）
-    # ============================================
-    
-    # ============================================
     # LEDE 源码启动修复（仅在 lede 且非 Hanwckf 时执行）
-    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
         log "🔧 ===== LEDE 源码启动修复 ====="
         
@@ -1853,15 +1843,11 @@ EOF
         log "======================================"
     fi
     
-    # ============================================
     # 根据源码类型确定设备配置变量格式
-    # ============================================
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
-    # 如果不是 Hanwckf 模式，则需要重新生成 device_config
     if [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
-        # 修复：只有当 SUBTARGET 无效（不存在或等于目标名）时才尝试自动查找
         local subtarget_valid=0
         if [ -n "$actual_subtarget" ] && [ "$actual_subtarget" != "$TARGET" ]; then
             if [ -f "target/linux/$TARGET/$actual_subtarget/target.mk" ] || [ -d "target/linux/$TARGET/$actual_subtarget/base-files" ]; then
@@ -1931,7 +1917,6 @@ ${device_config}
 EOF
         fi
     else
-        # Hanwckf 模式：设备配置已在之前设置，这里只更新 SUBTARGET 环境变量
         SUBTARGET="$actual_subtarget"
         log "  ✅ Hanwckf 模式，设备配置已锁定: $device_config"
     fi
@@ -2024,9 +2009,7 @@ EOF
         log "✅ 全锥形NAT已启用"
     fi
     
-    # ============================================
-    # 网络加速自动选择（根据源码类型）
-    # ============================================
+    # 网络加速自动选择（根据源码类型，完全使用内核配置）
     if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$CONFIG_MODE" = "normal" ]; then
         case "$SOURCE_REPO_TYPE" in
             "immortalwrt")
@@ -2076,9 +2059,7 @@ EOF
         fi
     fi
     
-    # ============================================
     # 强化 IPv6 清理（含 kmod-nf-ipt6 及 dnsmasq-nodhcpv6）
-    # ============================================
     _force_ipv6_cleanup() {
         local blacklist=(
             ip6tables ip6tables-extra ip6tables-mod-nat
@@ -2150,27 +2131,89 @@ EOF
             ;;
     esac
     
-    # LEDE 源码最终启动验证（省略，保持原有完整逻辑）
-    # ...（实际文件中保留原有完整 LEDE 启动验证代码）
+    # LEDE 源码最终启动验证和修复（仅在 lede 且非 Hanwckf 时执行）
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
+        log "🔧 ===== LEDE 源码最终启动验证 ====="
+        
+        if [ -f .config.lede_base_fixed ]; then
+            log "  🔧 合并 LEDE 基础修复配置..."
+            while IFS= read -r line; do
+                config_name=$(echo "$line" | cut -d'=' -f1)
+                if ! grep -q "^${config_name}=" .config; then
+                    echo "$line" >> .config
+                fi
+            done < .config.lede_base_fixed
+            rm -f .config.lede_base_fixed
+        fi
+        
+        log "  🔧 验证关键启动配置..."
+        
+        local critical_missing=0
+        
+        if ! grep -q "CONFIG_CMDLINE_PARTITION=y" .config; then
+            echo "CONFIG_CMDLINE_PARTITION=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        if ! grep -q "CONFIG_MTD_SPLIT_FIRMWARE=y" .config; then
+            echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        if ! grep -q "CONFIG_MTD_SPLIT_UIMAGE_FW=y" .config; then
+            echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
+            critical_missing=$((critical_missing + 1))
+        fi
+        
+        if [ $critical_missing -gt 0 ]; then
+            log "    ✅ 添加了 $critical_missing 个缺失的关键配置"
+        else
+            log "    ✅ 所有关键配置都已存在"
+        fi
+        
+        local mtd_missing=0
+        local mtd_configs=("CONFIG_MTD" "CONFIG_MTD_BLOCK" "CONFIG_MTD_SPLIT")
+        for cfg in "${mtd_configs[@]}"; do
+            if ! grep -q "^${cfg}=y" .config; then
+                mtd_missing=$((mtd_missing + 1))
+            fi
+        done
+        if [ $mtd_missing -gt 0 ]; then
+            log "  ⚠️  有 $mtd_missing 个 MTD 相关配置未启用，但可能不影响构建"
+        fi
+        
+        log "✅ LEDE 源码最终启动验证完成"
+    fi
     
     log "🔄 第一次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || true
-        # olddefconfig 后立即再次强制清理 IPv6
+        log "🔄 LEDE使用 olddefconfig 更新配置..."
+        make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "⚠️ 第一次 olddefconfig 有警告，但继续"
+        }
         [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
     else
-        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || handle_error "第一次依赖解决失败"
+        log "🔄 第一次运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
+            log "❌ 第一次 make defconfig 失败"
+            tail -50 /tmp/build-logs/defconfig1.log
+            handle_error "第一次依赖解决失败"
+        }
     fi
     log "✅ 第一次配置更新成功"
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || true
+        make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+            log "⚠️ olddefconfig 有警告，但继续"
+        }
         [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
     else
-        make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || true
+        make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
+            log "⚠️ make defconfig 有警告，但继续"
+        }
     fi
     
     log "🔍 动态检测实际生效的USB内核配置..."
@@ -2284,10 +2327,16 @@ EOF
     mv .config.tmp .config
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || true
+        log "🔄 LEDE第二次使用 olddefconfig..."
+        make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+            log "⚠️ 第二次 olddefconfig 有警告，但继续..."
+        }
         [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
     else
-        make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || true
+        log "🔄 第二次运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
+            log "⚠️ 第二次 make defconfig 有警告，但继续..."
+        }
     fi
     log "✅ 第二次配置更新完成"
     
@@ -2344,9 +2393,7 @@ EOF
         fi
     fi
     
-    # ============================================
     # 验证设备配置
-    # ============================================
     log "🔍 正在验证设备 $correct_device 是否被选中..."
     
     make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || true
@@ -2579,8 +2626,40 @@ EOF
     fi
     
     # ============================================
-    # 修正固件名称前缀（根据源码类型）
+    # 最终锁定：物理删除 IPv6 及冲突包源码目录（彻底杜绝复原）
     # ============================================
+    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+        log "🔧 物理删除所有 IPv6 及冲突包源码目录（防止 feeds 复活）"
+        find package/feeds feeds -type d \( \
+            -name "*ip6tables*" -o \
+            -name "*odhcp6c*" -o \
+            -name "*odhcpd*" -o \
+            -name "*6in4*" -o \
+            -name "*6rd*" -o \
+            -name "*6to4*" -o \
+            -name "*ds-lite*" -o \
+            -name "*map*" -o \
+            -name "*luci-proto-ipv6*" -o \
+            -name "*kmod-ipv6*" -o \
+            -name "*kmod-nf-ip6*" -o \
+            -name "*kmod-nf-conntrack6*" -o \
+            -name "*kmod-nf-nat6*" -o \
+            -name "*kmod-ipt-nat6*" -o \
+            -name "*kmod-nf-ipt6*" -o \
+            -name "*dnsmasq-nodhcpv6*" -o \
+            -name "*ppp-mod-pppoe*" \
+        \) -exec rm -rf {} + 2>/dev/null
+        # 再次清理 .config 并运行 olddefconfig 锁定
+        _force_ipv6_cleanup
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            make olddefconfig > /dev/null 2>&1 || true
+        fi
+        # 二次确认，如果 dnsmasq-nodhcpv6 又被装回，再次删除
+        find package/feeds feeds -type d -name "dnsmasq-nodhcpv6" -exec rm -rf {} + 2>/dev/null
+        log "  ✅ 物理删除完成，IPv6 组件已彻底清除"
+    fi
+    
+    # 修正固件名称前缀（根据源码类型）
     log "🔧 修正固件名称前缀（根据源码类型）..."
     
     local vendor_prefix=""
@@ -2689,9 +2768,7 @@ EOF
     log "✅ 固件名称前缀修正完成"
     log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
     
-    # ============================================
     # 显示已应用补丁状态（动态）
-    # ============================================
     log "🔍 检查已应用补丁状态..."
     show_patch_status
     
@@ -6694,7 +6771,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 终极版（精确定位 install 错误）
+# 全流程错误检查函数 - 终极版（精确定位 install 错误，修正目标检查误报）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6745,18 +6822,26 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
+        # 精确检查 Makefile 目标（修正误报）
         echo "📌 源码 Makefile 关键目标检查:"
         echo "----------------------------------------"
         local makefile_issues=0
         for target in "tools/compile" "toolchain/compile" "target/compile" "package/compile" "target/install"; do
-            if grep -qE "^[[:space:]]*${target}[[:space:]]*:" "$build_dir/Makefile" "$build_dir/include"/*.mk 2>/dev/null; then
-                echo "   ✅ $target"
+            # 先检查顶层 Makefile，再检查 include/*.mk
+            if grep -qE "^[[:space:]]*${target}[[:space:]]*:" "$build_dir/Makefile" 2>/dev/null; then
+                echo "   ✅ $target (顶层 Makefile)"
+            elif grep -qE "^[[:space:]]*${target}[[:space:]]*:" "$build_dir/include"/*.mk 2>/dev/null; then
+                echo "   ✅ $target (include/*.mk)"
             else
                 echo "   ⚠️ $target 可能缺失"
                 makefile_issues=$((makefile_issues + 1))
             fi
         done
-        [ $makefile_issues -gt 0 ] && echo "   🔧 有 $makefile_issues 个目标缺失，编译可能出错"
+        if [ $makefile_issues -gt 0 ]; then
+            echo "   🔧 有 $makefile_issues 个目标未找到，请确认 build_dir 为完整源码树"
+            echo "   📋 实际存在的顶层目标:"
+            grep -E '^[[:space:]]*[a-zA-Z_.-]+/[a-zA-Z_.-]+[[:space:]]*:' "$build_dir/Makefile" 2>/dev/null | head -10 | sed 's/^/      /'
+        fi
         echo ""
 
         echo "📌 Feed 安装及依赖警告摘要:"
@@ -6901,13 +6986,13 @@ quick_error_check() {
             local pkg_configured=$(echo "$last_config" | sed -n 's/.*Configuring \([^ ]*\).*/\1/p')
             echo "   🧩 最后一个配置的包: ${pkg_configured:-未知}"
             
-            # 从日志中提取具体安装错误（往下搜 "Error" 或 "install"）
+            # 从日志中提取具体安装错误（往下搜 "Error" 或 "install" 相关行）
             local install_error=$(grep -A 10 "package/install.*Error 255" "$log_file" 2>/dev/null | grep -E "install:|Error|failed" | head -5)
             if [ -n "$install_error" ]; then
                 echo "   🐞 安装脚本返回错误信息："
                 echo "$install_error" | sed 's/^/      /'
             else
-                # 尝试查找 *pkgname*.install 相关的错误
+                # 尝试查找 *pkgname*.install 或 *postinst 相关的错误
                 local pkg_pattern=$(echo "$pkg_configured" | sed 's/\.$//')
                 local pkg_install_log=$(grep -E "${pkg_pattern}\.(install|postinst)" "$log_file" 2>/dev/null | tail -10)
                 if [ -n "$pkg_install_log" ]; then
@@ -7018,6 +7103,7 @@ quick_error_check() {
             echo ""
             echo "💡 排查建议:"
             [ -n "$patch_fails" ] && echo "   🔧 内核补丁冲突（见上方补丁冲突详情），请禁用冲突的补丁后重试。"
+            [ -n "$install_error" ] && echo "   🔧 包安装错误（见上方详细），可能是依赖冲突或脚本失败。"
             [ -n "$unique_failed" ] && echo "   🔧 失败的包: $(echo $unique_failed | tr '\n' ' ')"
             [ -n "$missing_files" ] && echo "   🔧 缺失文件可能导致部分包编译失败。"
             [ -n "$dl_errors" ] && echo "   🔧 下载失败，请检查网络或更换源。"
