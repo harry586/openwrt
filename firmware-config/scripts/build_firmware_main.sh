@@ -1358,7 +1358,6 @@ EOF
             ;;
     esac
     
-    # 不再添加任何加速相关的额外 feed，全由源码自身和配置提供
     log "📋 feeds.conf.default 内容:"
     cat feeds.conf.default
     
@@ -1367,32 +1366,49 @@ EOF
         log "⚠️ feeds更新有警告，尝试继续..."
     }
     
-    log "=== 删除有问题的包（在安装前） ==="
-    
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE源码：删除有依赖问题的 vsftpd 相关包"
-        
-        find package/feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package/feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        find feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 feeds 目录: $dir"
-            rm -rf "$dir"
-        done
-        
-        find package -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
-            log "  🗑️ 删除 package 目录: $dir"
-            rm -rf "$dir"
-        done
-    fi
-    
     log "=== 安装Feeds ==="
     ./scripts/feeds install -a || {
         log "⚠️ feeds安装有警告，尝试继续..."
     }
+
+    # ============================================
+    # 安装 feeds 后立即删除冲突包（DDNS、IPv6 等）
+    # ============================================
+    log "🔧 删除与禁用功能冲突的包源码及索引..."
     
+    # 删除所有 DDNS 相关目录
+    find package/feeds feeds -type d \( \
+        -name "ddns-scripts*" -o \
+        -name "luci-app-ddns*" -o \
+        -name "luci-i18n-ddns*" \
+    \) -exec rm -rf {} + 2>/dev/null
+
+    # 删除所有 IPv6 相关目录（包括 luci-proto-ipv6）
+    find package/feeds feeds -type d \( \
+        -name "*ip6tables*" -o \
+        -name "*odhcp6c*" -o \
+        -name "*odhcpd*" -o \
+        -name "*6in4*" -o -name "*6rd*" -o -name "*6to4*" -o \
+        -name "*ds-lite*" -o -name "*map*" -o \
+        -name "*luci-proto-ipv6*" -o \
+        -name "*kmod-ipv6*" -o \
+        -name "*kmod-nf-ip6*" -o \
+        -name "*kmod-nf-conntrack6*" -o \
+        -name "*kmod-nf-nat6*" -o \
+        -name "*kmod-ipt-nat6*" -o \
+        -name "*kmod-nf-ipt6*" -o \
+        -name "*dnsmasq-nodhcpv6*" \
+    \) -exec rm -rf {} + 2>/dev/null
+
+    # 删除 vsftpd-alt 等已禁用的包
+    find package/feeds feeds -type d -name "*vsftpd-alt*" -exec rm -rf {} + 2>/dev/null
+
+    # 清理旧的包索引缓存（避免 opkg 依赖旧数据）
+    rm -rf tmp/.packagefeeds* 2>/dev/null
+    find staging_dir -name "Packages*" -exec rm -f {} + 2>/dev/null
+
+    log "✅ 冲突包目录及索引已清理"
+
     log "✅ Feeds配置完成"
 }
 #【build_firmware_main.sh-09-end】
@@ -2076,7 +2092,7 @@ EOF
         fi
     fi
     
-    # 强化 IPv6 清理（含 kmod-nf-ipt6 及 dnsmasq-nodhcpv6）
+    # 强力 IPv6 清理函数
     _force_ipv6_cleanup() {
         local blacklist=(
             ip6tables ip6tables-extra ip6tables-mod-nat
@@ -2645,74 +2661,65 @@ EOF
     fi
     
     # ============================================
-    # 最终锁定：物理删除 IPv6 及冲突包源码目录，并修复 luci-light/luci-nginx 依赖
+    # 最终锁定：精确修复 Makefile 依赖并清除包索引缓存
     # ============================================
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        log "🔧 最终锁定：彻底删除 IPv6 组件并修复 luci 依赖"
-        
-        # 再次确保 .config 是最新清理状态
+        log "🔧 最终锁定：彻底清除 IPv6 依赖及冲突包"
+
+        # 1. 再次确保 .config 干净
         _force_ipv6_cleanup
-        
-        # 修复 luci-light 对 luci-proto-ipv6 的依赖
-        local light_mk=$(find package/feeds feeds -path "*/luci-light/Makefile" 2>/dev/null | head -1)
-        if [ -f "$light_mk" ]; then
-            cp "$light_mk" "$light_mk.bak.lock"
-            sed -i 's/+luci-proto-ipv6//g' "$light_mk"
-            sed -i 's/luci-proto-ipv6//g' "$light_mk"
-            log "  ✅ 已移除 luci-light 对 luci-proto-ipv6 的依赖"
-        fi
-        
-        # 修复 luci-nginx 对 luci-proto-ipv6 的依赖
-        local nginx_mk=$(find package/feeds feeds -path "*/luci-nginx/Makefile" 2>/dev/null | head -1)
-        if [ -f "$nginx_mk" ]; then
-            cp "$nginx_mk" "$nginx_mk.bak.lock"
-            sed -i 's/+luci-proto-ipv6//g' "$nginx_mk"
-            sed -i 's/luci-proto-ipv6//g' "$nginx_mk"
-            log "  ✅ 已移除 luci-nginx 对 luci-proto-ipv6 的依赖"
-        fi
-        
-        # 物理删除所有 IPv6 及冲突包源码目录
+
+        # 2. 精确修复 luci-light 的 Makefile 依赖
+        find package/feeds feeds -path "*/luci-light/Makefile" 2>/dev/null | while read mk; do
+            cp "$mk" "$mk.bak.lock"
+            sed -i 's/ +luci-proto-ipv6\b//g; s/+luci-proto-ipv6\b//g; s/ luci-proto-ipv6\b//g' "$mk"
+            sed -i 's/^\(\s*DEPENDS\):=\(\s*\)$/\1:=+libc/' "$mk"
+            log "  ✅ 已清理 $mk"
+        done
+
+        # 3. 精确修复 luci-nginx 的 Makefile 依赖
+        find package/feeds feeds -path "*/luci-nginx/Makefile" 2>/dev/null | while read mk; do
+            cp "$mk" "$mk.bak.lock"
+            sed -i 's/ +luci-proto-ipv6\b//g; s/+luci-proto-ipv6\b//g; s/ luci-proto-ipv6\b//g' "$mk"
+            sed -i 's/^\(\s*DEPENDS\):=\(\s*\)$/\1:=+libc/' "$mk"
+            log "  ✅ 已清理 $mk"
+        done
+
+        # 4. 物理删除 IPv6 及冲突包源码目录
         find package/feeds feeds -type d \( \
-            -name "*ip6tables*" -o \
-            -name "*odhcp6c*" -o \
-            -name "*odhcpd*" -o \
-            -name "*6in4*" -o \
-            -name "*6rd*" -o \
-            -name "*6to4*" -o \
-            -name "*ds-lite*" -o \
-            -name "*map*" -o \
-            -name "*luci-proto-ipv6*" -o \
-            -name "*kmod-ipv6*" -o \
-            -name "*kmod-nf-ip6*" -o \
-            -name "*kmod-nf-conntrack6*" -o \
-            -name "*kmod-nf-nat6*" -o \
-            -name "*kmod-ipt-nat6*" -o \
-            -name "*kmod-nf-ipt6*" -o \
-            -name "*dnsmasq-nodhcpv6*" -o \
-            -name "*ppp-mod-pppoe*" \
+            -name "*ip6tables*" -o -name "*odhcp6c*" -o -name "*odhcpd*" \
+            -o -name "*6in4*" -o -name "*6rd*" -o -name "*6to4*" \
+            -o -name "*ds-lite*" -o -name "*map*" \
+            -o -name "*luci-proto-ipv6*" -o -name "*kmod-ipv6*" \
+            -o -name "*kmod-nf-ip6*" -o -name "*kmod-nf-conntrack6*" \
+            -o -name "*kmod-nf-nat6*" -o -name "*kmod-ipt-nat6*" \
+            -o -name "*kmod-nf-ipt6*" -o -name "*dnsmasq-nodhcpv6*" \
+            -o -name "*ppp-mod-pppoe*" \
         \) -exec rm -rf {} + 2>/dev/null
-        
-        # 删除 ddns-scripts_* 目录（先前已禁用 ddns）
+
+        # 5. 删除有问题的 ddns-scripts_* 目录并强制禁用
         find package/feeds feeds -type d \( \
-            -name "ddns-scripts_aliyun" -o \
-            -name "ddns-scripts_dnspod" -o \
-            -name "ddns-scripts_cloudflare" -o \
-            -name "ddns-scripts_freedns" -o \
-            -name "ddns-scripts_godaddy" -o \
-            -name "ddns-scripts_noip" -o \
-            -name "ddns-scripts_services" \
+            -name "ddns-scripts_aliyun" -o -name "ddns-scripts_dnspod" \
+            -o -name "ddns-scripts_cloudflare" -o -name "ddns-scripts_freedns" \
+            -o -name "ddns-scripts_godaddy" -o -name "ddns-scripts_noip" \
+            -o -name "ddns-scripts_services" \
         \) -exec rm -rf {} + 2>/dev/null
-        
-        # 二次确认，如果 dnsmasq-nodhcpv6 又被装回，再次删除
-        find package/feeds feeds -type d -name "dnsmasq-nodhcpv6" -exec rm -rf {} + 2>/dev/null
-        
-        # 再次运行 olddefconfig 锁定所有更改
+
+        sed -i '/^CONFIG_PACKAGE_ddns-scripts_/d' .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+
+        # 6. 清除旧的包索引缓存（关键！防止 opkg 安装时依赖旧索引）
+        rm -rf tmp/.packagefeeds* 2>/dev/null
+        find staging_dir -name "Packages*" -exec rm -f {} + 2>/dev/null
+        ./scripts/feeds update -i > /dev/null 2>&1 || true
+
+        # 7. 最后再清理一次 .config 并运行 olddefconfig
+        _force_ipv6_cleanup
         if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
             make olddefconfig > /dev/null 2>&1 || true
         fi
-        
-        # 最后再执行一次 ipv6 清理，确保万无一失
-        _force_ipv6_cleanup
+        find package/feeds feeds -type d -name "dnsmasq-nodhcpv6" -exec rm -rf {} + 2>/dev/null
         log "  ✅ 锁定完成"
     fi
     
