@@ -13,6 +13,7 @@
 
 
 
+
 ## 📁 项目结构
 
 ```
@@ -38,6 +39,7 @@
 │   │   │   ├── dhcp.sh
 │   │   │   ├── disk.sh
 │   │   │   ├── ext4.sh
+│   │   │   ├── ksmbd.sh
 │   │   │   ├── network.sh
 │   │   │   ├── samba.sh
 │   │   │   ├── smartdns.sh
@@ -52,9 +54,9 @@
 ├── build-config.conf
 └── support.sh
 
-7 directories, 27 files
+7 directories, 28 files
 ```
 
 注意，自定义文件名是英文的，方便复制、运行
 
-> 最后更新时间: 2026-05-04 10:23:53
+> 最后更新时间: 2026-05-11 10:37:19
