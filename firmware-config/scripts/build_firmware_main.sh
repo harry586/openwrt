@@ -2123,6 +2123,7 @@ EOF
 # CONFIG_PACKAGE_kmod-nf-nat6 is not set
 # CONFIG_PACKAGE_kmod-nf-reject6 is not set
 # CONFIG_PACKAGE_kmod-sit is not set
+# CONFIG_PACKAGE_kmod-ipt-nat6 is not set
 EOF
         log "  ✅ 已添加 IPv6 包禁用配置（所有源码类型通用）"
         
@@ -2136,6 +2137,8 @@ EOF
         sed -i '/^CONFIG_PACKAGE_kmod-ipv6/d' .config
         sed -i '/^CONFIG_PACKAGE_kmod-nf-ip6/d' .config
         sed -i '/^CONFIG_PACKAGE_kmod-nf-conntrack6/d' .config
+        sed -i '/^CONFIG_PACKAGE_kmod-ipt-nat6/d' .config
+        sed -i '/^CONFIG_PACKAGE_kmod-nf-nat6/d' .config
         
         log "  ✅ 已删除所有 IPv6 启用配置"
         log "  📌 注意：保留内核 IPv6 配置，仅禁用用户态包，确保系统启动兼容性"
@@ -2867,11 +2870,11 @@ EOF
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "  🔧 LEDE 源码特殊处理..."
         if [ -f "feeds.conf.default" ]; then
-            sed -i 's/^# CONFIG_VERSION_DIST=.*/CONFIG_VERSION_DIST=LEDE/g' feeds.conf.default 2>/dev/null || true
+            sed -i 's/^# CONFIG_VERSION_DIST=.*/CONFIG_VERSION_DIST="LEDE"/g' feeds.conf.default 2>/dev/null || true
         fi
         if [ -f "package/base-files/files/etc/openwrt_release" ]; then
-            sed -i 's/DISTRIB_ID=.*/DISTRIB_ID=LEDE/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
-            sed -i 's/DISTRIB_RELEASE=.*/DISTRIB_RELEASE=LEDE/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
+            sed -i 's/DISTRIB_ID=.*/DISTRIB_ID="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
+            sed -i 's/DISTRIB_RELEASE=.*/DISTRIB_RELEASE="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
         fi
         log "    ✅ LEDE 特殊配置已应用"
     fi
