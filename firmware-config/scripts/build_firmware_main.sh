@@ -1545,7 +1545,9 @@ generate_config() {
     local correct_device="$DEVICE"
     log "🔧 使用传入的设备名: $correct_device"
     
+    # ============================================
     # Hanwckf 特殊处理：immortalwrt + rax3000m → 使用预置配置
+    # ============================================
     local IS_HANWCKF_RAX3000M=0
     if echo "$correct_device" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
         IS_HANWCKF_RAX3000M=1
@@ -1558,6 +1560,7 @@ generate_config() {
             cp "defconfig/mt7981-ax3000.config" ".config"
             log "✅ 已应用 Hanwckf 预置配置: defconfig/mt7981-ax3000.config"
         
+            # 锁定设备为 cmcc_rax3000m（NAND）
             sed -i '/^CONFIG_TARGET_mediatek_mt7981_DEVICE_/d' .config
             echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
             echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_emmc is not set" >> .config
@@ -1565,6 +1568,7 @@ generate_config() {
             make defconfig > /tmp/build-logs/defconfig_hanwckf.log 2>&1
             log "✅ 已锁定设备: cmcc_rax3000m (NAND)"
             
+            # 设置正确的平台变量，后续步骤引用
             TARGET="mediatek"
             SUBTARGET="mt7981"
             actual_subtarget="mt7981"
@@ -1579,7 +1583,13 @@ generate_config() {
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
+    # ============================================
+    # 以下为通用流程（immortalwrt/openwrt/lede 均适用）
+    # ============================================
+    
+    # ============================================
     # LEDE 源码启动修复（仅在 lede 且非 Hanwckf 时执行）
+    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
         log "🔧 ===== LEDE 源码启动修复 ====="
         
@@ -1843,11 +1853,15 @@ EOF
         log "======================================"
     fi
     
+    # ============================================
     # 根据源码类型确定设备配置变量格式
+    # ============================================
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
+    # 如果不是 Hanwckf 模式，则需要重新生成 device_config
     if [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
+        # 修复：只有当 SUBTARGET 无效（不存在或等于目标名）时才尝试自动查找
         local subtarget_valid=0
         if [ -n "$actual_subtarget" ] && [ "$actual_subtarget" != "$TARGET" ]; then
             if [ -f "target/linux/$TARGET/$actual_subtarget/target.mk" ] || [ -d "target/linux/$TARGET/$actual_subtarget/base-files" ]; then
@@ -1917,6 +1931,7 @@ ${device_config}
 EOF
         fi
     else
+        # Hanwckf 模式：设备配置已在之前设置，这里只更新 SUBTARGET 环境变量
         SUBTARGET="$actual_subtarget"
         log "  ✅ Hanwckf 模式，设备配置已锁定: $device_config"
     fi
@@ -2009,7 +2024,9 @@ EOF
         log "✅ 全锥形NAT已启用"
     fi
     
+    # ============================================
     # 网络加速自动选择（根据源码类型，完全使用内核配置）
+    # ============================================
     if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$CONFIG_MODE" = "normal" ]; then
         case "$SOURCE_REPO_TYPE" in
             "immortalwrt")
@@ -2059,7 +2076,9 @@ EOF
         fi
     fi
     
+    # ============================================
     # 强化 IPv6 清理（含 kmod-nf-ipt6 及 dnsmasq-nodhcpv6）
+    # ============================================
     _force_ipv6_cleanup() {
         local blacklist=(
             ip6tables ip6tables-extra ip6tables-mod-nat
@@ -2393,7 +2412,9 @@ EOF
         fi
     fi
     
+    # ============================================
     # 验证设备配置
+    # ============================================
     log "🔍 正在验证设备 $correct_device 是否被选中..."
     
     make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || true
@@ -2626,7 +2647,7 @@ EOF
     fi
     
     # ============================================
-    # 最终锁定：物理删除 IPv6 及冲突包源码目录（彻底杜绝复原）
+    # 最终锁定：物理删除 IPv6 及冲突包源码目录，并修复 luci-light 依赖
     # ============================================
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
         log "🔧 物理删除所有 IPv6 及冲突包源码目录（防止 feeds 复活）"
@@ -2649,6 +2670,26 @@ EOF
             -name "*dnsmasq-nodhcpv6*" -o \
             -name "*ppp-mod-pppoe*" \
         \) -exec rm -rf {} + 2>/dev/null
+        
+        # 修复 luci-light 依赖：移除对 luci-proto-ipv6 的依赖
+        local luci_light_mf="package/feeds/luci/luci-light/Makefile"
+        if [ -f "$luci_light_mf" ]; then
+            cp "$luci_light_mf" "$luci_light_mf.bak"
+            sed -i 's/+luci-proto-ipv6//g' "$luci_light_mf"
+            log "  ✅ 已移除 luci-light 对 luci-proto-ipv6 的依赖"
+        fi
+        
+        # 删除有问题的 ddns-scripts_* 目录
+        find package/feeds feeds package -type d \( \
+            -name "ddns-scripts_aliyun" -o \
+            -name "ddns-scripts_dnspod" -o \
+            -name "ddns-scripts_cloudflare" -o \
+            -name "ddns-scripts_freedns" -o \
+            -name "ddns-scripts_godaddy" -o \
+            -name "ddns-scripts_noip" -o \
+            -name "ddns-scripts_services" \
+        \) -exec rm -rf {} + 2>/dev/null
+        
         # 再次清理 .config 并运行 olddefconfig 锁定
         _force_ipv6_cleanup
         if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
@@ -2656,7 +2697,7 @@ EOF
         fi
         # 二次确认，如果 dnsmasq-nodhcpv6 又被装回，再次删除
         find package/feeds feeds -type d -name "dnsmasq-nodhcpv6" -exec rm -rf {} + 2>/dev/null
-        log "  ✅ 物理删除完成，IPv6 组件已彻底清除"
+        log "  ✅ 物理删除完成，IPv6 组件及冲突依赖已彻底清除"
     fi
     
     # 修正固件名称前缀（根据源码类型）
