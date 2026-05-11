@@ -2077,62 +2077,36 @@ EOF
     fi
     
     # ============================================
-    # 禁用 IPv6 所有功能（彻底删除所有相关包并强制替换 dnsmasq-full 为普通版）
+    # 关键改进：定义清理 IPv6 的内部函数
     # ============================================
+    _force_ipv6_cleanup() {
+        local ipv6_blacklist=(
+            "ip6tables" "ip6tables-extra" "ip6tables-mod-nat"
+            "kmod-ip6tables" "kmod-ip6tables-extra"
+            "odhcp6c" "odhcpd" "odhcpd-ipv6only"
+            "6in4" "6rd" "6to4" "ds-lite" "map"
+            "luci-proto-ipv6" "luci-proto-6in4" "luci-proto-6rd" "luci-proto-6to4"
+            "kmod-ipv6" "kmod-nf-ip6" "kmod-nf-conntrack6"
+            "kmod-nf-log6" "kmod-nf-nat6" "kmod-nf-reject6" "kmod-sit"
+            "kmod-ipt-nat6" "dnsmasq-nodhcpv6"
+        )
+        for pkg in "${ipv6_blacklist[@]}"; do
+            sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+            echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+        done
+        # 强制使用普通 dnsmasq
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=/d' .config
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-nodhcpv6=/d' .config
+        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+        echo "# CONFIG_PACKAGE_dnsmasq-nodhcpv6 is not set" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
+    }
+    
+    # 禁用 IPv6 所有功能（彻底删除所有相关包并强制替换 dnsmasq）
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        log "🔧 ===== 禁用所有 IPv6 功能，并修复 dnsmasq 冲突 ====="
-        
-        # 先删除可能存在的 IPv6 包配置文件内容（来自之前步骤）
-        sed -i '/^CONFIG_PACKAGE_.*ip6tables/d' .config
-        sed -i '/^CONFIG_PACKAGE_odhcp6c/d' .config
-        sed -i '/^CONFIG_PACKAGE_odhcpd/d' .config
-        sed -i '/^CONFIG_PACKAGE_6in4/d' .config
-        sed -i '/^CONFIG_PACKAGE_6rd/d' .config
-        sed -i '/^CONFIG_PACKAGE_6to4/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-proto-ipv6/d' .config
-        sed -i '/^CONFIG_PACKAGE_kmod-ipv6/d' .config
-        sed -i '/^CONFIG_PACKAGE_kmod-nf-ip6/d' .config
-        sed -i '/^CONFIG_PACKAGE_kmod-nf-conntrack6/d' .config
-        sed -i '/^CONFIG_PACKAGE_kmod-ipt-nat6/d' .config
-        sed -i '/^CONFIG_PACKAGE_kmod-nf-nat6/d' .config
-        
-        # 显式添加禁用条目
-        cat >> .config << 'EOF'
-# CONFIG_PACKAGE_ip6tables is not set
-# CONFIG_PACKAGE_ip6tables-extra is not set
-# CONFIG_PACKAGE_ip6tables-mod-nat is not set
-# CONFIG_PACKAGE_kmod-ip6tables is not set
-# CONFIG_PACKAGE_kmod-ip6tables-extra is not set
-# CONFIG_PACKAGE_odhcp6c is not set
-# CONFIG_PACKAGE_odhcpd is not set
-# CONFIG_PACKAGE_odhcpd-ipv6only is not set
-# CONFIG_PACKAGE_6in4 is not set
-# CONFIG_PACKAGE_6rd is not set
-# CONFIG_PACKAGE_6to4 is not set
-# CONFIG_PACKAGE_ds-lite is not set
-# CONFIG_PACKAGE_map is not set
-# CONFIG_PACKAGE_luci-proto-ipv6 is not set
-# CONFIG_PACKAGE_luci-proto-6in4 is not set
-# CONFIG_PACKAGE_luci-proto-6rd is not set
-# CONFIG_PACKAGE_luci-proto-6to4 is not set
-# CONFIG_PACKAGE_kmod-ipv6 is not set
-# CONFIG_PACKAGE_kmod-nf-ip6 is not set
-# CONFIG_PACKAGE_kmod-nf-conntrack6 is not set
-# CONFIG_PACKAGE_kmod-nf-log6 is not set
-# CONFIG_PACKAGE_kmod-nf-nat6 is not set
-# CONFIG_PACKAGE_kmod-nf-reject6 is not set
-# CONFIG_PACKAGE_kmod-sit is not set
-# CONFIG_PACKAGE_kmod-ipt-nat6 is not set
-EOF
-
-        # 核心修复：如果启用了 dnsmasq-full，强制替换为普通 dnsmasq
-        if grep -q "^CONFIG_PACKAGE_dnsmasq-full=y" .config; then
-            log "  ⚠️ 发现 dnsmasq-full，可能与 IPv6 组件冲突，替换为普通 dnsmasq"
-            sed -i 's/^CONFIG_PACKAGE_dnsmasq-full=y/# CONFIG_PACKAGE_dnsmasq-full is not set/' .config
-            echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
-        fi
-        
-        log "  ✅ 所有 IPv6 用户态包均已禁用，dnsmasq 已切换为稳定版本"
+        log "🔧 ===== 禁用所有 IPv6 功能，并锁定 dnsmasq 为普通版 ====="
+        _force_ipv6_cleanup
+        log "  ✅ IPv6 组件清理完成"
     fi
     
     log "🔧 强制配置生成固件..."
@@ -2240,100 +2214,16 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    local kernel_config_file=""
-    local kernel_version=""
-    local found_kernel=0
-    
-    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
-        if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-            local device_def_file=""
-            local mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
-            for mkfile in $mk_files; do
-                if grep -q "define Device.*$correct_device" "$mkfile" 2>/dev/null; then
-                    device_def_file="$mkfile"
-                    break
-                fi
-            done
-            
-            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
-                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
-                if [ -n "$kernel_version" ]; then
-                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
-                fi
-            fi
-        fi
-        
-        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
-            for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
-                kernel_config_file="target/linux/$TARGET/config-$ver"
-                if [ -f "$kernel_config_file" ]; then
-                    kernel_version="$ver"
-                    found_kernel=1
-                    break
-                fi
-            done
-        else
-            found_kernel=1
-        fi
-    fi
-    
-    if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
-        log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-        
-        local kernel_patterns=(
-            "^CONFIG_USB"
-            "^CONFIG_PHY"
-            "^CONFIG_DWC"
-            "^CONFIG_XHCI"
-            "^CONFIG_EXTCON"
-            "^CONFIG_COMMON_CLK"
-            "^CONFIG_ARCH"
-        )
-        
-        if [ ${#KERNEL_EXTRACT_PATTERNS[@]} -gt 0 ]; then
-            kernel_patterns=("${KERNEL_EXTRACT_PATTERNS[@]}")
-        fi
-        
-        local usb_configs_file="/tmp/usb_configs_$$.txt"
-        
-        for pattern in "${kernel_patterns[@]}"; do
-            grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
-        done
-        
-        sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
-        
-        local config_count=$(wc -l < "$usb_configs_file.sorted")
-        log "找到 $config_count 个USB相关内核配置"
-        
-        local added_count=0
-        while read line; do
-            local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
-            
-            if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
-                if echo "$line" | grep -q "=y$"; then
-                    echo "$line" >> .config
-                    added_count=$((added_count + 1))
-                elif echo "$line" | grep -q "is not set"; then
-                    echo "$line" >> .config
-                    added_count=$((added_count + 1))
-                fi
-            fi
-        done < "$usb_configs_file.sorted"
-        
-        log "✅ 添加了 $added_count 个新的内核配置"
-        
-        rm -f "$usb_configs_file" "$usb_configs_file.sorted"
-    else
-        if [ "${DEBUG:-false}" = "true" ]; then
-            log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
-        fi
-    fi
-    
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔄 LEDE使用 olddefconfig 更新配置..."
         make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
             log "⚠️ 第一次 olddefconfig 有警告，但继续"
         }
+        # olddefconfig 后立即再次强制清理 IPv6，防止自动添加
+        if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+            _force_ipv6_cleanup
+            log "  🔄 olddefconfig 后再次清理 IPv6 组件"
+        fi
     else
         log "🔄 第一次运行 make defconfig..."
         make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
@@ -2348,6 +2238,11 @@ EOF
         make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
             log "⚠️ olddefconfig 有警告，但继续"
         }
+        # 再次清理
+        if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+            _force_ipv6_cleanup
+            log "  🔄 第二次 olddefconfig 后再次清理 IPv6 组件"
+        fi
     else
         make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
             log "⚠️ make defconfig 有警告，但继续"
@@ -2469,6 +2364,11 @@ EOF
         make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
             log "⚠️ 第二次 olddefconfig 有警告，但继续..."
         }
+        # 再次清理 IPv6
+        if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+            _force_ipv6_cleanup
+            log "  🔄 USB 驱动添加后再次清理 IPv6 组件"
+        fi
     else
         log "🔄 第二次运行 make defconfig..."
         make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
@@ -2524,6 +2424,10 @@ EOF
         done
         if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
             make olddefconfig > /dev/null 2>&1 || true
+            # 最后再清理一次
+            if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+                _force_ipv6_cleanup
+            fi
         else
             make defconfig > /dev/null 2>&1
         fi
@@ -2678,6 +2582,10 @@ EOF
         make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
             log "⚠️ olddefconfig 有警告，但继续..."
         }
+        # 再次清理
+        if [ "${DISABLE_IPV6:-true}" = "true" ]; then
+            _force_ipv6_cleanup
+        fi
     else
         make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
             log "⚠️ make defconfig 有警告，但继续..."
@@ -2721,6 +2629,7 @@ EOF
         mv .config.tmp .config
         if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
             make olddefconfig > /dev/null 2>&1 || true
+            [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
         else
             make defconfig > /dev/null 2>&1
         fi
