@@ -6106,20 +6106,39 @@ workflow_step17_check_usb_drivers() {
 
 #【build_firmware_main.sh-36】
 # ============================================
-# 步骤20: 修复网络环境（增强版 - 修复下载失败）
-# 对应 firmware-build.yml 步骤20
+# 步骤20: 修复网络环境（增强版 - 修复下载失败并替换GNU源）
 # ============================================
 workflow_step20_fix_network() {
-    log "=== 步骤20: 修复网络环境（增强版 - 修复下载失败） ==="
+    log "=== 步骤20: 修复网络环境（GNU镜像自动替换） ==="
     
     trap 'echo "⚠️ 步骤20 修复过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
     
     # ============================================
-    # 修复下载源（针对401/404错误）
+    # 自动替换常见下载源为国内镜像（解决 savannah/ftp.gnu 超时）
     # ============================================
-    log "🔧 修复下载源（针对401/404错误）..."
+    log "🔧 扫描并替换不可达的下载源..."
+    
+    local mirror_map=(
+        "git.savannah.gnu.org|git.mirrors.ustc.edu.cn"
+        "ftp.gnu.org|mirrors.ustc.edu.cn"
+        "http://www.kernel.org|https://mirrors.edge.kernel.org"
+    )
+    
+    find package feeds -name "Makefile" -o -name "*.mk" 2>/dev/null | while read mkf; do
+        local modified=0
+        for pair in "${mirror_map[@]}"; do
+            local original="${pair%%|*}"
+            local mirror="${pair##*|}"
+            if grep -q "$original" "$mkf" 2>/dev/null; then
+                cp "$mkf" "$mkf.bakmirror"
+                sed -i "s|${original}|${mirror}|g" "$mkf"
+                log "  ✅ 替换下载源 $original → $mirror 于 $(basename "$mkf")"
+                modified=1
+            fi
+        done
+    done
     
     # 备份原文件
     if [ -f "feeds.conf.default" ]; then
@@ -6138,11 +6157,9 @@ workflow_step20_fix_network() {
     # 修复trusted-firmware-a下载源
     log "  🔧 修复trusted-firmware-a下载源..."
     
-    # 创建补丁目录
     local patch_dir="package/firmware/trusted-firmware-a/patches"
     mkdir -p "$patch_dir"
     
-    # 创建补丁文件，替换下载源
     cat > "$patch_dir/001-fix-download-url.patch" << 'EOF'
 --- a/package/firmware/trusted-firmware-a/Makefile
 +++ b/package/firmware/trusted-firmware-a/Makefile
@@ -6162,6 +6179,40 @@ EOF
     
     # 调用原有的网络修复函数
     fix_network
+    
+    # 针对 LEDE 源码的额外网络修复
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE 源码额外网络修复：扫描并替换可能失效的下载地址..."
+        
+        # 常见失效镜像替换为更稳定的源
+        find package feeds -name "Makefile" -o -name "*.mk" 2>/dev/null | while read mkf; do
+            if grep -q 'mirror2\.immortalwrt\.org\|mirror\.immortalwrt\.org\|sources-cdn\.openwrt\.org' "$mkf" 2>/dev/null; then
+                cp "$mkf" "$mkf.netbak"
+                sed -i 's|https://mirror2.immortalwrt.org|https://mirror.nju.edu.cn/immortalwrt|g' "$mkf"
+                sed -i 's|http://mirror.immortalwrt.org|https://mirror.nju.edu.cn/immortalwrt|g' "$mkf"
+                sed -i 's|https://sources-cdn.openwrt.org|https://sources.openwrt.org|g' "$mkf"
+                log "  ✅ 修复下载地址: $mkf"
+            fi
+        done
+        
+        # 确保 Git 操作使用 https 而非 ssh，避免端口限制
+        git config --global url."https://github.com/".insteadOf git@github.com:
+    fi
+    
+    # 如果 dnsmasq-full 将来仍失败，预置备用下载
+    log "🔧 检查并预置可能下载失败的包源码..."
+    if [ -f "package/network/services/dnsmasq/Makefile" ]; then
+        # 提取版本号
+        local dnsver=$(grep -E '^PKG_VERSION' package/network/services/dnsmasq/Makefile | cut -d= -f2 | xargs)
+        if [ -n "$dnsver" ] && [ ! -f "dl/dnsmasq-${dnsver}.tar.xz" ]; then
+            log "  ℹ️ dnsmasq-${dnsver} 源码未下载，尝试备用镜像..."
+            wget -O "dl/dnsmasq-${dnsver}.tar.xz" \
+                "https://mirrors.tuna.tsinghua.edu.cn/openwrt/sources/dnsmasq-${dnsver}.tar.xz" 2>/dev/null || \
+            wget -O "dl/dnsmasq-${dnsver}.tar.xz" \
+                "https://downloads.openwrt.org/sources/dnsmasq-${dnsver}.tar.xz" 2>/dev/null || \
+            log "  ⚠️ 备用下载失败，将继续尝试默认地址"
+        fi
+    fi
     
     # 重新更新feeds
     log "🔄 重新更新feeds（使用修复后的源）..."
