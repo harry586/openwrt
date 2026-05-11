@@ -1580,7 +1580,6 @@ generate_config() {
             handle_error "Hanwckf 预置配置缺失"
         fi
         
-        # 不再在此添加额外包、TCP BBR、禁用 IPv6 等，全部交给后续通用流程
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
@@ -2027,7 +2026,6 @@ EOF
     
     # ============================================
     # 网络加速自动选择（根据源码类型，完全使用内核配置）
-    # 不会添加任何不存在的 .ipk 包，彻底避免 package/install 失败
     # ============================================
     if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$CONFIG_MODE" = "normal" ]; then
         case "$SOURCE_REPO_TYPE" in
@@ -2038,14 +2036,10 @@ EOF
                 echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
                 ;;
             "lede")
-                # LEDE 中 Flow Offloading 是内核功能，不使用独立软件包
                 log "✅ LEDE 使用内核软件流量分载 (Flow Offloading)"
                 cat >> .config << 'EOF'
-# 内核流量分载（不需要额外软件包，不会引发依赖错误）
 CONFIG_NF_FLOW_TABLE=y
 CONFIG_NF_FLOW_TABLE_IPV4=y
-# 已禁用 IPv6，故不开启 IPv6 流量分载
-# CONFIG_NF_FLOW_TABLE_IPV6 is not set
 EOF
                 ;;
             "openwrt")
@@ -2061,7 +2055,7 @@ EOF
         esac
     fi
     
-    # 强制启用 ath10k-ct（只对真正可能使用 ath10k 的平台）
+    # 强制启用 ath10k-ct
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         local force_ath10k=0
         case "$TARGET" in
@@ -2083,50 +2077,12 @@ EOF
     fi
     
     # ============================================
-    # 禁用 IPv6 所有功能
+    # 禁用 IPv6 所有功能（彻底删除所有相关包并强制替换 dnsmasq-full 为普通版）
     # ============================================
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        log "🔧 ===== 禁用所有 IPv6 功能（所有源码类型通用保守方式） ====="
+        log "🔧 ===== 禁用所有 IPv6 功能，并修复 dnsmasq 冲突 ====="
         
-        cat >> .config << 'EOF'
-# IPv6 包禁用（保守方式 - 所有源码类型通用）
-# 禁用 IPv6 防火墙相关
-# CONFIG_PACKAGE_ip6tables is not set
-# CONFIG_PACKAGE_ip6tables-extra is not set
-# CONFIG_PACKAGE_ip6tables-mod-nat is not set
-# CONFIG_PACKAGE_kmod-ip6tables is not set
-# CONFIG_PACKAGE_kmod-ip6tables-extra is not set
-
-# 禁用 IPv6 DHCP/RA 客户端和服务
-# CONFIG_PACKAGE_odhcp6c is not set
-# CONFIG_PACKAGE_odhcpd is not set
-# CONFIG_PACKAGE_odhcpd-ipv6only is not set
-
-# 禁用 IPv6 隧道协议
-# CONFIG_PACKAGE_6in4 is not set
-# CONFIG_PACKAGE_6rd is not set
-# CONFIG_PACKAGE_6to4 is not set
-# CONFIG_PACKAGE_ds-lite is not set
-# CONFIG_PACKAGE_map is not set
-
-# 禁用 LuCI IPv6 协议支持
-# CONFIG_PACKAGE_luci-proto-ipv6 is not set
-# CONFIG_PACKAGE_luci-proto-6in4 is not set
-# CONFIG_PACKAGE_luci-proto-6rd is not set
-# CONFIG_PACKAGE_luci-proto-6to4 is not set
-
-# 禁用 IPv6 内核模块包（但不修改内核配置）
-# CONFIG_PACKAGE_kmod-ipv6 is not set
-# CONFIG_PACKAGE_kmod-nf-ip6 is not set
-# CONFIG_PACKAGE_kmod-nf-conntrack6 is not set
-# CONFIG_PACKAGE_kmod-nf-log6 is not set
-# CONFIG_PACKAGE_kmod-nf-nat6 is not set
-# CONFIG_PACKAGE_kmod-nf-reject6 is not set
-# CONFIG_PACKAGE_kmod-sit is not set
-# CONFIG_PACKAGE_kmod-ipt-nat6 is not set
-EOF
-        log "  ✅ 已添加 IPv6 包禁用配置（所有源码类型通用）"
-        
+        # 先删除可能存在的 IPv6 包配置文件内容（来自之前步骤）
         sed -i '/^CONFIG_PACKAGE_.*ip6tables/d' .config
         sed -i '/^CONFIG_PACKAGE_odhcp6c/d' .config
         sed -i '/^CONFIG_PACKAGE_odhcpd/d' .config
@@ -2140,8 +2096,43 @@ EOF
         sed -i '/^CONFIG_PACKAGE_kmod-ipt-nat6/d' .config
         sed -i '/^CONFIG_PACKAGE_kmod-nf-nat6/d' .config
         
-        log "  ✅ 已删除所有 IPv6 启用配置"
-        log "  📌 注意：保留内核 IPv6 配置，仅禁用用户态包，确保系统启动兼容性"
+        # 显式添加禁用条目
+        cat >> .config << 'EOF'
+# CONFIG_PACKAGE_ip6tables is not set
+# CONFIG_PACKAGE_ip6tables-extra is not set
+# CONFIG_PACKAGE_ip6tables-mod-nat is not set
+# CONFIG_PACKAGE_kmod-ip6tables is not set
+# CONFIG_PACKAGE_kmod-ip6tables-extra is not set
+# CONFIG_PACKAGE_odhcp6c is not set
+# CONFIG_PACKAGE_odhcpd is not set
+# CONFIG_PACKAGE_odhcpd-ipv6only is not set
+# CONFIG_PACKAGE_6in4 is not set
+# CONFIG_PACKAGE_6rd is not set
+# CONFIG_PACKAGE_6to4 is not set
+# CONFIG_PACKAGE_ds-lite is not set
+# CONFIG_PACKAGE_map is not set
+# CONFIG_PACKAGE_luci-proto-ipv6 is not set
+# CONFIG_PACKAGE_luci-proto-6in4 is not set
+# CONFIG_PACKAGE_luci-proto-6rd is not set
+# CONFIG_PACKAGE_luci-proto-6to4 is not set
+# CONFIG_PACKAGE_kmod-ipv6 is not set
+# CONFIG_PACKAGE_kmod-nf-ip6 is not set
+# CONFIG_PACKAGE_kmod-nf-conntrack6 is not set
+# CONFIG_PACKAGE_kmod-nf-log6 is not set
+# CONFIG_PACKAGE_kmod-nf-nat6 is not set
+# CONFIG_PACKAGE_kmod-nf-reject6 is not set
+# CONFIG_PACKAGE_kmod-sit is not set
+# CONFIG_PACKAGE_kmod-ipt-nat6 is not set
+EOF
+
+        # 核心修复：如果启用了 dnsmasq-full，强制替换为普通 dnsmasq
+        if grep -q "^CONFIG_PACKAGE_dnsmasq-full=y" .config; then
+            log "  ⚠️ 发现 dnsmasq-full，可能与 IPv6 组件冲突，替换为普通 dnsmasq"
+            sed -i 's/^CONFIG_PACKAGE_dnsmasq-full=y/# CONFIG_PACKAGE_dnsmasq-full is not set/' .config
+            echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
+        fi
+        
+        log "  ✅ 所有 IPv6 用户态包均已禁用，dnsmasq 已切换为稳定版本"
     fi
     
     log "🔧 强制配置生成固件..."
@@ -2764,9 +2755,6 @@ EOF
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
-    # ============================================
-    # LEDE 源码最终启动配置验证（仅在 lede 且非 Hanwckf 时执行）
-    # ============================================
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
