@@ -1372,9 +1372,9 @@ EOF
     }
 
     # ============================================
-    # 安装 feeds 后立即删除冲突包（DDNS、IPv6 等）
+    # 安装 feeds 后立即删除冲突包目录及修复 Makefile 依赖
     # ============================================
-    log "🔧 删除与禁用功能冲突的包源码及索引..."
+    log "🔧 删除冲突包源码、修复 luci 依赖并清除索引..."
     
     # 删除所有 DDNS 相关目录
     find package/feeds feeds -type d \( \
@@ -1383,7 +1383,7 @@ EOF
         -name "luci-i18n-ddns*" \
     \) -exec rm -rf {} + 2>/dev/null
 
-    # 删除所有 IPv6 相关目录（包括 luci-proto-ipv6）
+    # 删除所有 IPv6 相关目录
     find package/feeds feeds -type d \( \
         -name "*ip6tables*" -o \
         -name "*odhcp6c*" -o \
@@ -1400,14 +1400,32 @@ EOF
         -name "*dnsmasq-nodhcpv6*" \
     \) -exec rm -rf {} + 2>/dev/null
 
-    # 删除 vsftpd-alt 等已禁用的包
+    # 删除 vsftpd-alt 等冲突包目录
     find package/feeds feeds -type d -name "*vsftpd-alt*" -exec rm -rf {} + 2>/dev/null
 
-    # 清理旧的包索引缓存（避免 opkg 依赖旧数据）
+    # 精确修复 luci-light 的 Makefile 依赖（移除 luci-proto-ipv6）
+    find package/feeds feeds -path "*/luci-light/Makefile" 2>/dev/null | while read mk; do
+        cp "$mk" "$mk.bak.lock"
+        # 移除 "+luci-proto-ipv6"、" luci-proto-ipv6" 等各种碎片
+        sed -i 's/ +luci-proto-ipv6\b//g; s/+luci-proto-ipv6\b//g; s/ luci-proto-ipv6\b//g' "$mk"
+        # 防止 DEPENDS 变成空值
+        sed -i 's/^\(\s*DEPENDS\):=\(\s*\)$/\1:=+libc/' "$mk"
+        log "  ✅ 已移除 luci-light 的 IPv6 依赖"
+    done
+
+    # 精确修复 luci-nginx 的 Makefile 依赖
+    find package/feeds feeds -path "*/luci-nginx/Makefile" 2>/dev/null | while read mk; do
+        cp "$mk" "$mk.bak.lock"
+        sed -i 's/ +luci-proto-ipv6\b//g; s/+luci-proto-ipv6\b//g; s/ luci-proto-ipv6\b//g' "$mk"
+        sed -i 's/^\(\s*DEPENDS\):=\(\s*\)$/\1:=+libc/' "$mk"
+        log "  ✅ 已移除 luci-nginx 的 IPv6 依赖"
+    done
+
+    # 清除旧的包索引缓存（避免 opkg 使用旧依赖数据）
     rm -rf tmp/.packagefeeds* 2>/dev/null
     find staging_dir -name "Packages*" -exec rm -f {} + 2>/dev/null
 
-    log "✅ 冲突包目录及索引已清理"
+    log "✅ 冲突包及索引已彻底清理"
 
     log "✅ Feeds配置完成"
 }
