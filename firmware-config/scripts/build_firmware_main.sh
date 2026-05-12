@@ -6865,7 +6865,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 终极版（快速定位 opkg 依赖错误）
+# 全流程错误检查函数 - 终极版（精准定位 install 错误 + 自动诊断）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6916,7 +6916,6 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
-        # 精确检查 Makefile 目标（已修正）
         echo "📌 源码 Makefile 关键目标检查:"
         echo "----------------------------------------"
         local makefile_issues=0
@@ -7069,24 +7068,36 @@ quick_error_check() {
         [ $total_fatal -eq 0 ] && echo "   ✅ 未发现致命编译错误"
         echo ""
 
-        # ===================== 精准 opkg 依赖错误诊断 =====================
+        # ---------- 精准定位 package/install 错误 ----------
         echo "🔧 编译失败包详情:"
         echo "----------------------------------------"
-        # 提取 Collected errors 内容
-        local collected_errors=$(grep -A 20 "Collected errors:" "$log_file" 2>/dev/null | head -20)
-        if [ -n "$collected_errors" ]; then
-            echo "   🐞 OPKG 依赖错误 (Collected errors):"
-            echo "$collected_errors" | sed 's/^/      /'
-            echo ""
+
+        # 自动分析 build.log 是否存在 make[2] Error 和 make[1] Error
+        if grep -q "make\[2\]: \*\*\*" "$log_file" 2>/dev/null; then
+            local last_error_block=$(grep "make\[2\]: \*\*\*" "$log_file" 2>/dev/null | tail -1)
+            echo "   🐞 发现编译错误: $last_error_block"
+            
+            # 往前查找可能的包名
+            local error_context=$(grep -B 20 "make\[2\]: \*\*\*" "$log_file" 2>/dev/null | tail -21)
+            # 查找 Installing/Configuring 行
+            local last_pkg=$(echo "$error_context" | grep -E "(Installing|Configuring)" | tail -1 | awk '{print $NF}')
+            if [ -n "$last_pkg" ]; then
+                echo "   📦 可能失败的包: $last_pkg"
+            fi
         fi
 
         if grep -q "package/Makefile:100: package/install" "$log_file" 2>/dev/null; then
             local last_config=$(grep "Configuring" "$log_file" 2>/dev/null | tail -1)
             local pkg_configured=$(echo "$last_config" | sed -n 's/.*Configuring \([^ ]*\).*/\1/p')
-            echo "   🧩 最后一个配置的包: ${pkg_configured:-未知}"
-            echo "   💡 可执行：make package/$(echo $pkg_configured | sed 's/\.$//')/compile V=s 查看详细"
+            echo "   🧩 安装阶段挂起，最后一个尝试配置的包: ${pkg_configured:-未知}"
         fi
 
+        if grep -q "Collected errors:" "$log_file" 2>/dev/null; then
+            echo "   ⚠️ OPKG 在安装过程中报告了依赖错误:"
+            grep -A 15 "Collected errors:" "$log_file" 2>/dev/null | grep "pkg_hash\|satisfy_dependencies_for\|Cannot install" | head -5 | sed 's/^/      /'
+        fi
+
+        # 显示更具体的失败包列表（如果有）
         local failed_pkgs_file="/tmp/failed_pkgs_$$.txt"
         > "$failed_pkgs_file"
         for f in "${!log_sources[@]}"; do
@@ -7117,8 +7128,9 @@ quick_error_check() {
             [ -n "$top_err" ] && echo "   ⚠️ 顶层错误: $top_err"
         fi
         rm -f "$failed_pkgs_file"
-        # 补丁冲突指引等（保留）...
+
         echo "----------------------------------------"
+        echo ""
 
         echo "🔍 关键组件状态检查:"
         echo "----------------------------------------"
@@ -7165,10 +7177,19 @@ quick_error_check() {
             echo ""
             echo "💡 排查建议:"
             [ -n "$patch_fails" ] && echo "   🔧 内核补丁冲突（见上方补丁冲突详情），请禁用冲突的补丁后重试。"
-            [ -n "$collected_errors" ] && echo "   🔧 OPKG 依赖错误（见上方 Collected errors），可能是禁用 IPv6 后仍有包强依赖 IPv6 组件，请修复对应 Makefile。"
+            [ -n "$last_pkg" ] && echo "   🔧 疑似包 '$last_pkg' 出错，尝试单独编译以查看完整错误。"
             [ -n "$unique_failed" ] && echo "   🔧 失败的包: $(echo $unique_failed | tr '\n' ' ')"
             [ -n "$missing_files" ] && echo "   🔧 缺失文件可能导致部分包编译失败。"
             [ -n "$dl_errors" ] && echo "   🔧 下载失败，请检查网络或更换源。"
+            
+            # 特殊诊断：如果只生成了 initramfs，说明 rootfs 构建被跳过
+            local initramfs_file=$(find "$target_dir" -name "*initramfs*" 2>/dev/null | head -1)
+            if [ -n "$initramfs_file" ] && [ $valid_sysupgrade -eq 0 ]; then
+                echo "   🔧 当前仅生成了 initramfs 内核，没有 sysupgrade 固件，可能原因："
+                echo "      - 设备不支持 squashfs 格式（检查 .config 中 CONFIG_TARGET_ROOTFS_SQUASHFS）"
+                echo "      - 强制设置的 CONFIG_TARGET_ROOTFS_INITRAMFS=y 覆盖了 sysupgrade 生成"
+                echo "      - 可尝试执行 make target/linux/compile V=s 查看详细日志"
+            fi
         fi
         echo "================================================================="
     } | tee "$output_file"
