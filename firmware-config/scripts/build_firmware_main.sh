@@ -2146,6 +2146,13 @@ EOF
         log "  ✅ IPv6 组件清理完成"
     fi
     
+    # ★ 关键：确保 initramfs 不会覆盖 squashfs
+    if grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null; then
+        log "  ⚠️ 检测到 CONFIG_TARGET_ROOTFS_INITRAMFS=y，强制删除"
+        sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config
+        echo "# CONFIG_TARGET_ROOTFS_INITRAMFS is not set" >> .config
+    fi
+    
     log "🔧 强制配置生成固件..."
     
     if grep -q "CONFIG_TARGET_IMAGES_FIT=y" .config; then
@@ -2687,31 +2694,20 @@ EOF
     fi
     
     # ============================================
-    # 最终锁定：精确修复 Makefile 依赖并清除包索引缓存
+    # ★ 精简版最终锁定：只做必要的 IPv6 依赖修复，不反复执行 olddefconfig
     # ============================================
     if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        log "🔧 最终锁定：彻底清除 IPv6 依赖及冲突包"
+        log "🔧 精简锁定：修复 luci 依赖并清理 IPv6 组件"
 
-        # 1. 再次确保 .config 干净
-        _force_ipv6_cleanup
-
-        # 2. 精确修复 luci-light 的 Makefile 依赖
-        find package/feeds feeds -path "*/luci-light/Makefile" 2>/dev/null | while read mk; do
+        # 修复 luci-light 和 luci-nginx 的 Makefile 依赖
+        for mk in $(find package/feeds feeds -path "*/luci-light/Makefile" -o -path "*/luci-nginx/Makefile" 2>/dev/null); do
+            [ -f "$mk" ] || continue
             cp "$mk" "$mk.bak.lock"
             sed -i 's/ +luci-proto-ipv6\b//g; s/+luci-proto-ipv6\b//g; s/ luci-proto-ipv6\b//g' "$mk"
-            sed -i 's/^\(\s*DEPENDS\):=\(\s*\)$/\1:=+libc/' "$mk"
             log "  ✅ 已清理 $mk"
         done
 
-        # 3. 精确修复 luci-nginx 的 Makefile 依赖
-        find package/feeds feeds -path "*/luci-nginx/Makefile" 2>/dev/null | while read mk; do
-            cp "$mk" "$mk.bak.lock"
-            sed -i 's/ +luci-proto-ipv6\b//g; s/+luci-proto-ipv6\b//g; s/ luci-proto-ipv6\b//g' "$mk"
-            sed -i 's/^\(\s*DEPENDS\):=\(\s*\)$/\1:=+libc/' "$mk"
-            log "  ✅ 已清理 $mk"
-        done
-
-        # 4. 物理删除 IPv6 及冲突包源码目录
+        # 物理删除 IPv6 相关源码目录
         find package/feeds feeds -type d \( \
             -name "*ip6tables*" -o -name "*odhcp6c*" -o -name "*odhcpd*" \
             -o -name "*6in4*" -o -name "*6rd*" -o -name "*6to4*" \
@@ -2720,50 +2716,20 @@ EOF
             -o -name "*kmod-nf-ip6*" -o -name "*kmod-nf-conntrack6*" \
             -o -name "*kmod-nf-nat6*" -o -name "*kmod-ipt-nat6*" \
             -o -name "*kmod-nf-ipt6*" -o -name "*dnsmasq-nodhcpv6*" \
-            -o -name "*ppp-mod-pppoe*" \
         \) -exec rm -rf {} + 2>/dev/null
 
-        # 5. 删除有问题的 ddns-scripts_* 目录并强制禁用
+        # 删除 ddns-scripts_* 目录
         find package/feeds feeds -type d \( \
             -name "ddns-scripts_aliyun" -o -name "ddns-scripts_dnspod" \
-            -o -name "ddns-scripts_cloudflare" -o -name "ddns-scripts_freedns" \
-            -o -name "ddns-scripts_godaddy" -o -name "ddns-scripts_noip" \
-            -o -name "ddns-scripts_services" \
         \) -exec rm -rf {} + 2>/dev/null
 
+        # 清理 .config 中的 ddns-scripts 和 IPv6 包
         sed -i '/^CONFIG_PACKAGE_ddns-scripts_/d' .config
         echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
         echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
-
-        # 6. 清除旧的包索引缓存（关键！防止 opkg 安装时依赖旧索引）
-        rm -rf tmp/.packagefeeds* 2>/dev/null
-        find staging_dir -name "Packages*" -exec rm -f {} + 2>/dev/null
-        ./scripts/feeds update -i > /dev/null 2>&1 || true
-
-        # 7. 最后再清理一次 .config 并运行 olddefconfig
         _force_ipv6_cleanup
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1 || true
-        fi
-        find package/feeds feeds -type d -name "dnsmasq-nodhcpv6" -exec rm -rf {} + 2>/dev/null
-        
-        # ============================================
-        # ★ 关键修复：强制删除 CONFIG_TARGET_ROOTFS_INITRAMFS
-        #    这行会导致只生成 initramfs 内核，不生成 sysupgrade 固件
-        # ============================================
-        if grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null; then
-            log "  ⚠️ 检测到 CONFIG_TARGET_ROOTFS_INITRAMFS=y，强制删除以确保生成 sysupgrade"
-            sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config
-            echo "# CONFIG_TARGET_ROOTFS_INITRAMFS is not set" >> .config
-            # 确保 squashfs 存在
-            if ! grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null; then
-                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-            fi
-            make olddefconfig > /dev/null 2>&1 || true
-            log "  ✅ 已删除 initramfs 覆盖项，squashfs 格式已锁定"
-        fi
-        
-        log "  ✅ 锁定完成"
+
+        log "  ✅ 精简锁定完成"
     fi
     
     # ============================================
