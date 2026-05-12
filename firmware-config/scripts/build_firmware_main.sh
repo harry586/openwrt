@@ -6865,7 +6865,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 终极版（精准定位 install 错误 + 自动诊断）
+# 全流程错误检查函数 - 完善版（记录退出原因，分析固件缺失原因）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6890,7 +6890,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 增强版"
+        echo "🔍 全流程错误检查 - 完善版"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -6899,6 +6899,7 @@ quick_error_check() {
         echo "输入设备: ${DEVICE:-unknown}"
         echo "================================================================="
 
+        # ======================== 收集所有日志文件 ========================
         declare -A log_sources
         for f in "$build_dir"/*.log; do
             [ -f "$f" ] && log_sources["$f"]="构建目录"
@@ -6916,28 +6917,28 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
+        # ======================== Makefile 目标检查 ========================
         echo "📌 源码 Makefile 关键目标检查:"
         echo "----------------------------------------"
         local makefile_issues=0
         for target in "tools/compile" "toolchain/compile" "target/compile" "package/compile" "target/install"; do
             if grep -qE "^[[:space:]]*${target}[[:space:]]*:" "$build_dir/Makefile" 2>/dev/null; then
-                echo "   ✅ $target"
+                echo "   ✅ $target (顶层 Makefile)"
+            elif grep -qE "^[[:space:]]*${target}[[:space:]]*:" "$build_dir/include"/*.mk 2>/dev/null; then
+                echo "   ✅ $target (include/*.mk)"
             else
-                if grep -qE "^[[:space:]]*${target}[[:space:]]*:" "$build_dir/include"/*.mk 2>/dev/null; then
-                    echo "   ✅ $target (include/*.mk)"
-                else
-                    echo "   ⚠️ $target 可能缺失"
-                    makefile_issues=$((makefile_issues + 1))
-                fi
+                echo "   ⚠️ $target 可能缺失"
+                makefile_issues=$((makefile_issues + 1))
             fi
         done
         if [ $makefile_issues -gt 0 ]; then
-            echo "   🔧 有 $makefile_issues 个目标未找到，请确认 build_dir 为完整源码树"
+            echo "   🔧 有 $makefile_issues 个目标未在标准位置找到"
             echo "   📋 实际存在的顶层目标:"
             grep -E '^[[:space:]]*[a-zA-Z_.-]+/[a-zA-Z_.-]+[[:space:]]*:' "$build_dir/Makefile" 2>/dev/null | head -10 | sed 's/^/      /'
         fi
         echo ""
 
+        # ======================== Feed 警告 ========================
         echo "📌 Feed 安装及依赖警告摘要:"
         echo "----------------------------------------"
         local feed_warnings=$(grep -hE "WARNING: Makefile.*has a (dependency|build dependency) on" "$build_dir"/*.log 2>/dev/null | sort -u | head -10)
@@ -6948,15 +6949,20 @@ quick_error_check() {
         fi
         echo ""
 
+        # ======================== 关键异常 ========================
         echo "🚨 关键异常摘要:"
         echo "----------------------------------------"
+        
+        # 缺失文件
         local missing_files=$(for f in "${!log_sources[@]}"; do
             grep -oP '(/[^ ]+|[^ ]+/[^ ]*)\s*:\s*No such file or directory' "$f" 2>/dev/null | sed 's/: No such file or directory//' | sort -u 2>/dev/null
         done | sort -u 2>/dev/null | head -5)
         if [ -n "$missing_files" ]; then
-            echo "  ❌ 缺失文件:"
+            echo "  ❌ 缺失文件 (打包过程中):"
             echo "$missing_files" | while read mf; do echo "      - $mf"; done
         fi
+        
+        # 下载错误
         local dl_errors=$(for f in "${!log_sources[@]}"; do
             grep -E 'Download failed|curl: \([0-9]+\) |wget: .*error|404 Not Found' "$f" 2>/dev/null | sort -u 2>/dev/null
         done | sort -u 2>/dev/null | head -5)
@@ -6964,9 +6970,11 @@ quick_error_check() {
             echo "  ❌ 下载错误:"
             echo "$dl_errors" | while read dl; do echo "      $dl"; done
         fi
+        
+        # 补丁冲突
         local patch_fails=$(for f in "${!log_sources[@]}"; do grep "Patch failed!" "$f" 2>/dev/null; done | head -5)
         if [ -n "$patch_fails" ]; then
-            echo "  🧩 内核补丁冲突 (Patch failed):"
+            echo "  🧩 内核补丁冲突:"
             echo "$patch_fails" | while read pl; do
                 local bad_patch=$(echo "$pl" | grep -oP '(?<=Please fix )[^!]+' | xargs)
                 [ -n "$bad_patch" ] && echo "      $bad_patch"
@@ -6974,6 +6982,54 @@ quick_error_check() {
         fi
         echo ""
 
+        # ======================== 编译退出原因诊断（新增核心功能） ========================
+        echo "🔍 编译退出原因诊断:"
+        echo "----------------------------------------"
+        
+        local exit_reason=""
+        local exit_type="unknown"
+        
+        # 检查1: 是否有 make error
+        if grep -qE 'make(\[[0-9]+\])?: \*\*\*' "$log_file" 2>/dev/null; then
+            local last_error=$(grep -E 'make(\[[0-9]+\])?: \*\*\*' "$log_file" 2>/dev/null | tail -1)
+            echo "   🔴 检测到 make 错误: $last_error"
+            exit_type="error"
+            exit_reason="$last_error"
+        fi
+        
+        # 检查2: 是否有 Collected errors
+        if grep -q "Collected errors:" "$log_file" 2>/dev/null; then
+            echo "   🔴 OPKG 报告依赖错误:"
+            grep -A 10 "Collected errors:" "$log_file" 2>/dev/null | grep -E "pkg_hash|satisfy|Cannot install|opkg_install" | head -5 | sed 's/^/      /'
+            exit_type="error"
+        fi
+        
+        # 检查3: 正常结束（make[1] Leaving）
+        if grep -q 'make\[1\]: Leaving directory' "$log_file" 2>/dev/null; then
+            echo "   🟢 make 正常退出 (Leaving directory)"
+            if [ "$exit_type" = "unknown" ]; then
+                exit_type="normal"
+                exit_reason="make 正常结束，所有目标已完成"
+            fi
+        fi
+        
+        # 检查4: .config 中的固件格式配置
+        if [ -f ".config" ]; then
+            local has_squashfs=$(grep -c "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null || echo "0")
+            local has_initramfs=$(grep -c "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null || echo "0")
+            local has_ext4=$(grep -c "^CONFIG_TARGET_ROOTFS_EXT4FS=y" .config 2>/dev/null || echo "0")
+            local has_jffs2=$(grep -c "^CONFIG_TARGET_ROOTFS_JFFS2=y" .config 2>/dev/null || echo "0")
+            
+            echo ""
+            echo "   📋 .config 中的固件格式设置:"
+            echo "      CONFIG_TARGET_ROOTFS_SQUASHFS  = $([ "$has_squashfs" -gt 0 ] && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "      CONFIG_TARGET_ROOTFS_INITRAMFS = $([ "$has_initramfs" -gt 0 ] && echo '⚠️ 已启用（会覆盖其他格式！）' || echo '✅ 未启用')"
+            echo "      CONFIG_TARGET_ROOTFS_EXT4FS    = $([ "$has_ext4" -gt 0 ] && echo '✅ 已启用' || echo '❌ 未启用')"
+            echo "      CONFIG_TARGET_ROOTFS_JFFS2     = $([ "$has_jffs2" -gt 0 ] && echo '✅ 已启用' || echo '❌ 未启用')"
+        fi
+        echo ""
+
+        # ======================== 固件生成状态检查 ========================
         echo "🔍 固件生成状态检查"
         echo "----------------------------------------"
         local full_target="${TARGET:-$target_platform}"
@@ -6982,13 +7038,14 @@ quick_error_check() {
         [ ! -d "$target_dir" ] && target_dir=$(find bin/targets -type d -name "*$full_target*" 2>/dev/null | head -1)
         echo "检查路径: $target_dir"
         echo ""
-        local found_firmware=0 valid_sysupgrade=0 valid_factory=0 sysupgrade_size="" factory_size=""
+        local found_firmware=0 valid_sysupgrade=0 valid_factory=0 valid_initramfs=0
+        local sysupgrade_size="" factory_size="" initramfs_size=""
 
         if [ -d "$target_dir" ]; then
             while IFS= read -r file; do
                 [ -z "$file" ] && continue
                 local fname=$(basename "$file")
-                [[ "$fname" == *"initramfs"* ]] || [[ "$fname" == *".manifest" ]] || [[ "$fname" == *"sha256sums"* ]] && continue
+                [[ "$fname" == *".manifest" ]] || [[ "$fname" == *"sha256sums"* ]] || [[ "$fname" == "profiles.json" ]] && continue
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
                 local fsize_human=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
@@ -6997,31 +7054,66 @@ quick_error_check() {
                 local ftype="other"
                 [[ "$fname" == *"sysupgrade"* ]] && ftype="sysupgrade"
                 [[ "$fname" == *"factory"* ]] && ftype="factory"
+                [[ "$fname" == *"initramfs"* ]] && ftype="initramfs"
 
                 if [ $fsize_mb -ge 5 ]; then
-                    if [ "$ftype" != "other" ]; then
-                        echo "✅ $fname"
-                        echo "   大小: $fsize_human (${fsize_mb}MB)"
-                        echo "   SHA256: $fhash"
-                        [ "$ftype" = "sysupgrade" ] && valid_sysupgrade=$((valid_sysupgrade + 1)) && sysupgrade_size="$fsize_human (${fsize_mb}MB)"
-                        [ "$ftype" = "factory" ] && valid_factory=$((valid_factory + 1)) && factory_size="$fsize_human (${fsize_mb}MB)"
-                    else
-                        echo "📄 $fname - $fsize_human (其他文件)"
-                    fi
+                    case "$ftype" in
+                        sysupgrade)
+                            echo "✅ $fname ($fsize_human) - 📦 刷机固件"
+                            valid_sysupgrade=$((valid_sysupgrade + 1))
+                            sysupgrade_size="$fsize_human"
+                            ;;
+                        factory)
+                            echo "🏭 $fname ($fsize_human) - 📦 原厂刷机固件"
+                            valid_factory=$((valid_factory + 1))
+                            factory_size="$fsize_human"
+                            ;;
+                        initramfs)
+                            echo "🔷 $fname ($fsize_human) - 🔧 临时内核（不可保留刷机）"
+                            valid_initramfs=$((valid_initramfs + 1))
+                            initramfs_size="$fsize_human"
+                            ;;
+                        *)
+                            echo "📄 $fname ($fsize_human) - 其他"
+                            ;;
+                    esac
                 else
-                    echo "❌ $fname - $fsize_human (无效，小于5MB)"
+                    echo "❌ $fname ($fsize_human) - 大小异常"
                 fi
-                echo ""
             done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | sort)
 
-            [ $found_firmware -eq 0 ] && echo "❌ 目录存在但未找到固件文件" && echo "📋 目录内容:" && ls -la "$target_dir" 2>/dev/null | head -20 | sed 's/^/   /'
-            [ $valid_sysupgrade -eq 0 ] && [ $found_firmware -gt 0 ] && echo "⚠️ 缺少 sysupgrade.bin 固件" && echo ""
+            [ $found_firmware -eq 0 ] && echo "❌ 未找到任何固件文件"
+            
+            echo ""
+            echo "📊 固件产物统计:"
+            echo "   sysupgrade 刷机固件: $valid_sysupgrade 个"
+            echo "   factory 原厂固件:   $valid_factory 个"
+            echo "   initramfs 临时内核: $valid_initramfs 个"
+            echo ""
+            
+            # 诊断：只有 initramfs
+            if [ $valid_initramfs -gt 0 ] && [ $valid_sysupgrade -eq 0 ] && [ $valid_factory -eq 0 ]; then
+                echo "⚠️ 仅生成了 initramfs 内核，缺少 sysupgrade/factory 固件"
+                echo "   可能原因："
+                if [ "$has_initramfs" -gt 0 ]; then
+                    echo "   • CONFIG_TARGET_ROOTFS_INITRAMFS=y 被设置，覆盖了其他格式"
+                    echo "   • 建议：在 .config 中删除此行，重新 make defconfig"
+                fi
+                if [ "$has_squashfs" -eq 0 ]; then
+                    echo "   • CONFIG_TARGET_ROOTFS_SQUASHFS 未启用，无法生成 sysupgrade"
+                    echo "   • 建议：在 .config 中添加 CONFIG_TARGET_ROOTFS_SQUASHFS=y"
+                fi
+                if [ "$has_initramfs" -eq 0 ] && [ "$has_squashfs" -gt 0 ]; then
+                    echo "   • squashfs 已启用但仍只生成 initramfs，可能是设备定义文件限制了格式"
+                fi
+            fi
         else
             echo "❌ 目标目录不存在: $target_dir"
         fi
         echo "----------------------------------------"
         echo ""
 
+        # ======================== 分步编译致命错误 ========================
         echo "🔍 分步编译致命错误统计:"
         echo "----------------------------------------"
         local fatal_patterns=(
@@ -7034,17 +7126,16 @@ quick_error_check() {
             'cannot find -l'
             'recipe for target.*failed'
         )
-        declare -A step_errors
         map_log_to_step() {
             local fname=$(basename "$1")
             case "$fname" in
-                build_tools*|build_tools_compile.log|build_tools_install.log) echo "STEP0" ;;
-                build_step1.log) echo "STEP1" ;;
-                build_step2*) echo "STEP2" ;;
-                build_step3.log) echo "STEP3" ;;
-                build_step4.log) echo "STEP4" ;;
-                build_step5*) echo "STEP5" ;;
-                *) echo "OTHER" ;;
+                build_tools*|build_tools_compile.log|build_tools_install.log) echo "工具链编译" ;;
+                build_step1.log) echo "步骤1" ;;
+                build_step2*) echo "步骤2" ;;
+                build_step3.log) echo "步骤3" ;;
+                build_step4.log) echo "步骤4" ;;
+                build_step5*) echo "步骤5" ;;
+                *) echo "其他日志" ;;
             esac
         }
         local total_fatal=0
@@ -7060,44 +7151,16 @@ quick_error_check() {
                 fi
             done
             if [ $err_count -gt 0 ]; then
-                echo "   🚨 ${step_label} ($(basename "$log_to_check")): $err_count 个致命错误"
+                echo "   🚨 ${step_label} ($(basename "$log_to_check")): $err_count 个错误"
             fi
-            step_errors[$step_label]=$((step_errors[$step_label] + err_count))
             total_fatal=$((total_fatal + err_count))
         done
         [ $total_fatal -eq 0 ] && echo "   ✅ 未发现致命编译错误"
         echo ""
 
-        # ---------- 精准定位 package/install 错误 ----------
+        # ======================== 编译失败包详情 ========================
         echo "🔧 编译失败包详情:"
         echo "----------------------------------------"
-
-        # 自动分析 build.log 是否存在 make[2] Error 和 make[1] Error
-        if grep -q "make\[2\]: \*\*\*" "$log_file" 2>/dev/null; then
-            local last_error_block=$(grep "make\[2\]: \*\*\*" "$log_file" 2>/dev/null | tail -1)
-            echo "   🐞 发现编译错误: $last_error_block"
-            
-            # 往前查找可能的包名
-            local error_context=$(grep -B 20 "make\[2\]: \*\*\*" "$log_file" 2>/dev/null | tail -21)
-            # 查找 Installing/Configuring 行
-            local last_pkg=$(echo "$error_context" | grep -E "(Installing|Configuring)" | tail -1 | awk '{print $NF}')
-            if [ -n "$last_pkg" ]; then
-                echo "   📦 可能失败的包: $last_pkg"
-            fi
-        fi
-
-        if grep -q "package/Makefile:100: package/install" "$log_file" 2>/dev/null; then
-            local last_config=$(grep "Configuring" "$log_file" 2>/dev/null | tail -1)
-            local pkg_configured=$(echo "$last_config" | sed -n 's/.*Configuring \([^ ]*\).*/\1/p')
-            echo "   🧩 安装阶段挂起，最后一个尝试配置的包: ${pkg_configured:-未知}"
-        fi
-
-        if grep -q "Collected errors:" "$log_file" 2>/dev/null; then
-            echo "   ⚠️ OPKG 在安装过程中报告了依赖错误:"
-            grep -A 15 "Collected errors:" "$log_file" 2>/dev/null | grep "pkg_hash\|satisfy_dependencies_for\|Cannot install" | head -5 | sed 's/^/      /'
-        fi
-
-        # 显示更具体的失败包列表（如果有）
         local failed_pkgs_file="/tmp/failed_pkgs_$$.txt"
         > "$failed_pkgs_file"
         for f in "${!log_sources[@]}"; do
@@ -7118,20 +7181,15 @@ quick_error_check() {
             fi
             [ -z "$pkg" ] && pkg="$(basename "$line")"
             [ "$pkg" = "GNUmakefile" ] && continue
-            echo "   📦 $pkg  ($line)"
+            echo "   📦 $pkg"
             shown=$((shown + 1))
-            [ $shown -ge 12 ] && break
+            [ $shown -ge 10 ] && break
         done < <(echo "$unique_failed" | sort -u)
-
-        if [ $shown -eq 0 ]; then
-            local top_err=$(grep 'make: \*\*\* .* Error' "$build_dir"/build_step3.log "$build_dir"/build.log 2>/dev/null | head -1)
-            [ -n "$top_err" ] && echo "   ⚠️ 顶层错误: $top_err"
-        fi
+        [ $shown -eq 0 ] && echo "   ✅ 未检测到失败包"
         rm -f "$failed_pkgs_file"
-
-        echo "----------------------------------------"
         echo ""
 
+        # ======================== 关键组件状态 ========================
         echo "🔍 关键组件状态检查:"
         echo "----------------------------------------"
         [ -d "staging_dir" ] && echo "✅ staging_dir 存在 ($(du -sh staging_dir 2>/dev/null | awk '{print $1}'))" || echo "❌ staging_dir 不存在"
@@ -7148,48 +7206,35 @@ quick_error_check() {
         fi
         echo ""
 
-        echo "🔍 最后30行日志 (已过滤 BUILD_MARK):"
+        # ======================== 最后日志 ========================
+        echo "🔍 最后20行日志 (已过滤 BUILD_MARK):"
         echo "----------------------------------------"
         if [ -f "$log_file" ]; then
-            grep -v ">>> BUILD_MARK:" "$log_file" | tail -30 | sed 's/^/   /'
+            grep -v ">>> BUILD_MARK:" "$log_file" | tail -20 | sed 's/^/   /'
         else
-            local best_log=$(ls -t "$build_dir"/build_step5_attempt*.log "$build_dir"/build_step*.log "$build_dir"/*.log 2>/dev/null | head -1)
-            if [ -f "$best_log" ]; then
-                echo "   文件: $(basename "$best_log") (已过滤)"
-                grep -v ">>> BUILD_MARK:" "$best_log" | tail -30 | sed 's/^/   /'
-            else
-                echo "   (无可用的构建日志)"
-            fi
+            echo "   (无构建日志)"
         fi
         echo ""
 
+        # ======================== 最终结论 ========================
         echo "================================================================="
+        local total_valid=$((valid_sysupgrade + valid_factory))
         echo "📊 构建结论:"
-        if [ $((valid_sysupgrade + valid_factory)) -gt 0 ]; then
-            [ -n "$sysupgrade_size" ] && echo "   sysupgrade 固件: $sysupgrade_size"
-            [ -n "$factory_size" ] && echo "   factory 固件: $factory_size"
-            echo "🎉 固件已成功生成，可正常刷机使用。"
-            if [ $total_fatal -gt 0 ]; then
-                echo "⚠️ 检测到 $total_fatal 个编译错误（上方已列出失败包及修复建议）。"
-            fi
-        else
-            echo "❌ 未生成任何有效固件，构建失败。"
+        if [ $total_valid -gt 0 ]; then
+            [ $valid_sysupgrade -gt 0 ] && echo "   ✅ sysupgrade 固件: $sysupgrade_size"
+            [ $valid_factory -gt 0 ] && echo "   ✅ factory 固件: $factory_size"
+            echo "🎉 编译成功，固件已生成"
+        elif [ $valid_initramfs -gt 0 ]; then
+            echo "⚠️ 编译流程正常完成，但只生成了 initramfs 临时内核"
+            echo "   这不是完整的刷机固件，需要修复配置以生成 sysupgrade/factory 固件"
+            echo "   诊断建议: 检查 .config 中的 CONFIG_TARGET_ROOTFS_* 设置"
             echo ""
-            echo "💡 排查建议:"
-            [ -n "$patch_fails" ] && echo "   🔧 内核补丁冲突（见上方补丁冲突详情），请禁用冲突的补丁后重试。"
-            [ -n "$last_pkg" ] && echo "   🔧 疑似包 '$last_pkg' 出错，尝试单独编译以查看完整错误。"
-            [ -n "$unique_failed" ] && echo "   🔧 失败的包: $(echo $unique_failed | tr '\n' ' ')"
-            [ -n "$missing_files" ] && echo "   🔧 缺失文件可能导致部分包编译失败。"
-            [ -n "$dl_errors" ] && echo "   🔧 下载失败，请检查网络或更换源。"
-            
-            # 特殊诊断：如果只生成了 initramfs，说明 rootfs 构建被跳过
-            local initramfs_file=$(find "$target_dir" -name "*initramfs*" 2>/dev/null | head -1)
-            if [ -n "$initramfs_file" ] && [ $valid_sysupgrade -eq 0 ]; then
-                echo "   🔧 当前仅生成了 initramfs 内核，没有 sysupgrade 固件，可能原因："
-                echo "      - 设备不支持 squashfs 格式（检查 .config 中 CONFIG_TARGET_ROOTFS_SQUASHFS）"
-                echo "      - 强制设置的 CONFIG_TARGET_ROOTFS_INITRAMFS=y 覆盖了 sysupgrade 生成"
-                echo "      - 可尝试执行 make target/linux/compile V=s 查看详细日志"
-            fi
+            echo "   📝 修复方法:"
+            echo "      sed -i '/CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config"
+            echo "      echo 'CONFIG_TARGET_ROOTFS_SQUASHFS=y' >> .config"
+            echo "      make defconfig && make -j\$(nproc) V=s"
+        else
+            echo "❌ 编译失败，未生成任何有效固件"
         fi
         echo "================================================================="
     } | tee "$output_file"
