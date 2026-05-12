@@ -2186,7 +2186,7 @@ EOF
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
 CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
 EOF
-            log "  ✅ ATH79平台配置 (已移除 initramfs 强制，确保生成 sysupgrade 固件)"
+            log "  ✅ ATH79平台配置 (强制 squashfs，确保生成 sysupgrade 固件)"
             ;;
     esac
     
