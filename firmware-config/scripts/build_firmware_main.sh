@@ -2746,6 +2746,23 @@ EOF
             make olddefconfig > /dev/null 2>&1 || true
         fi
         find package/feeds feeds -type d -name "dnsmasq-nodhcpv6" -exec rm -rf {} + 2>/dev/null
+        
+        # ============================================
+        # ★ 关键修复：强制删除 CONFIG_TARGET_ROOTFS_INITRAMFS
+        #    这行会导致只生成 initramfs 内核，不生成 sysupgrade 固件
+        # ============================================
+        if grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null; then
+            log "  ⚠️ 检测到 CONFIG_TARGET_ROOTFS_INITRAMFS=y，强制删除以确保生成 sysupgrade"
+            sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config
+            echo "# CONFIG_TARGET_ROOTFS_INITRAMFS is not set" >> .config
+            # 确保 squashfs 存在
+            if ! grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null; then
+                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+            fi
+            make olddefconfig > /dev/null 2>&1 || true
+            log "  ✅ 已删除 initramfs 覆盖项，squashfs 格式已锁定"
+        fi
+        
         log "  ✅ 锁定完成"
     fi
     
