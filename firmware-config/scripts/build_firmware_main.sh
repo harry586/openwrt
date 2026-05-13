@@ -2733,6 +2733,54 @@ EOF
     fi
     
     # ============================================
+    # ★★★ 最终强制切换固件格式 ★★★
+    # 在 make defconfig 之前强制执行，确保不会被后续操作覆盖
+    # ============================================
+    log "🔧 最终固件格式锁定：强制启用 squashfs，删除 initramfs"
+    
+    # 1. 强制删除所有可能导致仅生成 initramfs 的配置
+    sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS/d' .config
+    sed -i '/^CONFIG_TARGET_INITRAMFS/d' .config
+    sed -i '/^CONFIG_TARGET_ROOTFS_TARGZ/d' .config
+    
+    # 2. 强制启用 squashfs
+    if ! grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null; then
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        log "  ✅ 强制启用 CONFIG_TARGET_ROOTFS_SQUASHFS=y"
+    fi
+    
+    # 3. 禁用所有其他可能会导致只生成 initramfs 的选项
+    echo "# CONFIG_TARGET_ROOTFS_INITRAMFS is not set" >> .config
+    echo "# CONFIG_TARGET_INITRAMFS is not set" >> .config
+    echo "# CONFIG_TARGET_ROOTFS_TARGZ is not set" >> .config
+    
+    # 4. 确保镜像生成选项正确
+    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
+    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
+    
+    # 5. 最终运行 make defconfig 锁定所有配置
+    make defconfig > /dev/null 2>&1 || true
+    
+    # 6. 验证最终配置
+    if grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null; then
+        log "  ⚠️ 警告：CONFIG_TARGET_ROOTFS_INITRAMFS 仍然存在，再次强制删除"
+        sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config
+        echo "# CONFIG_TARGET_ROOTFS_INITRAMFS is not set" >> .config
+        make defconfig > /dev/null 2>&1 || true
+    fi
+    
+    if grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null; then
+        log "  ✅ 最终确认：CONFIG_TARGET_ROOTFS_SQUASHFS=y 已启用"
+    else
+        log "  ❌ 错误：CONFIG_TARGET_ROOTFS_SQUASHFS=y 未启用，手动添加"
+        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
+        make defconfig > /dev/null 2>&1 || true
+    fi
+    
+    log "  ✅ 固件格式锁定完成，预期生成 squashfs-sysupgrade.bin"
+    
+    # ============================================
     # 修正固件名称前缀（根据源码类型）
     # ============================================
     log "🔧 修正固件名称前缀（根据源码类型）..."
@@ -6848,7 +6896,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 终版（验证固件产物）
+# 全流程错误检查函数 - 终版（显示最后50行日志 + 详细诊断）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6900,7 +6948,7 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
-        # ======================== 固件生成状态检查（核心） ========================
+        # ======================== 固件生成状态检查 ========================
         echo "🔍 固件生成状态检查"
         echo "----------------------------------------"
         local full_target="${TARGET:-$target_platform}"
@@ -6920,14 +6968,13 @@ quick_error_check() {
                 local fsize_bytes=$(stat -c%s "$file" 2>/dev/null || echo "0")
                 local fsize_mb=$((fsize_bytes / 1024 / 1024))
                 local fsize_human=$(ls -lh "$file" 2>/dev/null | awk '{print $5}')
-                local fhash=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
                 found_firmware=$((found_firmware + 1))
                 local ftype="other"
                 [[ "$fname" == *"sysupgrade"* ]] && ftype="sysupgrade"
                 [[ "$fname" == *"factory"* ]] && ftype="factory"
                 [[ "$fname" == *"initramfs"* ]] && ftype="initramfs"
 
-                if [ $fsize_mb -ge 5 ]; then
+                if [ $fsize_mb -ge 3 ]; then
                     case "$ftype" in
                         sysupgrade)
                             echo "✅ $fname ($fsize_human) - 📦 刷机固件"
@@ -6945,11 +6992,11 @@ quick_error_check() {
                             initramfs_size="$fsize_human"
                             ;;
                         *)
-                            echo "📄 $fname ($fsize_human) - 其他"
+                            echo "📄 $fname ($fsize_human) - 其他文件"
                             ;;
                     esac
                 else
-                    echo "❌ $fname ($fsize_human) - 大小异常"
+                    echo "❌ $fname ($fsize_human) - 文件过小，可能不完整"
                 fi
             done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | sort)
 
@@ -6960,6 +7007,11 @@ quick_error_check() {
             echo "   sysupgrade 刷机固件: $valid_sysupgrade 个"
             echo "   factory 原厂固件:   $valid_factory 个"
             echo "   initramfs 临时内核: $valid_initramfs 个"
+            
+            # 目录完整列表
+            echo ""
+            echo "   📁 目录完整内容:"
+            ls -lhS "$target_dir"/*.bin "$target_dir"/*.img "$target_dir"/*.itb 2>/dev/null | grep -v "cannot access" | sed 's/^/      /'
             echo ""
         else
             echo "❌ 目标目录不存在: $target_dir"
@@ -6971,37 +7023,97 @@ quick_error_check() {
         # ======================== 编译退出原因诊断 ========================
         echo "🔍 编译退出原因诊断:"
         echo "----------------------------------------"
+        local exit_type="unknown"
+        local exit_reason=""
         
-        if grep -qE 'make(\[[0-9]+\])?: \*\*\*' "$log_file" 2>/dev/null; then
-            local last_error=$(grep -E 'make(\[[0-9]+\])?: \*\*\*' "$log_file" 2>/dev/null | tail -1)
-            echo "   🔴 make 错误: $last_error"
+        # 检查 make 错误
+        local make_errors=$(grep -E 'make(\[[0-9]+\])?: \*\*\*' "$log_file" 2>/dev/null | tail -3)
+        if [ -n "$make_errors" ]; then
+            echo "   🔴 检测到 make 错误:"
+            echo "$make_errors" | sed 's/^/      /'
+            exit_type="error"
+            exit_reason="$make_errors"
         fi
         
+        # 检查 Collected errors
         if grep -q "Collected errors:" "$log_file" 2>/dev/null; then
-            echo "   🔴 OPKG 报告依赖错误:"
-            grep -A 10 "Collected errors:" "$log_file" 2>/dev/null | grep -E "pkg_hash|satisfy|Cannot install|opkg_install" | head -5 | sed 's/^/      /'
+            echo ""
+            echo "   🔴 OPKG 依赖错误:"
+            grep -A 15 "Collected errors:" "$log_file" 2>/dev/null | grep -E "pkg_hash|satisfy|Cannot install|opkg_install" | head -10 | sed 's/^/      /'
+            exit_type="error"
         fi
         
+        # 检查 JSON info 错误
+        if grep -q "could not find any JSON files" "$log_file" 2>/dev/null; then
+            echo ""
+            echo "   ⚠️ JSON 信息文件未生成 (缺少有效的固件产物)"
+            exit_type="error"
+        fi
+        
+        # 正常退出
         if grep -q 'make\[1\]: Leaving directory' "$log_file" 2>/dev/null; then
-            echo "   🟢 make 正常结束"
+            echo "   🟢 make 正常结束 (世界目标完成)"
+            if [ "$exit_type" = "unknown" ]; then
+                exit_type="normal"
+                exit_reason="make 世界目标完成，所有步骤已执行"
+            fi
         fi
         
+        # .config 诊断
         if [ -f ".config" ]; then
             echo ""
-            echo "   📋 .config 固件格式:"
-            grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null && echo "      ✅ SQUASHFS 已启用" || echo "      ❌ SQUASHFS 未启用"
-            grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null && echo "      ⚠️  INITRAMFS 已启用（会同时生成 initramfs 内核）" || echo "      ✅ INITRAMFS 未启用"
-            grep -q "^CONFIG_TARGET_ROOTFS_EXT4FS=y" .config 2>/dev/null && echo "      ✅ EXT4FS 已启用" || echo "      ❌ EXT4FS 未启用"
+            echo "   📋 固件格式配置:"
+            if grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null; then
+                echo "      ✅ SQUASHFS   = 已启用 (生成 sysupgrade/factory 的前提)"
+            else
+                echo "      ❌ SQUASHFS   = 未启用 (无法生成 sysupgrade)"
+            fi
+            if grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null; then
+                echo "      ⚠️  INITRAMFS  = 已启用 (仅生成临时内核)"
+            fi
+            if grep -q "^CONFIG_TARGET_ROOTFS_EXT4FS=y" .config 2>/dev/null; then
+                echo "      ✅ EXT4FS     = 已启用"
+            fi
+            
+            # 关键：检查设备是否支持 squashfs
+            local device_mk=$(find "target/linux/$full_target" -name "*.mk" -exec grep -l "define Device.*$DEVICE" {} \; 2>/dev/null | head -1)
+            if [ -f "$device_mk" ]; then
+                if grep -q "Default root filesystem" "$device_mk" 2>/dev/null; then
+                    echo "      📝 设备默认固件格式: $(grep 'Default root filesystem' "$device_mk" | head -1 | awk -F: '{print $2}' | xargs)"
+                fi
+            fi
         fi
         echo ""
 
-        # ======================== 最后日志 ========================
-        echo "🔍 最后20行日志 (已过滤 BUILD_MARK):"
+        # ======================== 最后50行日志 ========================
+        echo "🔍 最后50行日志 (已过滤 BUILD_MARK):"
         echo "----------------------------------------"
         if [ -f "$log_file" ]; then
-            grep -v ">>> BUILD_MARK:" "$log_file" | tail -20 | sed 's/^/   /'
+            grep -v ">>> BUILD_MARK:" "$log_file" | tail -50 | sed 's/^/   /'
         else
             echo "   (无构建日志)"
+        fi
+        echo ""
+
+        # ======================== 关键错误搜索 ========================
+        echo "🔍 关键错误/警告搜索:"
+        echo "----------------------------------------"
+        
+        # 搜索 Error
+        local error_lines=$(grep -n "Error\|ERROR\|error:" "$log_file" 2>/dev/null | tail -10)
+        if [ -n "$error_lines" ]; then
+            echo "   发现以下错误关键字:"
+            echo "$error_lines" | sed 's/^/   /'
+        else
+            echo "   ✅ 未发现明显错误"
+        fi
+        
+        # 搜索 Failed
+        local failed_lines=$(grep -n "Failed\|FAILED\|failed:" "$log_file" 2>/dev/null | tail -10)
+        if [ -n "$failed_lines" ]; then
+            echo ""
+            echo "   发现以下失败关键字:"
+            echo "$failed_lines" | sed 's/^/   /'
         fi
         echo ""
 
@@ -7012,19 +7124,25 @@ quick_error_check() {
         if [ $total_valid -gt 0 ]; then
             [ $valid_sysupgrade -gt 0 ] && echo "   ✅ sysupgrade 固件: $sysupgrade_size"
             [ $valid_factory -gt 0 ] && echo "   ✅ factory 固件: $factory_size"
-            echo "🎉 编译成功！固件可用于正常刷机"
+            echo "🎉 编译成功！固件可用于正常刷机，设置可永久保存"
         elif [ $valid_initramfs -gt 0 ]; then
-            echo "⚠️ 只生成了 initramfs 内核"
+            echo "⚠️  仅生成了 initramfs 内核 ($initramfs_size)"
             echo ""
-            echo "   📝 此固件可以刷入使用，但刷机后设置不会保留。"
-            echo "   📝 如需 sysupgrade 固件，请在编译前手动执行："
+            echo "   🔍 根因分析: CONFIG_TARGET_ROOTFS_INITRAMFS=y 覆盖了 squashfs 生成"
+            echo ""
+            echo "   📝 手动生成 sysupgrade 方法:"
+            echo "      cd $build_dir"
             echo "      make defconfig"
-            echo "      sed -i '/CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config"
+            echo "      sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config"
             echo "      echo 'CONFIG_TARGET_ROOTFS_SQUASHFS=y' >> .config"
-            echo "      make defconfig && make -j\$(nproc) V=s"
+            echo "      make defconfig"
+            echo "      make -j\$(nproc) V=s"
         else
             echo "❌ 编译失败，未生成任何有效固件"
-            echo "   📝 请检查 build.log 或上述日志查找具体错误"
+            echo ""
+            echo "   📝 排查建议:"
+            echo "      - 检查上方错误关键字定位具体失败原因"
+            echo "      - 查看完整日志: $build_dir/$log_file"
         fi
         echo "================================================================="
     } | tee "$output_file"
