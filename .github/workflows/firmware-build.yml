@@ -2,7 +2,6 @@
 # OpenWrt 智能固件构建工作流 - 系统主入口
 # 版本: 4.1.0
 # 最后更新: 2026-05-14
-# 关键特性：错误监控守护进程始终运行，无论编译成功或失败都会生成报告并上传
 
 name: OpenWrt 智能固件构建工作流
 
@@ -28,7 +27,7 @@ on:
         default: "normal"
         options: ["base", "normal"]
       device_name:
-        description: "📱 预定义设备（下拉选择）"
+        description: "📱 预定义设备"
         required: false
         type: choice
         default: "ac42u"
@@ -44,43 +43,43 @@ on:
           - "手动输入多个内置补丁"
           - "自定义补丁命令"
       builtin_patch_single:
-        description: "📌 选择单个内置补丁（ac42u-ath10k）"
+        description: "📌 选择单个内置补丁"
         required: false
         type: choice
         default: "none"
         options: ["none", "ac42u-ath10k"]
       builtin_patch_list:
-        description: "📋 多个内置补丁（逗号分隔；适用源码同上）"
+        description: "📋 多个内置补丁"
         required: false
         type: string
         default: ""
       custom_patch_command:
-        description: "📝 自定义补丁命令（每行一条命令，支持#注释）"
+        description: "📝 自定义补丁命令"
         required: false
         type: string
         default: ""
       manual_device_name:
-        description: "📝 设备名称（使用自定义）"
+        description: "📝 设备名称（自定义）"
         required: false
         type: string
         default: ""
       manual_target:
-        description: "🎯 芯片型号（ipq40xx、mediatek）"
+        description: "🎯 芯片型号"
         required: false
         type: string
         default: ""
       manual_subtarget:
-        description: "🔧 子平台（generic、filogic）"
+        description: "🔧 子平台"
         required: false
         type: string
         default: ""
       forbidden_packages:
-        description: "🚫 自定义禁用插件 - 格式：用空格分隔"
+        description: "🚫 自定义禁用插件"
         required: false
         type: string
         default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer ddns-scripts_aliyun ddns-scripts_dnspod"
       extra_packages:
-        description: "额外安装插件 - 格式：用分号;分隔"
+        description: "额外安装插件"
         required: false
         type: string
         default: ""
@@ -113,7 +112,6 @@ jobs:
         run: |
           echo "=== 步骤01: 生成时间戳 ==="
           sudo timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
-          START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
           if [ -n "${{ github.event.inputs.manual_device_name }}" ]; then
             FINAL_DEVICE_NAME="${{ github.event.inputs.manual_device_name }}"
           else
@@ -123,7 +121,6 @@ jobs:
           TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
           TIMESTAMP_SEC="${SOURCE_REPO_NAME}-${FINAL_DEVICE_NAME}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-${TIMESTAMP_LOCAL}"
           echo "TIMESTAMP_SEC=$TIMESTAMP_SEC" >> $GITHUB_ENV
-          echo "START_TIME=$START_TIME" >> $GITHUB_ENV
           echo "FINAL_DEVICE_NAME=$FINAL_DEVICE_NAME" >> $GITHUB_ENV
           echo "SOURCE_REPO_NAME=$SOURCE_REPO_NAME" >> $GITHUB_ENV
           if echo "$FINAL_DEVICE_NAME" | grep -qi "rax3000m"; then
@@ -143,17 +140,19 @@ jobs:
 #!/bin/bash
 MONITOR_DIR="/tmp/build-monitor"
 ERROR_LOG="$MONITOR_DIR/errors.log"
-WARNING_LOG="$MONITOR_DIR/warnings.log"
 DEP_ERROR_LOG="$MONITOR_DIR/dep_errors.log"
 BUILD_LOG="/mnt/openwrt-build/build.log"
 mkdir -p "$MONITOR_DIR"
-> "$ERROR_LOG" > "$WARNING_LOG" > "$DEP_ERROR_LOG"
+> "$ERROR_LOG"
+> "$DEP_ERROR_LOG"
 echo "[$(date)] 监控守护进程启动" >> "$MONITOR_DIR/events.log"
 WAIT_COUNT=0
-while [ ! -f "$BUILD_LOG" ] && [ $WAIT_COUNT -lt 300 ]; do sleep 2; WAIT_COUNT=$((WAIT_COUNT+1)); done
+while [ ! -f "$BUILD_LOG" ] && [ $WAIT_COUNT -lt 300 ]; do
+  sleep 2
+  WAIT_COUNT=$((WAIT_COUNT+1))
+done
 tail -f "$BUILD_LOG" 2>/dev/null | while read line; do
   echo "$line" | grep -qiE "error:|Error|ERROR|failed:|Failed|make.*\*\*\*" && echo "[$(date)] $line" >> "$ERROR_LOG"
-  echo "$line" | grep -qiE "warning:|Warning|WARNING" && echo "[$(date)] $line" >> "$WARNING_LOG"
   if echo "$line" | grep -qiE "pkg_hash_check_unresolved|cannot find dependency"; then
     echo "[$(date)] $line" >> "$DEP_ERROR_LOG"
     [[ "$line" =~ for[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/problem_packages.txt"
@@ -164,7 +163,7 @@ EOF
           chmod +x /tmp/error_monitor.sh
           /tmp/error_monitor.sh &
           echo "MONITOR_PID=$!" >> $GITHUB_ENV
-          echo "✅ 监控守护进程已启动"
+          echo "✅ 监控守护进程已启动 (PID: $!)"
 #【firmware-build.yml-01.5-end】
 
 #【firmware-build.yml-02】
@@ -180,7 +179,9 @@ EOF
             "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
           tar -xzf source.tar.gz --strip-components=1
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
-            if [ -d "firmware-config/build-Compiler-file" ]; then rm -rf firmware-config/build-Compiler-file; fi
+            if [ -d "firmware-config/build-Compiler-file" ]; then
+              rm -rf firmware-config/build-Compiler-file
+            fi
             rsync -av --exclude='.git' . ${{ github.workspace }}/
             mkdir -p /tmp/build-artifacts/source-archive
             cp source.tar.gz /tmp/build-artifacts/source-archive/
@@ -254,12 +255,23 @@ EOF
             SELECTED_BRANCH="${{ github.event.inputs.version_selection }}"
           fi
           case "${{ github.event.inputs.patch_method }}" in
-            "不应用补丁") PATCH_ARG="none"; EXTRA_ARG="" ;;
-            "单选内置补丁") PATCH_ARG="${{ github.event.inputs.builtin_patch_single }}"; EXTRA_ARG="" ;;
-            "手动输入多个内置补丁") PATCH_ARG="custom-list"; EXTRA_ARG="${{ github.event.inputs.builtin_patch_list }}" ;;
+            "不应用补丁")
+              PATCH_ARG="none"
+              EXTRA_ARG=""
+              ;;
+            "单选内置补丁")
+              PATCH_ARG="${{ github.event.inputs.builtin_patch_single }}"
+              EXTRA_ARG=""
+              ;;
+            "手动输入多个内置补丁")
+              PATCH_ARG="custom-list"
+              EXTRA_ARG="${{ github.event.inputs.builtin_patch_list }}"
+              ;;
             "自定义补丁命令")
               printf '%s\n' "${{ github.event.inputs.custom_patch_command }}" > /tmp/custom_patch_commands.sh
-              PATCH_ARG="custom"; EXTRA_ARG="/tmp/custom_patch_commands.sh" ;;
+              PATCH_ARG="custom"
+              EXTRA_ARG="/tmp/custom_patch_commands.sh"
+              ;;
           esac
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             execute_patches "$PATCH_ARG" "$DEVICE" "$SOURCE_REPO_TYPE" "$SELECTED_BRANCH" "$EXTRA_ARG"
@@ -346,7 +358,9 @@ EOF
         run: |
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step14_pre_build_space_check
           AVAILABLE_GB=$(df /mnt --output=avail | tail -1 | awk '{print $1/1024/1024}')
-          if [ $AVAILABLE_GB -lt 10 ]; then exit 1; fi
+          if [ $AVAILABLE_GB -lt 10 ]; then
+            exit 1
+          fi
 #【firmware-build.yml-23-end】
 
 #【firmware-build.yml-24】
