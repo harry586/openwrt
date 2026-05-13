@@ -61,9 +61,8 @@ load_build_config() {
     
     export BUILD_DIR LOG_DIR BACKUP_DIR CONFIG_DIR
     export IMMORTALWRT_URL OPENWRT_URL LEDE_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
-    export ENABLE_TURBOACC ENABLE_TCP_BBR ENABLE_FULLCONE_NAT FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
+    export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
-    export DISABLE_IPV6
     
     # ============================================
     # 检查文件描述符限制（修复Broken pipe）
@@ -219,7 +218,6 @@ save_env() {
     echo "export ENABLE_TCP_BBR=\"${ENABLE_TCP_BBR}\"" >> $ENV_FILE
     echo "export FORCE_ATH10K_CT=\"${FORCE_ATH10K_CT}\"" >> $ENV_FILE
     echo "export AUTO_FIX_USB_DRIVERS=\"${AUTO_FIX_USB_DRIVERS}\"" >> $ENV_FILE
-    echo "export DISABLE_IPV6=\"${DISABLE_IPV6}\"" >> $ENV_FILE
     
     if [ -n "$GITHUB_ENV" ]; then
         echo "SELECTED_REPO_URL=${SELECTED_REPO_URL}" >> $GITHUB_ENV
@@ -849,19 +847,19 @@ add_turboacc_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 网络加速预置（根据源码自动选择） ==="
+    log "=== 添加 TurboACC 支持 ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    # 特殊处理：Hanwckf 模式（RAX3000M + immortalwrt）已集成硬件加速，无需额外操作
+    # 特殊处理：Hanwckf 模式（RAX3000M + immortalwrt）不添加 TurboACC
     if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
-        log "ℹ️ 检测到 Hanwckf 源码 (RAX3000M)，已集成 MTK 硬件加速，跳过"
+        log "ℹ️ 检测到 Hanwckf 源码 (RAX3000M)，跳过 TurboACC 添加（已集成 MTK 硬件加速）"
         return 0
     fi
     
     # ============================================
-    # 彻底修复所有下载源（网络加速不依赖此项，但保留通用修复）
+    # 彻底修复所有下载源
     # ============================================
-    log "🔧 修复编译下载源..."
+    log "🔧 彻底修复所有下载源..."
     
     # 创建补丁目录
     mkdir -p package/firmware/trusted-firmware-a/patches
@@ -888,6 +886,7 @@ EOF
     find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
         if [ -f "$dir/Makefile" ]; then
             cp "$dir/Makefile" "$dir/Makefile.bak"
+            # 替换为可用的下载源
             sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
             sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
             log "  ✅ 修复 libxml2 下载源"
@@ -905,8 +904,23 @@ EOF
         fi
     done
     
-    # 本函数不再添加任何外部 feed，加速方案由 generate_config 根据源码类型自动选择
-    log "✅ 网络加速预置完成，最终方案将在配置生成时根据源码类型确定"
+    # 使用配置文件中的开关
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        log "🔧 为正常模式添加 TurboACC 支持"
+        
+        if [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
+            if [ ! -f "feeds.conf.default" ]; then
+                touch feeds.conf.default
+            fi
+            
+            if ! grep -q "turboacc" feeds.conf.default; then
+                echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+                log "✅ TurboACC feed 添加完成"
+            else
+                log "ℹ️ TurboACC feed 已存在"
+            fi
+        fi
+    fi
 }
 #【build_firmware_main.sh-08-end】
 
@@ -1252,7 +1266,7 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
-    # ---------- Hanwckf 模式保留原有 feeds ----------
+    # ---------- 新增：Hanwckf 模式保留原有 feeds ----------
     local is_hanwckf=0
     if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
         is_hanwckf=1
@@ -1264,6 +1278,7 @@ configure_feeds() {
             cp "feeds.conf.default" "feeds.conf.default.bak"
             log "  ✅ 已备份原有 feeds 配置"
         fi
+        # 直接进行更新和安装，不重写 feeds 文件
         log "=== 更新Feeds ==="
         ./scripts/feeds update -a || log "⚠️ feeds更新有警告，继续"
         ./scripts/feeds install -a || log "⚠️ feeds安装有警告，继续"
@@ -1271,25 +1286,28 @@ configure_feeds() {
         return 0
     fi
     
-    # ---------- 标准流程 ----------
-    log "🔧 预创建环境文件..."
+    # ---------- 以下为原有标准流程 ----------
+    log "🔧 预创建所有可能缺失的文件..."
     mkdir -p staging_dir/target-*/root-*/etc 2>/dev/null || true
     for target_dir in staging_dir/target-*; do
-        [ -d "$target_dir" ] || continue
-        for root_dir in "$target_dir"/root-*; do
-            [ -d "$root_dir" ] || continue
-            mkdir -p "$root_dir/etc"
-            touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
-        done
+        if [ -d "$target_dir" ]; then
+            for root_dir in "$target_dir"/root-*; do
+                if [ -d "$root_dir" ]; then
+                    mkdir -p "$root_dir/etc"
+                    touch "$root_dir/etc/xattr.conf" 2>/dev/null || true
+                fi
+            done
+        fi
     done
     
     mkdir -p build_dir/target-* 2>/dev/null || true
     for build_dir in build_dir/target-*; do
-        [ -d "$build_dir" ] || continue
-        find "$build_dir" -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
-            mkdir -p "$dir"
-            touch "$dir/Module.symvers" 2>/dev/null || true
-        done
+        if [ -d "$build_dir" ]; then
+            find "$build_dir" -type d -name "fullconenat-nft-*" 2>/dev/null | while read dir; do
+                mkdir -p "$dir"
+                touch "$dir/Module.symvers" 2>/dev/null || true
+            done
+        fi
     done
     
     if [ -f "feeds.conf.default" ]; then
@@ -1358,6 +1376,18 @@ EOF
             ;;
     esac
     
+    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        case "$SOURCE_REPO_TYPE" in
+            "immortalwrt"|"lede")
+                echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+                log "✅ 添加TurboACC feed"
+                ;;
+            "openwrt")
+                log "⚠️ OpenWrt官方源码可能不支持TurboACC feed，已跳过"
+                ;;
+        esac
+    fi
+    
     log "📋 feeds.conf.default 内容:"
     cat feeds.conf.default
     
@@ -1366,76 +1396,32 @@ EOF
         log "⚠️ feeds更新有警告，尝试继续..."
     }
     
+    log "=== 删除有问题的包（在安装前） ==="
+    
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE源码：删除有依赖问题的 vsftpd 相关包"
+        
+        find package/feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 package/feeds 目录: $dir"
+            rm -rf "$dir"
+        done
+        
+        find feeds -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 feeds 目录: $dir"
+            rm -rf "$dir"
+        done
+        
+        find package -type d \( -name "*vsftpd*" -o -name "*luci-app-vsftpd*" -o -name "*luci-i18n-vsftpd*" \) 2>/dev/null | while read dir; do
+            log "  🗑️ 删除 package 目录: $dir"
+            rm -rf "$dir"
+        done
+    fi
+    
     log "=== 安装Feeds ==="
     ./scripts/feeds install -a || {
         log "⚠️ feeds安装有警告，尝试继续..."
     }
-
-    # ============================================
-    # 安装 feeds 后立即彻底清除冲突包
-    # ============================================
-    log "🔧 彻底移除 IPv6、DDNS 等冲突包并修复 luci 依赖"
-
-    # 1. 删除所有 DDNS 相关目录
-    find package/feeds feeds -type d \( \
-        -name "ddns-scripts*" -o \
-        -name "luci-app-ddns*" -o \
-        -name "luci-i18n-ddns*" \
-    \) -exec rm -rf {} + 2>/dev/null
-
-    # 2. 删除所有 IPv6 相关目录（包括 luci-proto-ipv6）
-    find package/feeds feeds -type d \( \
-        -name "*ip6tables*" -o \
-        -name "*odhcp6c*" -o \
-        -name "*odhcpd*" -o \
-        -name "*6in4*" -o -name "*6rd*" -o -name "*6to4*" -o \
-        -name "*ds-lite*" -o -name "*map*" -o \
-        -name "*luci-proto-ipv6*" -o \
-        -name "*kmod-ipv6*" -o \
-        -name "*kmod-nf-ip6*" -o \
-        -name "*kmod-nf-conntrack6*" -o \
-        -name "*kmod-nf-nat6*" -o \
-        -name "*kmod-ipt-nat6*" -o \
-        -name "*kmod-nf-ipt6*" -o \
-        -name "*dnsmasq-nodhcpv6*" \
-    \) -exec rm -rf {} + 2>/dev/null
-
-    # 3. 删除 vsftpd-alt 等冲突包
-    find package/feeds feeds -type d -name "*vsftpd-alt*" -exec rm -rf {} + 2>/dev/null
-
-    # 4. 强制修复 luci-light 的 Makefile 依赖
-    for mk in $(find package/feeds feeds -path "*/luci-light/Makefile" 2>/dev/null); do
-        cp "$mk" "$mk.bak.final"
-        # 移除包含 luci-proto-ipv6 的整段依赖（含前面的 + 或空格）
-        sed -i 's/ +\?luci-proto-ipv6\b//g; s/\bluci-proto-ipv6\b//g' "$mk"
-        # 防止 DEPENDS 行变为空
-        sed -i 's/^\([[:space:]]*DEPENDS\):= *$/\1:=+libc/' "$mk"
-        log "  ✅ 已清理 $mk"
-    done
-
-    # 5. 强制修复 luci-nginx 的 Makefile 依赖
-    for mk in $(find package/feeds feeds -path "*/luci-nginx/Makefile" 2>/dev/null); do
-        cp "$mk" "$mk.bak.final"
-        sed -i 's/ +\?luci-proto-ipv6\b//g; s/\bluci-proto-ipv6\b//g' "$mk"
-        sed -i 's/^\([[:space:]]*DEPENDS\):= *$/\1:=+libc/' "$mk"
-        log "  ✅ 已清理 $mk"
-    done
-
-    # 6. 验证修复结果（确保不再包含 luci-proto-ipv6）
-    if grep -rq "luci-proto-ipv6" package/feeds/luci/luci-light/Makefile package/feeds/luci/luci-nginx/Makefile 2>/dev/null; then
-        log "❌ 错误：luci-proto-ipv6 依赖清除失败，请手动检查！"
-    else
-        log "✅ 验证通过：luci-proto-ipv6 依赖已彻底移除"
-    fi
-
-    # 7. 清除所有旧的包索引缓存
-    rm -rf tmp/.packagefeeds* 2>/dev/null
-    find staging_dir -name "Packages*" -exec rm -f {} + 2>/dev/null
-    # 可选：重新生成索引（不安装，只更新索引）
-    ./scripts/feeds update -i > /dev/null 2>&1 || true
-
-    log "✅ 冲突包及索引已彻底清理"
-
+    
     log "✅ Feeds配置完成"
 }
 #【build_firmware_main.sh-09-end】
@@ -1445,24 +1431,21 @@ install_turboacc_packages() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 安装网络加速包 ==="
+    log "=== 安装 TurboACC 包 ==="
     
-    # Hanwckf 模式跳过
+    # Hanwckf 源码（RAX3000M + immortalwrt）已集成硬件加速，无需安装 TurboACC 包
     if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
-        log "ℹ️ Hanwckf 已集成硬件加速，跳过额外包安装"
+        log "ℹ️ 检测到 Hanwckf 源码 (RAX3000M)，跳过 TurboACC 包安装"
         return 0
     fi
     
-    # 仅 ImmortalWrt 使用 TurboACC 时需要安装相应包（其他源码在 feeds install 阶段已处理）
-    if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ] && [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-        log "🔧 ImmortalWrt 正常模式，安装 TurboACC 相关包..."
-        ./scripts/feeds install -p packages luci-app-turboacc 2>/dev/null || log "⚠️ luci-app-turboacc 安装失败（可能已存在）"
-        ./scripts/feeds install -p packages kmod-shortcut-fe 2>/dev/null || true
-        ./scripts/feeds install -p packages kmod-fast-classifier 2>/dev/null || true
-        log "✅ TurboACC 包安装完成"
-    else
-        log "ℹ️ 当前源码 $SOURCE_REPO_TYPE 不需要单独安装加速包（配置生成时自动选定）"
-    fi
+    ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
+    
+    ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
+    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败"
+    ./scripts/feeds install -p turboacc kmod-fast-classifier || handle_error "安装kmod-fast-classifier失败"
+    
+    log "✅ TurboACC 包安装完成"
 }
 #【build_firmware_main.sh-10-end】
 
@@ -1623,6 +1606,7 @@ generate_config() {
             handle_error "Hanwckf 预置配置缺失"
         fi
         
+        # 不再在此添加额外包、TCP BBR 等，全部交给后续通用流程
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
@@ -2054,51 +2038,22 @@ EOF
         done
     fi
     
-    # 启用 TCP BBR
     if [ "${ENABLE_TCP_BBR:-true}" = "true" ]; then
         echo "CONFIG_PACKAGE_kmod-tcp-bbr=y" >> .config
         echo 'CONFIG_DEFAULT_TCP_CONG="bbr"' >> .config
         log "✅ TCP BBR已启用"
     fi
     
-    # 启用全锥形NAT
-    if [ "${ENABLE_FULLCONE_NAT:-true}" = "true" ]; then
-        echo "CONFIG_PACKAGE_iptables-mod-fullconenat=y" >> .config
-        log "✅ 全锥形NAT已启用"
+    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
+        log "✅ TurboACC已启用"
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+    elif [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
-    # ============================================
-    # 网络加速自动选择（根据源码类型，完全使用内核配置）
-    # ============================================
-    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$CONFIG_MODE" = "normal" ]; then
-        case "$SOURCE_REPO_TYPE" in
-            "immortalwrt")
-                log "✅ ImmortalWrt 使用 TurboACC 加速"
-                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-                ;;
-            "lede")
-                log "✅ LEDE 使用内核软件流量分载 (Flow Offloading)"
-                cat >> .config << 'EOF'
-CONFIG_NF_FLOW_TABLE=y
-CONFIG_NF_FLOW_TABLE_IPV4=y
-EOF
-                ;;
-            "openwrt")
-                log "✅ OpenWrt 官方使用内核软件流量分载"
-                cat >> .config << 'EOF'
-CONFIG_NF_FLOW_TABLE=y
-CONFIG_NF_FLOW_TABLE_IPV4=y
-EOF
-                ;;
-            *)
-                log "⚠️ 未知源码类型，跳过网络加速"
-                ;;
-        esac
-    fi
-    
-    # 强制启用 ath10k-ct
+    # 强制启用 ath10k-ct（只对真正可能使用 ath10k 的平台）
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         local force_ath10k=0
         case "$TARGET" in
@@ -2117,40 +2072,6 @@ EOF
         else
             log "ℹ️ 当前平台 $TARGET 不需要 ath10k-ct，跳过强制启用"
         fi
-    fi
-    
-    # 强力 IPv6 清理函数
-    _force_ipv6_cleanup() {
-        local blacklist=(
-            ip6tables ip6tables-extra ip6tables-mod-nat
-            kmod-ip6tables kmod-ip6tables-extra
-            odhcp6c odhcpd odhcpd-ipv6only
-            6in4 6rd 6to4 ds-lite map
-            luci-proto-ipv6 luci-proto-6in4 luci-proto-6rd luci-proto-6to4
-            kmod-ipv6 kmod-nf-ip6 kmod-nf-conntrack6
-            kmod-nf-log6 kmod-nf-nat6 kmod-nf-reject6 kmod-sit
-            kmod-ipt-nat6 kmod-nf-ipt6 dnsmasq-nodhcpv6
-        )
-        for pkg in "${blacklist[@]}"; do
-            sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
-            echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-        done
-        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=/d' .config
-        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
-        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
-    }
-    
-    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        log "🔧 ===== 彻底禁用 IPv6 并锁定 dnsmasq 为普通版 ====="
-        _force_ipv6_cleanup
-        log "  ✅ IPv6 组件清理完成"
-    fi
-    
-    # ★ 关键：确保 initramfs 不会覆盖 squashfs
-    if grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null; then
-        log "  ⚠️ 检测到 CONFIG_TARGET_ROOTFS_INITRAMFS=y，强制删除"
-        sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config
-        echo "# CONFIG_TARGET_ROOTFS_INITRAMFS is not set" >> .config
     fi
     
     log "🔧 强制配置生成固件..."
@@ -2192,12 +2113,15 @@ EOF
             cat >> .config << 'EOF'
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
 CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
+CONFIG_TARGET_ROOTFS_INITRAMFS=y
 EOF
-            log "  ✅ ATH79平台配置 (强制 squashfs，确保生成 sysupgrade 固件)"
+            log "  ✅ ATH79平台配置"
             ;;
     esac
     
+    # ============================================
     # LEDE 源码最终启动验证和修复（仅在 lede 且非 Hanwckf 时执行）
+    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
         log "🔧 ===== LEDE 源码最终启动验证 ====="
         
@@ -2255,12 +2179,100 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
+    local kernel_config_file=""
+    local kernel_version=""
+    local found_kernel=0
+    
+    if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
+        if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
+            local device_def_file=""
+            local mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
+            for mkfile in $mk_files; do
+                if grep -q "define Device.*$correct_device" "$mkfile" 2>/dev/null; then
+                    device_def_file="$mkfile"
+                    break
+                fi
+            done
+            
+            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
+                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
+                if [ -n "$kernel_version" ]; then
+                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
+                fi
+            fi
+        fi
+        
+        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
+            for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
+                kernel_config_file="target/linux/$TARGET/config-$ver"
+                if [ -f "$kernel_config_file" ]; then
+                    kernel_version="$ver"
+                    found_kernel=1
+                    break
+                fi
+            done
+        else
+            found_kernel=1
+        fi
+    fi
+    
+    if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
+        log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
+        
+        local kernel_patterns=(
+            "^CONFIG_USB"
+            "^CONFIG_PHY"
+            "^CONFIG_DWC"
+            "^CONFIG_XHCI"
+            "^CONFIG_EXTCON"
+            "^CONFIG_COMMON_CLK"
+            "^CONFIG_ARCH"
+        )
+        
+        if [ ${#KERNEL_EXTRACT_PATTERNS[@]} -gt 0 ]; then
+            kernel_patterns=("${KERNEL_EXTRACT_PATTERNS[@]}")
+        fi
+        
+        local usb_configs_file="/tmp/usb_configs_$$.txt"
+        
+        for pattern in "${kernel_patterns[@]}"; do
+            grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
+        done
+        
+        sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
+        
+        local config_count=$(wc -l < "$usb_configs_file.sorted")
+        log "找到 $config_count 个USB相关内核配置"
+        
+        local added_count=0
+        while read line; do
+            local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
+            
+            if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
+                if echo "$line" | grep -q "=y$"; then
+                    echo "$line" >> .config
+                    added_count=$((added_count + 1))
+                elif echo "$line" | grep -q "is not set"; then
+                    echo "$line" >> .config
+                    added_count=$((added_count + 1))
+                fi
+            fi
+        done < "$usb_configs_file.sorted"
+        
+        log "✅ 添加了 $added_count 个新的内核配置"
+        
+        rm -f "$usb_configs_file" "$usb_configs_file.sorted"
+    else
+        if [ "${DEBUG:-false}" = "true" ]; then
+            log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
+        fi
+    fi
+    
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔄 LEDE使用 olddefconfig 更新配置..."
         make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
             log "⚠️ 第一次 olddefconfig 有警告，但继续"
         }
-        [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
     else
         log "🔄 第一次运行 make defconfig..."
         make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
@@ -2275,7 +2287,6 @@ EOF
         make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
             log "⚠️ olddefconfig 有警告，但继续"
         }
-        [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
     else
         make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
             log "⚠️ make defconfig 有警告，但继续"
@@ -2397,7 +2408,6 @@ EOF
         make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
             log "⚠️ 第二次 olddefconfig 有警告，但继续..."
         }
-        [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
     else
         log "🔄 第二次运行 make defconfig..."
         make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
@@ -2453,7 +2463,6 @@ EOF
         done
         if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
             make olddefconfig > /dev/null 2>&1 || true
-            [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
         else
             make defconfig > /dev/null 2>&1
         fi
@@ -2608,7 +2617,6 @@ EOF
         make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
             log "⚠️ olddefconfig 有警告，但继续..."
         }
-        [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
     else
         make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
             log "⚠️ make defconfig 有警告，但继续..."
@@ -2652,7 +2660,6 @@ EOF
         mv .config.tmp .config
         if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
             make olddefconfig > /dev/null 2>&1 || true
-            [ "${DISABLE_IPV6:-true}" = "true" ] && _force_ipv6_cleanup
         else
             make defconfig > /dev/null 2>&1
         fi
@@ -2687,98 +2694,14 @@ EOF
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
+    # ============================================
+    # LEDE 源码最终启动配置验证（仅在 lede 且非 Hanwckf 时执行）
+    # ============================================
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
         log "⚠️ 有 $still_enabled 个插件未能禁用，将在后续阶段再次尝试"
     fi
-    
-    # ============================================
-    # ★ 精简版最终锁定：只做必要的 IPv6 依赖修复，不反复执行 olddefconfig
-    # ============================================
-    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        log "🔧 精简锁定：修复 luci 依赖并清理 IPv6 组件"
-
-        # 修复 luci-light 和 luci-nginx 的 Makefile 依赖
-        for mk in $(find package/feeds feeds -path "*/luci-light/Makefile" -o -path "*/luci-nginx/Makefile" 2>/dev/null); do
-            [ -f "$mk" ] || continue
-            cp "$mk" "$mk.bak.lock"
-            sed -i 's/ +luci-proto-ipv6\b//g; s/+luci-proto-ipv6\b//g; s/ luci-proto-ipv6\b//g' "$mk"
-            log "  ✅ 已清理 $mk"
-        done
-
-        # 物理删除 IPv6 相关源码目录
-        find package/feeds feeds -type d \( \
-            -name "*ip6tables*" -o -name "*odhcp6c*" -o -name "*odhcpd*" \
-            -o -name "*6in4*" -o -name "*6rd*" -o -name "*6to4*" \
-            -o -name "*ds-lite*" -o -name "*map*" \
-            -o -name "*luci-proto-ipv6*" -o -name "*kmod-ipv6*" \
-            -o -name "*kmod-nf-ip6*" -o -name "*kmod-nf-conntrack6*" \
-            -o -name "*kmod-nf-nat6*" -o -name "*kmod-ipt-nat6*" \
-            -o -name "*kmod-nf-ipt6*" -o -name "*dnsmasq-nodhcpv6*" \
-        \) -exec rm -rf {} + 2>/dev/null
-
-        # 删除 ddns-scripts_* 目录
-        find package/feeds feeds -type d \( \
-            -name "ddns-scripts_aliyun" -o -name "ddns-scripts_dnspod" \
-        \) -exec rm -rf {} + 2>/dev/null
-
-        # 清理 .config 中的 ddns-scripts 和 IPv6 包
-        sed -i '/^CONFIG_PACKAGE_ddns-scripts_/d' .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
-        _force_ipv6_cleanup
-
-        log "  ✅ 精简锁定完成"
-    fi
-    
-    # ============================================
-    # ★★★ 最终强制切换固件格式 ★★★
-    # 在 make defconfig 之前强制执行，确保不会被后续操作覆盖
-    # ============================================
-    log "🔧 最终固件格式锁定：强制启用 squashfs，删除 initramfs"
-    
-    # 1. 强制删除所有可能导致仅生成 initramfs 的配置
-    sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS/d' .config
-    sed -i '/^CONFIG_TARGET_INITRAMFS/d' .config
-    sed -i '/^CONFIG_TARGET_ROOTFS_TARGZ/d' .config
-    
-    # 2. 强制启用 squashfs
-    if ! grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null; then
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        log "  ✅ 强制启用 CONFIG_TARGET_ROOTFS_SQUASHFS=y"
-    fi
-    
-    # 3. 禁用所有其他可能会导致只生成 initramfs 的选项
-    echo "# CONFIG_TARGET_ROOTFS_INITRAMFS is not set" >> .config
-    echo "# CONFIG_TARGET_INITRAMFS is not set" >> .config
-    echo "# CONFIG_TARGET_ROOTFS_TARGZ is not set" >> .config
-    
-    # 4. 确保镜像生成选项正确
-    echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_PAD=y" >> .config
-    echo "CONFIG_TARGET_IMAGES_GZIP=y" >> .config
-    
-    # 5. 最终运行 make defconfig 锁定所有配置
-    make defconfig > /dev/null 2>&1 || true
-    
-    # 6. 验证最终配置
-    if grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null; then
-        log "  ⚠️ 警告：CONFIG_TARGET_ROOTFS_INITRAMFS 仍然存在，再次强制删除"
-        sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config
-        echo "# CONFIG_TARGET_ROOTFS_INITRAMFS is not set" >> .config
-        make defconfig > /dev/null 2>&1 || true
-    fi
-    
-    if grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null; then
-        log "  ✅ 最终确认：CONFIG_TARGET_ROOTFS_SQUASHFS=y 已启用"
-    else
-        log "  ❌ 错误：CONFIG_TARGET_ROOTFS_SQUASHFS=y 未启用，手动添加"
-        echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        make defconfig > /dev/null 2>&1 || true
-    fi
-    
-    log "  ✅ 固件格式锁定完成，预期生成 squashfs-sysupgrade.bin"
     
     # ============================================
     # 修正固件名称前缀（根据源码类型）
@@ -6116,39 +6039,20 @@ workflow_step17_check_usb_drivers() {
 
 #【build_firmware_main.sh-36】
 # ============================================
-# 步骤20: 修复网络环境（增强版 - 修复下载失败并替换GNU源）
+# 步骤20: 修复网络环境（增强版 - 修复下载失败）
+# 对应 firmware-build.yml 步骤20
 # ============================================
 workflow_step20_fix_network() {
-    log "=== 步骤20: 修复网络环境（GNU镜像自动替换） ==="
+    log "=== 步骤20: 修复网络环境（增强版 - 修复下载失败） ==="
     
     trap 'echo "⚠️ 步骤20 修复过程中出现错误，继续执行..."' ERR
     
     cd $BUILD_DIR
     
     # ============================================
-    # 自动替换常见下载源为国内镜像（解决 savannah/ftp.gnu 超时）
+    # 修复下载源（针对401/404错误）
     # ============================================
-    log "🔧 扫描并替换不可达的下载源..."
-    
-    local mirror_map=(
-        "git.savannah.gnu.org|git.mirrors.ustc.edu.cn"
-        "ftp.gnu.org|mirrors.ustc.edu.cn"
-        "http://www.kernel.org|https://mirrors.edge.kernel.org"
-    )
-    
-    find package feeds -name "Makefile" -o -name "*.mk" 2>/dev/null | while read mkf; do
-        local modified=0
-        for pair in "${mirror_map[@]}"; do
-            local original="${pair%%|*}"
-            local mirror="${pair##*|}"
-            if grep -q "$original" "$mkf" 2>/dev/null; then
-                cp "$mkf" "$mkf.bakmirror"
-                sed -i "s|${original}|${mirror}|g" "$mkf"
-                log "  ✅ 替换下载源 $original → $mirror 于 $(basename "$mkf")"
-                modified=1
-            fi
-        done
-    done
+    log "🔧 修复下载源（针对401/404错误）..."
     
     # 备份原文件
     if [ -f "feeds.conf.default" ]; then
@@ -6167,9 +6071,11 @@ workflow_step20_fix_network() {
     # 修复trusted-firmware-a下载源
     log "  🔧 修复trusted-firmware-a下载源..."
     
+    # 创建补丁目录
     local patch_dir="package/firmware/trusted-firmware-a/patches"
     mkdir -p "$patch_dir"
     
+    # 创建补丁文件，替换下载源
     cat > "$patch_dir/001-fix-download-url.patch" << 'EOF'
 --- a/package/firmware/trusted-firmware-a/Makefile
 +++ b/package/firmware/trusted-firmware-a/Makefile
@@ -6189,40 +6095,6 @@ EOF
     
     # 调用原有的网络修复函数
     fix_network
-    
-    # 针对 LEDE 源码的额外网络修复
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 LEDE 源码额外网络修复：扫描并替换可能失效的下载地址..."
-        
-        # 常见失效镜像替换为更稳定的源
-        find package feeds -name "Makefile" -o -name "*.mk" 2>/dev/null | while read mkf; do
-            if grep -q 'mirror2\.immortalwrt\.org\|mirror\.immortalwrt\.org\|sources-cdn\.openwrt\.org' "$mkf" 2>/dev/null; then
-                cp "$mkf" "$mkf.netbak"
-                sed -i 's|https://mirror2.immortalwrt.org|https://mirror.nju.edu.cn/immortalwrt|g' "$mkf"
-                sed -i 's|http://mirror.immortalwrt.org|https://mirror.nju.edu.cn/immortalwrt|g' "$mkf"
-                sed -i 's|https://sources-cdn.openwrt.org|https://sources.openwrt.org|g' "$mkf"
-                log "  ✅ 修复下载地址: $mkf"
-            fi
-        done
-        
-        # 确保 Git 操作使用 https 而非 ssh，避免端口限制
-        git config --global url."https://github.com/".insteadOf git@github.com:
-    fi
-    
-    # 如果 dnsmasq-full 将来仍失败，预置备用下载
-    log "🔧 检查并预置可能下载失败的包源码..."
-    if [ -f "package/network/services/dnsmasq/Makefile" ]; then
-        # 提取版本号
-        local dnsver=$(grep -E '^PKG_VERSION' package/network/services/dnsmasq/Makefile | cut -d= -f2 | xargs)
-        if [ -n "$dnsver" ] && [ ! -f "dl/dnsmasq-${dnsver}.tar.xz" ]; then
-            log "  ℹ️ dnsmasq-${dnsver} 源码未下载，尝试备用镜像..."
-            wget -O "dl/dnsmasq-${dnsver}.tar.xz" \
-                "https://mirrors.tuna.tsinghua.edu.cn/openwrt/sources/dnsmasq-${dnsver}.tar.xz" 2>/dev/null || \
-            wget -O "dl/dnsmasq-${dnsver}.tar.xz" \
-                "https://downloads.openwrt.org/sources/dnsmasq-${dnsver}.tar.xz" 2>/dev/null || \
-            log "  ⚠️ 备用下载失败，将继续尝试默认地址"
-        fi
-    fi
     
     # 重新更新feeds
     log "🔄 重新更新feeds（使用修复后的源）..."
@@ -7217,24 +7089,7 @@ workflow_step30_build_summary() {
     echo "  TCP BBR:       ${ENABLE_TCP_BBR:-true}"
     echo "  ath10k-ct强制: ${FORCE_ATH10K_CT:-true}"
     echo "  USB自动修复:   ${AUTO_FIX_USB_DRIVERS:-true}"
-    echo "  禁用IPv6:      ${DISABLE_IPV6:-true}"
     echo ""
-    
-    # 显示 IPv6 禁用状态详情
-    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        echo "🌐 IPv6 禁用详情（所有源码类型通用）:"
-        echo "  - 内核 IPv6 支持: 已禁用"
-        echo "  - ip6tables 相关包: 已禁用"
-        echo "  - odhcp6c/odhcpd: 已禁用"
-        echo "  - 6in4/6rd/6to4 隧道: 已禁用"
-        echo "  - LuCI IPv6 协议: 已禁用"
-        echo "  - IPv6 内核模块: 已禁用"
-        echo "  ✅ 固件将仅支持 IPv4 网络"
-        echo ""
-    else
-        echo "🌐 IPv6 状态: 已启用（默认）"
-        echo ""
-    fi
     
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✅ 构建流程完成"
