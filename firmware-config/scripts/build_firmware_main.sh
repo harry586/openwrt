@@ -6768,7 +6768,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 终版（显示最后50行日志 + 详细诊断）
+# 全流程错误检查函数 - 终版（增强依赖分析）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6793,7 +6793,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 终版"
+        echo "🔍 全流程错误检查 - 终版（增强依赖分析）"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -6820,6 +6820,92 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
+        # ======================== 依赖分析（新增） ========================
+        echo "🔍 依赖链分析 - 定位问题包的来源"
+        echo "----------------------------------------"
+        
+        # 提取所有 OPKG 依赖错误
+        local dep_errors=$(grep -E "pkg_hash_check_unresolved|cannot find dependency" "$log_file" 2>/dev/null)
+        
+        if [ -n "$dep_errors" ]; then
+            echo "📦 发现依赖错误:"
+            echo "$dep_errors" | while IFS= read -r line; do
+                echo "   ⚠️ $line"
+            done
+            echo ""
+            
+            # 解析每个依赖错误，找出问题包
+            local problem_packages=()
+            local missing_deps=()
+            
+            while IFS= read -r line; do
+                # 提取缺少的依赖
+                if [[ "$line" =~ cannot[[:space:]]+find[[:space:]]+dependency[[:space:]]+([^[:space:]]+)[[:space:]]+for[[:space:]]+([^[:space:]]+) ]]; then
+                    missing_deps+=("${BASH_REMATCH[1]}")
+                    problem_packages+=("${BASH_REMATCH[2]}")
+                elif [[ "$line" =~ pkg_hash_check_unresolved:[[:space:]]+cannot[[:space:]]+find[[:space:]]+dependency[[:space:]]+([^[:space:]]+)[[:space:]]+for[[:space:]]+([^[:space:]]+) ]]; then
+                    missing_deps+=("${BASH_REMATCH[1]}")
+                    problem_packages+=("${BASH_REMATCH[2]}")
+                fi
+            done <<< "$dep_errors"
+            
+            # 去重
+            local unique_problems=($(printf "%s\n" "${problem_packages[@]}" | sort -u))
+            local unique_missing=($(printf "%s\n" "${missing_deps[@]}" | sort -u))
+            
+            echo "📊 问题汇总:"
+            echo "   问题包: ${unique_problems[*]}"
+            echo "   缺失依赖: ${unique_missing[*]}"
+            echo ""
+            
+            # 尝试找出哪个包引入了问题包
+            echo "🔎 追溯依赖来源（搜索 .config 和 feeds）:"
+            for problem in "${unique_problems[@]}"; do
+                echo ""
+                echo "   📌 问题包: $problem"
+                
+                # 在 .config 中搜索谁启用了这个包
+                local found_in_config=$(grep -E "^CONFIG_PACKAGE_${problem}=y|^CONFIG_PACKAGE_${problem}=m" .config 2>/dev/null)
+                if [ -n "$found_in_config" ]; then
+                    echo "      ✅ 在 .config 中直接启用: $found_in_config"
+                fi
+                
+                # 搜索可能依赖这个包的包
+                local search_pattern="${problem%-*}"  # 去掉后缀
+                if [ -n "$search_pattern" ] && [ ${#search_pattern} -gt 3 ]; then
+                    local possible_sources=$(grep -l "$search_pattern" .config 2>/dev/null | head -5)
+                    if [ -n "$possible_sources" ]; then
+                        echo "      可能相关的配置:"
+                        grep -E "CONFIG_PACKAGE_.*${search_pattern}" .config 2>/dev/null | head -5 | sed 's/^/         /'
+                    fi
+                fi
+                
+                # 搜索 feeds 中的包定义
+                if [ -d "feeds" ]; then
+                    local feed_location=$(find feeds -type d -name "*${problem}*" 2>/dev/null | head -3)
+                    if [ -n "$feed_location" ]; then
+                        echo "      📁 在 feeds 中的位置:"
+                        echo "$feed_location" | sed 's/^/         /'
+                    fi
+                fi
+            done
+            
+            echo ""
+            echo "💡 解决方案:"
+            for problem in "${unique_problems[@]}"; do
+                echo "   1. 禁用问题包: ${problem}"
+                echo "      在 FORBIDDEN_PACKAGES 中添加: ${problem}"
+            done
+            for missing in "${unique_missing[@]}"; do
+                echo "   2. 安装缺失依赖: ${missing}"
+                echo "      在配置中添加: CONFIG_PACKAGE_${missing}=y"
+            done
+            echo ""
+        else
+            echo "✅ 未发现依赖错误"
+            echo ""
+        fi
+        
         # ======================== 固件生成状态检查 ========================
         echo "🔍 固件生成状态检查"
         echo "----------------------------------------"
@@ -6880,7 +6966,6 @@ quick_error_check() {
             echo "   factory 原厂固件:   $valid_factory 个"
             echo "   initramfs 临时内核: $valid_initramfs 个"
             
-            # 目录完整列表
             echo ""
             echo "   📁 目录完整内容:"
             ls -lhS "$target_dir"/*.bin "$target_dir"/*.img "$target_dir"/*.itb 2>/dev/null | grep -v "cannot access" | sed 's/^/      /'
@@ -6898,7 +6983,6 @@ quick_error_check() {
         local exit_type="unknown"
         local exit_reason=""
         
-        # 检查 make 错误
         local make_errors=$(grep -E 'make(\[[0-9]+\])?: \*\*\*' "$log_file" 2>/dev/null | tail -3)
         if [ -n "$make_errors" ]; then
             echo "   🔴 检测到 make 错误:"
@@ -6907,7 +6991,6 @@ quick_error_check() {
             exit_reason="$make_errors"
         fi
         
-        # 检查 Collected errors
         if grep -q "Collected errors:" "$log_file" 2>/dev/null; then
             echo ""
             echo "   🔴 OPKG 依赖错误:"
@@ -6915,14 +6998,12 @@ quick_error_check() {
             exit_type="error"
         fi
         
-        # 检查 JSON info 错误
         if grep -q "could not find any JSON files" "$log_file" 2>/dev/null; then
             echo ""
             echo "   ⚠️ JSON 信息文件未生成 (缺少有效的固件产物)"
             exit_type="error"
         fi
         
-        # 正常退出
         if grep -q 'make\[1\]: Leaving directory' "$log_file" 2>/dev/null; then
             echo "   🟢 make 正常结束 (世界目标完成)"
             if [ "$exit_type" = "unknown" ]; then
@@ -6931,7 +7012,6 @@ quick_error_check() {
             fi
         fi
         
-        # .config 诊断
         if [ -f ".config" ]; then
             echo ""
             echo "   📋 固件格式配置:"
@@ -6945,14 +7025,6 @@ quick_error_check() {
             fi
             if grep -q "^CONFIG_TARGET_ROOTFS_EXT4FS=y" .config 2>/dev/null; then
                 echo "      ✅ EXT4FS     = 已启用"
-            fi
-            
-            # 关键：检查设备是否支持 squashfs
-            local device_mk=$(find "target/linux/$full_target" -name "*.mk" -exec grep -l "define Device.*$DEVICE" {} \; 2>/dev/null | head -1)
-            if [ -f "$device_mk" ]; then
-                if grep -q "Default root filesystem" "$device_mk" 2>/dev/null; then
-                    echo "      📝 设备默认固件格式: $(grep 'Default root filesystem' "$device_mk" | head -1 | awk -F: '{print $2}' | xargs)"
-                fi
             fi
         fi
         echo ""
@@ -6971,7 +7043,6 @@ quick_error_check() {
         echo "🔍 关键错误/警告搜索:"
         echo "----------------------------------------"
         
-        # 搜索 Error
         local error_lines=$(grep -n "Error\|ERROR\|error:" "$log_file" 2>/dev/null | tail -10)
         if [ -n "$error_lines" ]; then
             echo "   发现以下错误关键字:"
@@ -6980,7 +7051,6 @@ quick_error_check() {
             echo "   ✅ 未发现明显错误"
         fi
         
-        # 搜索 Failed
         local failed_lines=$(grep -n "Failed\|FAILED\|failed:" "$log_file" 2>/dev/null | tail -10)
         if [ -n "$failed_lines" ]; then
             echo ""
@@ -7013,7 +7083,8 @@ quick_error_check() {
             echo "❌ 编译失败，未生成任何有效固件"
             echo ""
             echo "   📝 排查建议:"
-            echo "      - 检查上方错误关键字定位具体失败原因"
+            echo "      - 检查上方依赖分析中的问题包"
+            echo "      - 在 FORBIDDEN_PACKAGES 中添加问题包名称"
             echo "      - 查看完整日志: $build_dir/$log_file"
         fi
         echo "================================================================="
