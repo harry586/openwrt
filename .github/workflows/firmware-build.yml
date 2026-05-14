@@ -137,28 +137,28 @@ jobs:
           echo "=== 步骤01.5: 启动错误监控守护进程 ==="
           mkdir -p /tmp/build-monitor
           cat > /tmp/error_monitor.sh << 'EOF'
-#!/bin/bash
-MONITOR_DIR="/tmp/build-monitor"
-ERROR_LOG="$MONITOR_DIR/errors.log"
-DEP_ERROR_LOG="$MONITOR_DIR/dep_errors.log"
-BUILD_LOG="/mnt/openwrt-build/build.log"
-mkdir -p "$MONITOR_DIR"
-> "$ERROR_LOG"
-> "$DEP_ERROR_LOG"
-echo "[$(date)] 监控守护进程启动" >> "$MONITOR_DIR/events.log"
-WAIT_COUNT=0
-while [ ! -f "$BUILD_LOG" ] && [ $WAIT_COUNT -lt 300 ]; do
-  sleep 2
-  WAIT_COUNT=$((WAIT_COUNT+1))
-done
-tail -f "$BUILD_LOG" 2>/dev/null | while read line; do
-  echo "$line" | grep -qiE "error:|Error|ERROR|failed:|Failed|make.*\*\*\*" && echo "[$(date)] $line" >> "$ERROR_LOG"
-  if echo "$line" | grep -qiE "pkg_hash_check_unresolved|cannot find dependency"; then
-    echo "[$(date)] $line" >> "$DEP_ERROR_LOG"
-    [[ "$line" =~ for[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/problem_packages.txt"
-    [[ "$line" =~ dependency[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/missing_deps.txt"
-  fi
-done
+          #!/bin/bash
+          MONITOR_DIR="/tmp/build-monitor"
+          ERROR_LOG="$MONITOR_DIR/errors.log"
+          DEP_ERROR_LOG="$MONITOR_DIR/dep_errors.log"
+          BUILD_LOG="/mnt/openwrt-build/build.log"
+          mkdir -p "$MONITOR_DIR"
+          > "$ERROR_LOG"
+          > "$DEP_ERROR_LOG"
+          echo "[$(date)] 监控守护进程启动" >> "$MONITOR_DIR/events.log"
+          WAIT_COUNT=0
+          while [ ! -f "$BUILD_LOG" ] && [ $WAIT_COUNT -lt 300 ]; do
+            sleep 2
+            WAIT_COUNT=$((WAIT_COUNT+1))
+          done
+          tail -f "$BUILD_LOG" 2>/dev/null | while read line; do
+            echo "$line" | grep -qiE "error:|Error|ERROR|failed:|Failed|make.*\*\*\*" && echo "[$(date)] $line" >> "$ERROR_LOG"
+            if echo "$line" | grep -qiE "pkg_hash_check_unresolved|cannot find dependency"; then
+              echo "[$(date)] $line" >> "$DEP_ERROR_LOG"
+              [[ "$line" =~ for[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/problem_packages.txt"
+              [[ "$line" =~ dependency[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/missing_deps.txt"
+            fi
+          done
 EOF
           chmod +x /tmp/error_monitor.sh
           /tmp/error_monitor.sh &
