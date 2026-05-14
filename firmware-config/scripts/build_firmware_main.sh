@@ -1586,7 +1586,6 @@ generate_config() {
             cp "defconfig/mt7981-ax3000.config" ".config"
             log "✅ 已应用 Hanwckf 预置配置: defconfig/mt7981-ax3000.config"
         
-            # 锁定设备为 cmcc_rax3000m（NAND）
             sed -i '/^CONFIG_TARGET_mediatek_mt7981_DEVICE_/d' .config
             echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
             echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_emmc is not set" >> .config
@@ -1594,7 +1593,6 @@ generate_config() {
             make defconfig > /tmp/build-logs/defconfig_hanwckf.log 2>&1
             log "✅ 已锁定设备: cmcc_rax3000m (NAND)"
             
-            # 设置正确的平台变量，后续步骤引用
             TARGET="mediatek"
             SUBTARGET="mt7981"
             actual_subtarget="mt7981"
@@ -1606,7 +1604,6 @@ generate_config() {
             handle_error "Hanwckf 预置配置缺失"
         fi
         
-        # 不再在此添加额外包、TCP BBR 等，全部交给后续通用流程
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
@@ -1614,147 +1611,79 @@ generate_config() {
     # 以下为通用流程（immortalwrt/openwrt/lede 均适用）
     # ============================================
     
-    # ============================================
-    # LEDE 源码启动修复（仅在 lede 且非 Hanwckf 时执行）
-    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
         log "🔧 ===== LEDE 源码启动修复 ====="
         
         case "$TARGET" in
             ipq40xx)
-                log "  🔧 IPQ40xx 平台启动修复 (适用于 AC42U 等设备)"
-                
+                log "  🔧 IPQ40xx 平台启动修复"
                 cat >> .config << 'EOF'
-# IPQ40xx 启动必需配置
 CONFIG_CMDLINE_PARTITION=y
 CONFIG_MTD_SPLIT_FIRMWARE=y
 CONFIG_MTD_SPLIT_UIMAGE_FW=y
 CONFIG_MTD_ROOTFS_ROOT_DEV=y
 CONFIG_MTD_ROOTFS_SPLIT=y
 CONFIG_MTD_SPLIT_SQUASHFS=y
-
-# 确保 UBI 支持
 CONFIG_MTD_UBI=y
 CONFIG_UBIFS_FS=y
-CONFIG_UBIFS_FS_XZ=y
-CONFIG_UBIFS_FS_LZO=y
-CONFIG_UBIFS_FS_ZLIB=y
-
-# 内核命令行参数
 CONFIG_CMDLINE="console=ttyMSM0,115200n8"
 CONFIG_CMDLINE_FROM_BOOTLOADER=y
-
-# 看门狗支持
 CONFIG_WATCHDOG=y
 CONFIG_QCOM_WDT=y
-
-# 确保 MTD 支持
 CONFIG_MTD=y
 CONFIG_MTD_BLOCK=y
-CONFIG_MTD_BLOCK_RO=y
-CONFIG_MTD_SPLIT=y
 EOF
                 log "  ✅ IPQ40xx 启动修复配置已添加"
                 ;;
-                
             mediatek)
-                log "  🔧 Mediatek 平台启动修复 (适用于 RAX3000M 等设备)"
-                
+                log "  🔧 Mediatek 平台启动修复"
                 cat >> .config << 'EOF'
-# Mediatek 启动必需配置
 CONFIG_CMDLINE_PARTITION=y
 CONFIG_MTD_SPLIT_FIRMWARE=y
 CONFIG_MTD_SPLIT_UIMAGE_FW=y
-
-# 确保 MTD 和 UBI 支持
 CONFIG_MTD=y
 CONFIG_MTD_BLOCK=y
 CONFIG_MTD_SPLIT=y
 CONFIG_MTD_UBI=y
 CONFIG_UBIFS_FS=y
 CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-CONFIG_SQUASHFS_ZSTD=y
-
-# NAND 支持
 CONFIG_MTD_NAND=y
-CONFIG_MTD_NAND_ECC=y
-CONFIG_MTD_NAND_ECC_SW_HAMMING=y
-CONFIG_MTD_SPI_NAND=y
-
-# 内核命令行参数
 CONFIG_CMDLINE="earlycon=uart8250,mmio32,0x11002000 console=ttyS0,115200n1"
 CONFIG_CMDLINE_FROM_BOOTLOADER=y
-
-# 确保 watchdog 支持
 CONFIG_WATCHDOG=y
 CONFIG_MEDIATEK_WATCHDOG=y
 EOF
                 log "  ✅ Mediatek 启动修复配置已添加"
                 ;;
-                
             ath79)
-                log "  🔧 ATH79 平台启动修复 (适用于 WNDR3800 等设备)"
-                
+                log "  🔧 ATH79 平台启动修复"
                 cat >> .config << 'EOF'
-# ATH79 启动必需配置
 CONFIG_CMDLINE_PARTITION=y
 CONFIG_MTD_SPLIT_FIRMWARE=y
 CONFIG_MTD_SPLIT_UIMAGE_FW=y
-
-# 确保 MTD 支持
 CONFIG_MTD=y
 CONFIG_MTD_BLOCK=y
 CONFIG_MTD_SPLIT=y
 CONFIG_MTD_ROOTFS=y
-
-# 内核命令行参数
 CONFIG_CMDLINE="console=ttyS0,115200"
 CONFIG_CMDLINE_FROM_BOOTLOADER=y
-
-# 确保 watchdog 支持
 CONFIG_WATCHDOG=y
 CONFIG_ATH79_WDT=y
-
-# SquashFS 支持
 CONFIG_SQUASHFS=y
-CONFIG_SQUASHFS_XZ=y
-CONFIG_SQUASHFS_ZLIB=y
-CONFIG_SQUASHFS_LZ4=y
 EOF
                 log "  ✅ ATH79 启动修复配置已添加"
                 ;;
         esac
         
         log "  🔧 LEDE 通用启动修复"
-        
         cat >> .config << 'EOF'
-# LEDE 通用启动修复配置
-# 确保 initramfs 支持
 CONFIG_BLK_DEV_INITRD=y
-CONFIG_INITRAMFS_SOURCE=""
 CONFIG_RD_GZIP=y
-CONFIG_RD_BZIP2=y
-CONFIG_RD_LZMA=y
-CONFIG_RD_XZ=y
-CONFIG_RD_LZO=y
-CONFIG_RD_LZ4=y
-
-# 确保正确的根文件系统类型
 CONFIG_ROOT_NFS=y
-
-# 确保必要的文件系统支持
 CONFIG_EXT4_FS=y
-CONFIG_EXT4_USE_FOR_EXT2=y
-CONFIG_FUSE_FS=y
 CONFIG_MSDOS_FS=y
 CONFIG_VFAT_FS=y
-CONFIG_FAT_DEFAULT_CODEPAGE=437
-CONFIG_FAT_DEFAULT_IOCHARSET="iso8859-1"
 CONFIG_NTFS_FS=y
-CONFIG_NTFS3_FS=y
-
-# 确保网络支持（不影响启动）
 CONFIG_NET=y
 CONFIG_INET=y
 CONFIG_IPV4=y
@@ -1762,122 +1691,36 @@ EOF
         log "  ✅ LEDE 通用启动修复配置已添加"
         
         log "  🔧 检查和修复 LEDE 设备定义文件..."
-        
         local device_mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
         local device_found=0
-        
         for mkfile in $device_mk_files; do
             if grep -q "define Device.*$correct_device" "$mkfile" 2>/dev/null; then
                 device_found=1
                 log "    📁 找到设备定义文件: $mkfile"
-                
                 cp "$mkfile" "$mkfile.bak.lede"
-                
                 if ! grep -q "KERNEL_SIZE" "$mkfile" 2>/dev/null; then
-                    local kernel_size=""
-                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
-                        kernel_size="2097152"
-                    elif grep -q "ac42u\|rt-ac42u" "$mkfile" 2>/dev/null; then
-                        kernel_size="4194304"
-                    elif grep -q "rax3000m" "$mkfile" 2>/dev/null; then
-                        kernel_size="4194304"
-                    else
-                        kernel_size="2097152"
-                    fi
-                    
+                    local kernel_size="2097152"
+                    if grep -q "ac42u\|rt-ac42u" "$mkfile" 2>/dev/null; then kernel_size="4194304"; fi
                     sed -i "/define Device.*$correct_device/a \  KERNEL_SIZE := $kernel_size" "$mkfile"
-                    log "      ✅ 添加 KERNEL_SIZE := $kernel_size"
                 fi
-                
-                if ! grep -q "BLOCKSIZE" "$mkfile" 2>/dev/null; then
-                    local blocksize="256k"
-                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
-                        blocksize="128k"
-                    fi
-                    sed -i "/define Device.*$correct_device/a \  BLOCKSIZE := $blocksize" "$mkfile"
-                    log "      ✅ 添加 BLOCKSIZE := $blocksize"
-                fi
-                
-                if ! grep -q "IMAGE_SIZE" "$mkfile" 2>/dev/null; then
-                    local image_size=""
-                    if grep -q "wndr3800" "$mkfile" 2>/dev/null; then
-                        image_size="15744k"
-                    elif grep -q "ac42u\|rt-ac42u" "$mkfile" 2>/dev/null; then
-                        image_size="32256k"
-                    elif grep -q "rax3000m" "$mkfile" 2>/dev/null; then
-                        image_size="32256k"
-                    fi
-                    
-                    if [ -n "$image_size" ]; then
-                        sed -i "/define Device.*$correct_device/a \  IMAGE_SIZE := $image_size" "$mkfile"
-                        log "      ✅ 添加 IMAGE_SIZE := $image_size"
-                    fi
-                fi
-                
-                if ! grep -q "IMAGE/sysupgrade.bin" "$mkfile" 2>/dev/null; then
-                    case "$TARGET" in
-                        ipq40xx)
-                            echo "define Device/$correct_device" > /tmp/device_temp.txt
-                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | check-size" >> /tmp/device_temp.txt
-                            ;;
-                        mediatek)
-                            echo "define Device/$correct_device" > /tmp/device_temp.txt
-                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-ubi | check-size" >> /tmp/device_temp.txt
-                            ;;
-                        ath79)
-                            echo "define Device/$correct_device" > /tmp/device_temp.txt
-                            echo "  IMAGE/sysupgrade.bin := append-kernel | pad-to \$(KERNEL_SIZE) | append-rootfs | pad-rootfs | append-metadata | check-size" >> /tmp/device_temp.txt
-                            ;;
-                    esac
-                    log "      ℹ️ 建议检查 IMAGE/sysupgrade.bin 定义"
-                fi
-                
                 break
             fi
         done
-        
         if [ $device_found -eq 0 ]; then
-            log "    ⚠️ 未找到设备 $correct_device 的定义文件，跳过修复"
+            log "    ⚠️ 未找到设备 $correct_device 的定义文件"
         fi
         
-        log "  🔧 检查和修复 LEDE 内核补丁..."
-        
-        local patch_dirs=$(find "target/linux/$TARGET" -type d -name "patches-*" 2>/dev/null)
-        
-        for patch_dir in $patch_dirs; do
-            log "    📁 检查补丁目录: $patch_dir"
-            
-            local problem_patches=$(find "$patch_dir" -name "*.patch" -exec grep -l "leds.*color\|function.*LED_FUNCTION" {} \; 2>/dev/null)
-            
-            for patch in $problem_patches; do
-                log "    ⚠️ 发现可能的问题补丁: $(basename "$patch")"
-                mv "$patch" "$patch.disabled" 2>/dev/null || true
-                log "      🔧 已禁用问题补丁: $(basename "$patch").disabled"
-            done
-        done
-        
         log "  🔧 配置正确的镜像格式..."
-        
         case "$TARGET" in
-            ipq40xx)
+            ipq40xx|mediatek)
                 echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
                 echo "CONFIG_TARGET_UBIFS=y" >> .config
-                echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
-                echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
-                ;;
-            mediatek)
-                echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-                echo "CONFIG_TARGET_UBIFS=y" >> .config
-                echo "CONFIG_TARGET_ROOTFS_UBIFS=y" >> .config
-                echo "CONFIG_TARGET_UBIFS_FREE_SPACE_FIXUP=y" >> .config
                 ;;
             ath79)
                 echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
                 ;;
         esac
-        
         log "✅ LEDE 源码启动修复完成"
-        log "======================================"
     fi
     
     # ============================================
@@ -1886,9 +1729,7 @@ EOF
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
-    # 如果不是 Hanwckf 模式，则需要重新生成 device_config
     if [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
-        # 修复：只有当 SUBTARGET 无效（不存在或等于目标名）时才尝试自动查找
         local subtarget_valid=0
         if [ -n "$actual_subtarget" ] && [ "$actual_subtarget" != "$TARGET" ]; then
             if [ -f "target/linux/$TARGET/$actual_subtarget/target.mk" ] || [ -d "target/linux/$TARGET/$actual_subtarget/base-files" ]; then
@@ -1914,7 +1755,7 @@ EOF
                 actual_subtarget="$found_subtarget"
                 log "  ✅ 自动找到子目标: $actual_subtarget"
             else
-                log "  ❌ 无法自动找到子目标，请手动指定"
+                log "  ❌ 无法自动找到子目标"
                 handle_error "无法确定设备子目标"
             fi
         else
@@ -1923,32 +1764,20 @@ EOF
         
         device_config="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}=y"
         log "🔧 标准设备配置格式: $device_config"
-        
         SUBTARGET="$actual_subtarget"
         
-        log "🔧 最终设备配置变量: $device_config"
-        
         if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            log "🔧 LEDE源码特殊处理：先设置目标平台"
+            log "🔧 LEDE源码特殊处理"
             cat > .config << EOF
 CONFIG_TARGET_${TARGET}=y
 CONFIG_TARGET_${TARGET}_${actual_subtarget}=y
 EOF
-            
             if [ -f .config.tmp.lede ]; then
                 cat .config.tmp.lede >> .config
                 rm -f .config.tmp.lede
             fi
-            
-            log "🔄 运行 make defconfig 生成基础配置..."
-            make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || {
-                log "❌ LEDE基础配置失败"
-                handle_error "LEDE基础配置失败"
-            }
-            
-            log "🔧 添加设备配置: ${device_config}"
+            make defconfig > /tmp/build-logs/defconfig_lede_base.log 2>&1 || handle_error "LEDE基础配置失败"
             echo "${device_config}" >> .config
-            
             make olddefconfig > /tmp/build-logs/olddefconfig_lede.log 2>&1 || true
         else
             cat > .config << EOF
@@ -1958,9 +1787,8 @@ ${device_config}
 EOF
         fi
     else
-        # Hanwckf 模式：设备配置已在之前设置，这里只更新 SUBTARGET 环境变量
         SUBTARGET="$actual_subtarget"
-        log "  ✅ Hanwckf 模式，设备配置已锁定: $device_config"
+        log "  ✅ Hanwckf 模式，设备配置已锁定"
     fi
     
     log "🔧 基础配置文件内容:"
@@ -1989,44 +1817,29 @@ EOF
     
     if [ "$CONFIG_MODE" = "base" ]; then
         log "📋 base模式: 只使用 base.config + usb-generic.config"
-        
         if [ -f "$base_config_file" ]; then
             append_config "$base_config_file"
-            log "  ✅ 已添加 base.config"
-        else
-            log "  ⚠️ 未找到 base.config"
         fi
-        
         if [ -f "$usb_generic_file" ]; then
             append_config "$usb_generic_file"
-            log "  ✅ 已添加 usb-generic.config"
-        else
-            log "  ⚠️ 未找到 usb-generic.config"
         fi
     else
         log "📋 normal模式: 使用完整配置组合"
         if [ -f "$device_config_file" ]; then
-            log "📋 找到设备专用配置文件: $device_config_file"
             append_config "$device_config_file"
         else
-            log "📋 未找到设备专用配置文件，使用通用配置组合"
-            
             if [ -f "$base_config_file" ]; then
                 append_config "$base_config_file"
             fi
-            
             if [ -f "$usb_generic_file" ]; then
                 append_config "$usb_generic_file"
             fi
-            
             append_config "$CONFIG_DIR/$TARGET.config"
             append_config "$CONFIG_DIR/$SELECTED_BRANCH.config"
-            
             append_config "$CONFIG_DIR/$CONFIG_NORMAL"
         fi
     fi
     
-    # 添加额外包（统一处理，兼容逗号和分号）
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         local fixed_packages=$(echo "$extra_packages" | sed 's/;/,/g')
@@ -2045,45 +1858,28 @@ EOF
     fi
     
     if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
-        log "✅ TurboACC已启用"
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
         echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-    elif [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
-        log "ℹ️ OpenWrt官方源码跳过TurboACC"
+        log "✅ TurboACC已启用"
     fi
     
-    # 强制启用 ath10k-ct（只对真正可能使用 ath10k 的平台）
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         local force_ath10k=0
         case "$TARGET" in
-            ipq40xx|ipq806x|qcom) force_ath10k=1 ;;
-            ath79) force_ath10k=1 ;;
+            ipq40xx|ipq806x|qcom|ath79) force_ath10k=1 ;;
         esac
         if [ $force_ath10k -eq 1 ]; then
             sed -i '/CONFIG_PACKAGE_kmod-ath10k=y/d' .config
-            sed -i '/CONFIG_PACKAGE_kmod-ath10k-pci=y/d' .config
-            sed -i '/CONFIG_PACKAGE_kmod-ath10k-smallbuffers=y/d' .config
             echo "# CONFIG_PACKAGE_kmod-ath10k is not set" >> .config
-            echo "# CONFIG_PACKAGE_kmod-ath10k-pci is not set" >> .config
-            echo "# CONFIG_PACKAGE_kmod-ath10k-smallbuffers is not set" >> .config
             echo "CONFIG_PACKAGE_kmod-ath10k-ct=y" >> .config
             log "✅ ath10k-ct驱动已强制启用"
-        else
-            log "ℹ️ 当前平台 $TARGET 不需要 ath10k-ct，跳过强制启用"
         fi
     fi
     
     log "🔧 强制配置生成固件..."
-    
-    if grep -q "CONFIG_TARGET_IMAGES_FIT=y" .config; then
-        sed -i 's/^CONFIG_TARGET_IMAGES_FIT=y/# CONFIG_TARGET_IMAGES_FIT is not set/' .config
-        log "  ✅ 禁用 CONFIG_TARGET_IMAGES_FIT"
-    fi
-    
     if ! grep -q "CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config; then
         echo "CONFIG_TARGET_ROOTFS_SQUASHFS=y" >> .config
-        log "  ✅ 强制启用 squashfs 格式"
     fi
     
     cat >> .config << 'EOF'
@@ -2094,39 +1890,21 @@ EOF
     
     case "$TARGET" in
         ipq40xx|ipq806x|qcom)
-            cat >> .config << 'EOF'
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
-CONFIG_TARGET_UBIFS=y
-EOF
-            log "  ✅ 高通平台配置"
+            echo "CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256" >> .config
+            echo "CONFIG_TARGET_UBIFS=y" >> .config
             ;;
         mediatek|ramips)
-            cat >> .config << 'EOF'
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
-CONFIG_TARGET_MTD_SPI_NAND=y
-EOF
-            log "  ✅ 联发科平台配置"
+            echo "CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256" >> .config
+            echo "CONFIG_TARGET_MTD_SPI_NAND=y" >> .config
             ;;
         ath79)
-            cat >> .config << 'EOF'
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256
-CONFIG_TARGET_ROOTFS_INITRAMFS=y
-EOF
-            log "  ✅ ATH79平台配置"
+            echo "CONFIG_TARGET_SQUASHFS_BLOCK_SIZE=256" >> .config
             ;;
     esac
     
-    # ============================================
-    # LEDE 源码最终启动验证和修复（仅在 lede 且非 Hanwckf 时执行）
-    # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
-        log "🔧 ===== LEDE 源码最终启动验证 ====="
-        
+        log "🔧 LEDE 源码最终启动验证"
         if [ -f .config.lede_base_fixed ]; then
-            log "  🔧 合并 LEDE 基础修复配置..."
             while IFS= read -r line; do
                 config_name=$(echo "$line" | cut -d'=' -f1)
                 if ! grep -q "^${config_name}=" .config; then
@@ -2135,43 +1913,6 @@ EOF
             done < .config.lede_base_fixed
             rm -f .config.lede_base_fixed
         fi
-        
-        log "  🔧 验证关键启动配置..."
-        
-        local critical_missing=0
-        
-        if ! grep -q "CONFIG_CMDLINE_PARTITION=y" .config; then
-            echo "CONFIG_CMDLINE_PARTITION=y" >> .config
-            critical_missing=$((critical_missing + 1))
-        fi
-        
-        if ! grep -q "CONFIG_MTD_SPLIT_FIRMWARE=y" .config; then
-            echo "CONFIG_MTD_SPLIT_FIRMWARE=y" >> .config
-            critical_missing=$((critical_missing + 1))
-        fi
-        
-        if ! grep -q "CONFIG_MTD_SPLIT_UIMAGE_FW=y" .config; then
-            echo "CONFIG_MTD_SPLIT_UIMAGE_FW=y" >> .config
-            critical_missing=$((critical_missing + 1))
-        fi
-        
-        if [ $critical_missing -gt 0 ]; then
-            log "    ✅ 添加了 $critical_missing 个缺失的关键配置"
-        else
-            log "    ✅ 所有关键配置都已存在"
-        fi
-        
-        local mtd_missing=0
-        local mtd_configs=("CONFIG_MTD" "CONFIG_MTD_BLOCK" "CONFIG_MTD_SPLIT")
-        for cfg in "${mtd_configs[@]}"; do
-            if ! grep -q "^${cfg}=y" .config; then
-                mtd_missing=$((mtd_missing + 1))
-            fi
-        done
-        if [ $mtd_missing -gt 0 ]; then
-            log "  ⚠️  有 $mtd_missing 个 MTD 相关配置未启用，但可能不影响构建"
-        fi
-        
         log "✅ LEDE 源码最终启动验证完成"
     fi
     
@@ -2179,30 +1920,15 @@ EOF
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
+    # ============================================
+    # 内核配置合并
+    # ============================================
     local kernel_config_file=""
     local kernel_version=""
     local found_kernel=0
     
     if [ "${ENABLE_DYNAMIC_KERNEL_DETECTION:-true}" = "true" ]; then
         if [ -n "$TARGET" ] && [ -d "target/linux/$TARGET" ]; then
-            local device_def_file=""
-            local mk_files=$(find "target/linux/$TARGET" -type f -name "*.mk" 2>/dev/null)
-            for mkfile in $mk_files; do
-                if grep -q "define Device.*$correct_device" "$mkfile" 2>/dev/null; then
-                    device_def_file="$mkfile"
-                    break
-                fi
-            done
-            
-            if [ -n "$device_def_file" ] && [ -f "$device_def_file" ]; then
-                kernel_version=$(awk -F':=' '/^[[:space:]]*KERNEL_PATCHVER[[:space:]]*:=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$device_def_file")
-                if [ -n "$kernel_version" ]; then
-                    kernel_config_file="target/linux/$TARGET/config-$kernel_version"
-                fi
-            fi
-        fi
-        
-        if [ -z "$kernel_config_file" ] || [ ! -f "$kernel_config_file" ]; then
             for ver in ${KERNEL_VERSION_PRIORITY:-6.6 6.1 5.15 5.10 5.4}; do
                 kernel_config_file="target/linux/$TARGET/config-$ver"
                 if [ -f "$kernel_config_file" ]; then
@@ -2211,615 +1937,152 @@ EOF
                     break
                 fi
             done
-        else
-            found_kernel=1
         fi
     fi
     
     if [ $found_kernel -eq 1 ] && [ -f "$kernel_config_file" ]; then
-        log "✅ 使用内核配置文件: $kernel_config_file (内核版本 $kernel_version)"
-        
+        log "✅ 使用内核配置文件: $kernel_config_file"
         local kernel_patterns=(
             "^CONFIG_USB"
             "^CONFIG_PHY"
             "^CONFIG_DWC"
             "^CONFIG_XHCI"
             "^CONFIG_EXTCON"
-            "^CONFIG_COMMON_CLK"
-            "^CONFIG_ARCH"
         )
-        
         if [ ${#KERNEL_EXTRACT_PATTERNS[@]} -gt 0 ]; then
             kernel_patterns=("${KERNEL_EXTRACT_PATTERNS[@]}")
         fi
-        
-        local usb_configs_file="/tmp/usb_configs_$$.txt"
-        
         for pattern in "${kernel_patterns[@]}"; do
-            grep -E "^${pattern}|^# ${pattern}" "$kernel_config_file" >> "$usb_configs_file" 2>/dev/null || true
+            grep -E "^${pattern}" "$kernel_config_file" >> .config 2>/dev/null || true
         done
-        
-        sort -u "$usb_configs_file" > "$usb_configs_file.sorted"
-        
-        local config_count=$(wc -l < "$usb_configs_file.sorted")
-        log "找到 $config_count 个USB相关内核配置"
-        
-        local added_count=0
-        while read line; do
-            local config_name=$(echo "$line" | sed 's/^# //g' | cut -d'=' -f1 | cut -d' ' -f1)
-            
-            if ! grep -q "^${config_name}=" .config && ! grep -q "^# ${config_name} is not set" .config; then
-                if echo "$line" | grep -q "=y$"; then
-                    echo "$line" >> .config
-                    added_count=$((added_count + 1))
-                elif echo "$line" | grep -q "is not set"; then
-                    echo "$line" >> .config
-                    added_count=$((added_count + 1))
-                fi
-            fi
-        done < "$usb_configs_file.sorted"
-        
-        log "✅ 添加了 $added_count 个新的内核配置"
-        
-        rm -f "$usb_configs_file" "$usb_configs_file.sorted"
-    else
-        if [ "${DEBUG:-false}" = "true" ]; then
-            log "ℹ️ 未找到目标平台 $TARGET 的内核配置文件，跳过内核配置添加"
-        fi
     fi
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔄 LEDE使用 olddefconfig 更新配置..."
-        make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
-            log "⚠️ 第一次 olddefconfig 有警告，但继续"
-        }
+        make olddefconfig > /tmp/build-logs/defconfig1.log 2>&1 || true
     else
-        log "🔄 第一次运行 make defconfig..."
-        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || {
-            log "❌ 第一次 make defconfig 失败"
-            tail -50 /tmp/build-logs/defconfig1.log
-            handle_error "第一次依赖解决失败"
-        }
+        make defconfig > /tmp/build-logs/defconfig1.log 2>&1 || handle_error "make defconfig失败"
     fi
     log "✅ 第一次配置更新成功"
     
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
-            log "⚠️ olddefconfig 有警告，但继续"
-        }
-    else
-        make defconfig > /tmp/build-logs/defconfig_bin_format.log 2>&1 || {
-            log "⚠️ make defconfig 有警告，但继续"
-        }
-    fi
-    
-    log "🔍 动态检测实际生效的USB内核配置..."
-    
-    local usb_components=(
-        "USB_SUPPORT"
-        "USB_COMMON"
-        "USB"
-        "USB_XHCI_HCD"
-        "USB_DWC3"
-        "PHY"
-    )
-    
-    for component in "${usb_components[@]}"; do
-        local matches=$(grep -E "^CONFIG_${component}" .config | grep -E "=y|=m" | wc -l)
-        if [ $matches -gt 0 ]; then
-            log "✅ $component 相关配置: 找到 $matches 个"
-        fi
-    done
-    
+    # ============================================
+    # USB 软件包动态添加
+    # ============================================
     log "📋 动态添加USB软件包..."
     
     local base_usb_packages=(
-        "kmod-usb-core"
-        "kmod-usb-common"
-        "kmod-usb2"
-        "kmod-usb3"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-        "block-mount"
-        "automount"
-        "usbutils"
+        "kmod-usb-core" "kmod-usb-common" "kmod-usb2" "kmod-usb3"
+        "kmod-usb-storage" "kmod-scsi-core" "block-mount" "automount" "usbutils"
     )
-    
     local extended_usb_packages=(
-        "kmod-usb-storage-uas"
-        "kmod-usb-storage-extras"
-        "kmod-scsi-generic"
+        "kmod-usb-storage-uas" "kmod-usb-storage-extras" "kmod-scsi-generic"
     )
-    
     local fs_support_packages=(
-        "kmod-fs-ext4"
-        "kmod-fs-vfat"
-        "kmod-fs-exfat"
-        "kmod-fs-ntfs3"
-        "kmod-nls-utf8"
-        "kmod-nls-cp936"
+        "kmod-fs-ext4" "kmod-fs-vfat" "kmod-fs-exfat" "kmod-fs-ntfs3"
+        "kmod-nls-utf8" "kmod-nls-cp936"
     )
     
     if [ ${#BASE_USB_PACKAGES[@]} -gt 0 ]; then
         base_usb_packages=("${BASE_USB_PACKAGES[@]}")
     fi
-    
     if [ ${#EXTENDED_USB_PACKAGES[@]} -gt 0 ]; then
         extended_usb_packages=("${EXTENDED_USB_PACKAGES[@]}")
     fi
-    
     if [ ${#FS_SUPPORT_PACKAGES[@]} -gt 0 ]; then
         fs_support_packages=("${FS_SUPPORT_PACKAGES[@]}")
     fi
     
     case "$TARGET" in
         ipq40xx|ipq806x|qcom)
-            log "检测到高通平台，添加专用USB驱动..."
-            local qcom_packages=(
-                "kmod-usb-dwc3"
-                "kmod-usb-dwc3-qcom"
-                "kmod-usb-dwc3-of-simple"
-                "kmod-phy-qcom-ipq4019-usb"
-                "kmod-usb-xhci-hcd"
-                "kmod-usb-xhci-plat-hcd"
-            )
-            base_usb_packages+=("${qcom_packages[@]}")
+            base_usb_packages+=("kmod-usb-dwc3" "kmod-usb-dwc3-qcom" "kmod-usb-xhci-hcd")
             ;;
         mediatek|ramips)
-            log "检测到联发科平台，添加专用USB驱动..."
-            local mtk_packages=(
-                "kmod-usb-xhci-mtk"
-                "kmod-usb-dwc3"
-                "kmod-usb-dwc3-mediatek"
-            )
-            base_usb_packages+=("${mtk_packages[@]}")
+            base_usb_packages+=("kmod-usb-xhci-mtk" "kmod-usb-dwc3")
             ;;
         ath79)
-            log "检测到ATH79平台，添加专用USB驱动..."
-            local ath79_packages=(
-                "kmod-usb2-ath79"
-                "kmod-usb-ohci"
-            )
-            base_usb_packages+=("${ath79_packages[@]}")
+            base_usb_packages+=("kmod-usb2-ath79" "kmod-usb-ohci")
             ;;
     esac
     
-    local added_packages=0
-    local existing_packages=0
-    while read pkg; do
-        [ -z "$pkg" ] && continue
+    for pkg in "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}"; do
         if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config && ! grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
             echo "CONFIG_PACKAGE_${pkg}=y" >> .config
-            added_packages=$((added_packages + 1))
-            log "  ✅ 添加软件包: $pkg"
-        else
-            existing_packages=$((existing_packages + 1))
         fi
-    done < <(printf "%s\n" "${base_usb_packages[@]}" "${extended_usb_packages[@]}" "${fs_support_packages[@]}" | sort -u)
-    
-    log "📊 USB软件包统计: 新增 $added_packages 个, 已存在 $existing_packages 个"
+    done
     
     log "🔄 第二次去重配置..."
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔄 LEDE第二次使用 olddefconfig..."
-        make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-            log "⚠️ 第二次 olddefconfig 有警告，但继续..."
-        }
+        make olddefconfig > /tmp/build-logs/defconfig2.log 2>&1 || true
     else
-        log "🔄 第二次运行 make defconfig..."
-        make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || {
-            log "⚠️ 第二次 make defconfig 有警告，但继续..."
-        }
+        make defconfig > /tmp/build-logs/defconfig2.log 2>&1 || true
     fi
     log "✅ 第二次配置更新完成"
     
-    log "🔍 验证关键USB驱动状态..."
-    
-    local critical_usb_drivers=(
-        "kmod-usb-core"
-        "kmod-usb2"
-        "kmod-usb-storage"
-        "kmod-scsi-core"
-    )
-    
-    if [ ${#CRITICAL_USB_DRIVERS[@]} -gt 0 ]; then
-        critical_usb_drivers=("${CRITICAL_USB_DRIVERS[@]}")
-    fi
-    
-    case "$TARGET" in
-        ipq40xx|ipq806x|qcom)
-            critical_usb_drivers+=(
-                "kmod-usb-dwc3"
-                "kmod-usb-dwc3-qcom"
-            )
-            ;;
-        mediatek|ramips)
-            critical_usb_drivers+=(
-                "kmod-usb-xhci-mtk"
-            )
-            ;;
-    esac
-    
-    local missing_drivers=()
-    for driver in "${critical_usb_drivers[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${driver}=y" .config; then
-            log "  ✅ $driver: 已启用"
-        elif grep -q "^CONFIG_PACKAGE_${driver}=m" .config; then
-            log "  📦 $driver: 模块化"
-        else
-            log "  ❌ $driver: 未启用"
-            missing_drivers+=("$driver")
-        fi
-    done
-    
-    if [ ${#missing_drivers[@]} -gt 0 ] && [ "${AUTO_FIX_USB_DRIVERS:-true}" = "true" ]; then
-        log "🔧 自动修复缺失驱动..."
-        for driver in "${missing_drivers[@]}"; do
-            echo "CONFIG_PACKAGE_${driver}=y" >> .config
-            log "  ✅ 已添加: $driver"
-        done
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1 || true
-        else
-            make defconfig > /dev/null 2>&1
-        fi
-    fi
-    
     # ============================================
-    # 验证设备配置
+    # 禁用插件
     # ============================================
-    log "🔍 正在验证设备 $correct_device 是否被选中..."
-    
-    make defconfig > /tmp/build-logs/defconfig_final.log 2>&1 || true
-    
-    local found_config=""
-    local search_pattern=""
-    
-    search_pattern="CONFIG_TARGET_${TARGET}_${actual_subtarget}_DEVICE_${correct_device}"
-    
-    found_config=$(grep -E "^${search_pattern}=y" .config 2>/dev/null | head -1)
-    
-    if [ -n "$found_config" ]; then
-        log "✅ 找到设备配置: $found_config"
-        device_config="$found_config"
-    else
-        log "⚠️ 未找到设备配置 $search_pattern"
-        log "📋 当前 .config 中的设备配置:"
-        grep "CONFIG_TARGET.*DEVICE" .config 2>/dev/null | head -10 | while read line; do
-            log "  $line"
-        done
-    fi
-    
-    if [ -n "$device_config" ]; then
-        sed -i "/^CONFIG_TARGET_${TARGET}.*DEVICE_/d" .config
-        echo "$device_config" >> .config
-        
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        
-        make defconfig > /tmp/build-logs/defconfig_force_device.log 2>&1 || true
-        
-        if grep -q "$device_config" .config; then
-            log "✅ 设备配置已成功设置: $device_config"
-        else
-            log "⚠️ 设备配置设置可能失败"
-        fi
-    fi
-    
-    local total_configs=$(wc -l < .config)
-    local enabled_packages=$(grep -c "^CONFIG_PACKAGE_.*=y$" .config)
-    local module_packages=$(grep -c "^CONFIG_PACKAGE_.*=m$" .config)
-    local disabled_packages=$(grep -c "^# CONFIG_PACKAGE_.* is not set$" .config)
-    
-    log "📊 配置统计:"
-    log "  总配置行数: $total_configs"
-    log "  启用软件包: $enabled_packages"
-    log "  模块化软件包: $module_packages"
-    log "  禁用软件包: $disabled_packages"
-    
-    log "🔧 ===== 全面禁用不需要的插件 ===== "
+    log "🔧 ===== 全面禁用不需要的插件 ====="
     
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     log "📋 基础禁用插件: $base_forbidden"
-    
-    local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
-    log "📋 完整禁用插件列表 (${#full_forbidden_list[@]} 个)"
     
     local search_keywords=()
     IFS=' ' read -ra BASE_PKGS <<< "$base_forbidden"
     for pkg in "${BASE_PKGS[@]}"; do
         search_keywords+=("$pkg")
         search_keywords+=("luci-app-${pkg}")
-        search_keywords+=("${pkg}-scripts")
     done
     
-    log "🔧 第一轮：彻底删除源文件..."
     for keyword in "${search_keywords[@]}"; do
-        if [ -d "package/feeds" ]; then
-            find package/feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除 package/feeds: $dir"
-                rm -rf "$dir"
-            done
-        fi
-        if [ -d "feeds" ]; then
-            find feeds -type d -name "*${keyword}*" 2>/dev/null | while read dir; do
-                log "  🗑️ 删除 feeds: $dir"
-                rm -rf "$dir"
-            done
-        fi
+        sed -i "/^CONFIG_PACKAGE_${keyword}=y/d" .config
+        sed -i "/^CONFIG_PACKAGE_${keyword}=m/d" .config
+        echo "# CONFIG_PACKAGE_${keyword} is not set" >> .config
     done
     
-    log "🔧 特别处理 vsftpd 冲突问题..."
-    find package/feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-        log "  🗑️ 删除 vsftpd-alt 目录: $dir"
-        rm -rf "$dir"
-    done
-    find feeds -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-        log "  🗑️ 删除 feeds vsftpd-alt 目录: $dir"
-        rm -rf "$dir"
-    done
-    find package -type d -name "*vsftpd-alt*" 2>/dev/null | while read dir; do
-        log "  🗑️ 删除 package vsftpd-alt 目录: $dir"
-        rm -rf "$dir"
-    done
-    
-    log "📋 第二轮：在 .config 中禁用所有相关包..."
-    
-    local disable_temp=$(mktemp)
-    for plugin in "${full_forbidden_list[@]}"; do
-        echo "$plugin" >> "$disable_temp"
-    done
-    
-    echo "vsftpd-alt" >> "$disable_temp"
-    
-    sort -u "$disable_temp" > "$disable_temp.sorted"
-    
-    while read plugin; do
-        [ -z "$plugin" ] && continue
-        sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-        sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-        sed -i "/CONFIG_PACKAGE_.*${plugin}/d" .config
-        echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-    done < "$disable_temp.sorted"
-    
-    rm -f "$disable_temp" "$disable_temp.sorted"
-    
-    log "🔧 第三轮：删除所有包含关键字的配置行..."
-    for keyword in "${search_keywords[@]}"; do
-        sed -i "/${keyword}/d" .config
-        local upper_keyword=$(echo "$keyword" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-        sed -i "/${upper_keyword}/d" .config
-    done
-    
-    sed -i "/vsftpd-alt/d" .config
-    sed -i "/VSFTPD-ALT/d" .config
-    
-    log "🔧 特别处理 DDNS 相关配置..."
+    # ============================================
+    # 强制删除 ddns 相关配置（修复 LEDE 源码问题）
+    # ============================================
+    log "🔧 ===== 强制删除 DDNS 相关配置 ====="
     sed -i '/ddns/d' .config
     sed -i '/DDNS/d' .config
-    
-    log "🔧 确保 vsftpd 被启用..."
-    if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
-        log "  ✅ 已启用 vsftpd"
-    fi
-    
-    log "✅ 禁用完成"
-    
-    sort .config | uniq > .config.tmp
-    mv .config.tmp .config
+    echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
+    echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
+    echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
+    log "✅ DDNS 配置已强制删除"
     
     log "🔄 运行 make defconfig 使禁用生效..."
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-            log "⚠️ olddefconfig 有警告，但继续..."
-        }
+        make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || true
     else
-        make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
-            log "⚠️ make defconfig 有警告，但继续..."
-        }
-    fi
-    
-    log "🔍 第四轮：检查插件残留..."
-    
-    local remaining=()
-    local check_temp=$(mktemp)
-    
-    for plugin in "${full_forbidden_list[@]}"; do
-        echo "$plugin" >> "$check_temp"
-    done
-    
-    echo "vsftpd-alt" >> "$check_temp"
-    
-    sort -u "$check_temp" > "$check_temp.sorted"
-    
-    while read plugin; do
-        [ -z "$plugin" ] && continue
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_${plugin}=m" .config; then
-            remaining+=("$plugin")
-        fi
-    done < "$check_temp.sorted"
-    
-    rm -f "$check_temp" "$check_temp.sorted"
-    
-    if [ ${#remaining[@]} -gt 0 ]; then
-        log "⚠️ 发现 ${#remaining[@]} 个插件残留，第四轮禁用..."
-        
-        for plugin in "${remaining[@]}"; do
-            sed -i "/^CONFIG_PACKAGE_${plugin}=y/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}=m/d" .config
-            sed -i "/^CONFIG_PACKAGE_${plugin}_/d" .config
-            echo "# CONFIG_PACKAGE_${plugin} is not set" >> .config
-            log "  ✅ 再次禁用: $plugin"
-        done
-        
-        sort .config | uniq > .config.tmp
-        mv .config.tmp .config
-        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-            make olddefconfig > /dev/null 2>&1 || true
-        else
-            make defconfig > /dev/null 2>&1
-        fi
-    fi
-    
-    log "📊 最终插件状态验证:"
-    local still_enabled=0
-    
-    for plugin in "${BASE_PKGS[@]}"; do
-        if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
-            log "  ❌ $plugin 相关包仍被启用"
-            still_enabled=$((still_enabled + 1))
-        elif grep -q "^CONFIG_PACKAGE_${plugin}=m" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=m" .config; then
-            log "  ❌ $plugin 相关包仍被模块化"
-            still_enabled=$((still_enabled + 1))
-        else
-            log "  ✅ $plugin 已禁用"
-        fi
-    done
-    
-    if grep -q "^CONFIG_PACKAGE_vsftpd-alt=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd-alt=m" .config; then
-        log "  ❌ vsftpd-alt 仍被启用"
-        still_enabled=$((still_enabled + 1))
-    else
-        log "  ✅ vsftpd-alt 已禁用"
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_vsftpd=y" .config || grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
-        log "  ✅ vsftpd 已启用"
-    else
-        log "  ⚠️ vsftpd 未启用，尝试启用"
-        echo "CONFIG_PACKAGE_vsftpd=y" >> .config
+        make defconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || true
     fi
     
     # ============================================
-    # LEDE 源码最终启动配置验证（仅在 lede 且非 Hanwckf 时执行）
+    # 修正固件名称前缀
     # ============================================
-    if [ $still_enabled -eq 0 ]; then
-        log "🎉 所有指定插件已成功禁用"
-    else
-        log "⚠️ 有 $still_enabled 个插件未能禁用，将在后续阶段再次尝试"
-    fi
-    
-    # ============================================
-    # 修正固件名称前缀（根据源码类型）
-    # ============================================
-    log "🔧 修正固件名称前缀（根据源码类型）..."
-    
+    log "🔧 修正固件名称前缀"
     local vendor_prefix=""
     local dist_name=""
     case "$SOURCE_REPO_TYPE" in
-        "immortalwrt")
-            vendor_prefix="immortalwrt"
-            dist_name="ImmortalWrt"
-            ;;
-        "lede")
-            vendor_prefix="lede"
-            dist_name="LEDE"
-            ;;
-        "openwrt")
-            vendor_prefix="openwrt"
-            dist_name="OpenWrt"
-            ;;
-        *)
-            vendor_prefix=$(echo "$SOURCE_REPO_TYPE" | tr '[:upper:]' '[:lower:]')
-            dist_name=$(echo "$SOURCE_REPO_TYPE" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-            ;;
+        "immortalwrt") vendor_prefix="immortalwrt"; dist_name="ImmortalWrt" ;;
+        "lede") vendor_prefix="lede"; dist_name="LEDE" ;;
+        "openwrt") vendor_prefix="openwrt"; dist_name="OpenWrt" ;;
+        *) vendor_prefix=$(echo "$SOURCE_REPO_TYPE" | tr '[:upper:]' '[:lower:]') ;;
     esac
     
-    log "  📌 源码类型: $SOURCE_REPO_TYPE"
-    log "  📌 固件前缀: $vendor_prefix"
-    log "  📌 发行版名称: $dist_name"
-    
     sed -i '/^CONFIG_VERSION_DIST=/d' .config
-    sed -i '/^# CONFIG_VERSION_DIST/d' .config
     echo "CONFIG_VERSION_DIST=\"$dist_name\"" >> .config
-    log "    ✅ 设置 CONFIG_VERSION_DIST=\"$dist_name\""
-    
-    sed -i '/^CONFIG_VERSION_REPO=/d' .config
-    sed -i '/^# CONFIG_VERSION_REPO/d' .config
-    echo "CONFIG_VERSION_REPO=\"https://github.com/$SOURCE_REPO_TYPE/$SOURCE_REPO_TYPE.git\"" >> .config
-    log "    ✅ 设置 CONFIG_VERSION_REPO"
-    
     sed -i '/^CONFIG_VERSION_CODE_FILENAME=/d' .config
-    sed -i '/^# CONFIG_VERSION_CODE_FILENAME/d' .config
     echo "CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\"" >> .config
-    log "    ✅ 设置 CONFIG_VERSION_CODE_FILENAME=\"$vendor_prefix\""
-    
-    sed -i '/^CONFIG_VERSION_MANUFACTURER=/d' .config
-    sed -i '/^# CONFIG_VERSION_MANUFACTURER/d' .config
-    echo "CONFIG_VERSION_MANUFACTURER=\"$vendor_prefix\"" >> .config
-    log "    ✅ 设置 CONFIG_VERSION_MANUFACTURER=\"$vendor_prefix\""
     
     if [ -f "include/version.mk" ]; then
-        cp include/version.mk include/version.mk.bak
         sed -i "s/VERSION_DIST:=.*/VERSION_DIST:=$dist_name/g" include/version.mk
-        sed -i "s/VERSION_REPO:=.*/VERSION_REPO:=https:\/\/github.com\/$SOURCE_REPO_TYPE\/$SOURCE_REPO_TYPE.git/g" include/version.mk
-        sed -i "s/VERSION_CODE_FILENAME:=.*/VERSION_CODE_FILENAME:=$vendor_prefix/g" include/version.mk
-        sed -i "s/VERSION_MANUFACTURER:=.*/VERSION_MANUFACTURER:=$vendor_prefix/g" include/version.mk
-        log "    ✅ 修改 include/version.mk"
-        rm -f include/version.mk.bak
-    fi
-    
-    if [ -f "include/image.mk" ]; then
-        cp include/image.mk include/image.mk.bak
-        sed -i "s/openwrt-/$vendor_prefix-/g" include/image.mk
-        sed -i "s/immortalwrt-/$vendor_prefix-/g" include/image.mk
-        sed -i "s/lede-/$vendor_prefix-/g" include/image.mk
-        sed -i "s/OpenWrt-/$vendor_prefix-/g" include/image.mk
-        sed -i "s/ImmortalWrt-/$vendor_prefix-/g" include/image.mk
-        sed -i "s/LEDE-/$vendor_prefix-/g" include/image.mk
-        log "    ✅ 修改 include/image.mk 中的前缀"
-        rm -f include/image.mk.bak
-    fi
-    
-    local image_mk="target/linux/$TARGET/image/$actual_subtarget.mk"
-    if [ -f "$image_mk" ]; then
-        cp "$image_mk" "$image_mk.bak"
-        sed -i "s/openwrt-/$vendor_prefix-/g" "$image_mk"
-        sed -i "s/immortalwrt-/$vendor_prefix-/g" "$image_mk"
-        sed -i "s/lede-/$vendor_prefix-/g" "$image_mk"
-        sed -i "s/OpenWrt/$vendor_prefix/g" "$image_mk"
-        sed -i "s/ImmortalWrt/$vendor_prefix/g" "$image_mk"
-        sed -i "s/LEDE/$vendor_prefix/g" "$image_mk"
-        log "    ✅ 修改 $image_mk"
-        rm -f "$image_mk.bak"
-    fi
-    
-    if [ -f "target/linux/$TARGET/image/Makefile" ]; then
-        cp "target/linux/$TARGET/image/Makefile" "target/linux/$TARGET/image/Makefile.bak"
-        sed -i "s/openwrt-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
-        sed -i "s/immortalwrt-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
-        sed -i "s/lede-/$vendor_prefix-/g" "target/linux/$TARGET/image/Makefile"
-        log "    ✅ 修改 target/linux/$TARGET/image/Makefile"
-        rm -f "target/linux/$TARGET/image/Makefile.bak"
-    fi
-    
-    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "  🔧 LEDE 源码特殊处理..."
-        if [ -f "feeds.conf.default" ]; then
-            sed -i 's/^# CONFIG_VERSION_DIST=.*/CONFIG_VERSION_DIST="LEDE"/g' feeds.conf.default 2>/dev/null || true
-        fi
-        if [ -f "package/base-files/files/etc/openwrt_release" ]; then
-            sed -i 's/DISTRIB_ID=.*/DISTRIB_ID="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
-            sed -i 's/DISTRIB_RELEASE=.*/DISTRIB_RELEASE="LEDE"/g' package/base-files/files/etc/openwrt_release 2>/dev/null || true
-        fi
-        log "    ✅ LEDE 特殊配置已应用"
     fi
     
     make defconfig > /dev/null 2>&1 || true
-    
-    log "✅ 固件名称前缀修正完成"
-    log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
-    
-    # ============================================
-    # 显示已应用补丁状态（动态）
-    # ============================================
-    log "🔍 检查已应用补丁状态..."
-    show_patch_status
-    
     log "✅ 配置生成完成"
 }
 #【build_firmware_main.sh-13-end】
