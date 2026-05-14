@@ -136,30 +136,28 @@ jobs:
         run: |
           echo "=== 步骤01.5: 启动错误监控守护进程 ==="
           mkdir -p /tmp/build-monitor
-          cat > /tmp/error_monitor.sh << 'EOF'
-          #!/bin/bash
-          MONITOR_DIR="/tmp/build-monitor"
-          ERROR_LOG="$MONITOR_DIR/errors.log"
-          DEP_ERROR_LOG="$MONITOR_DIR/dep_errors.log"
-          BUILD_LOG="/mnt/openwrt-build/build.log"
-          mkdir -p "$MONITOR_DIR"
-          > "$ERROR_LOG"
-          > "$DEP_ERROR_LOG"
-          echo "[$(date)] 监控守护进程启动" >> "$MONITOR_DIR/events.log"
-          WAIT_COUNT=0
-          while [ ! -f "$BUILD_LOG" ] && [ $WAIT_COUNT -lt 300 ]; do
-            sleep 2
-            WAIT_COUNT=$((WAIT_COUNT+1))
-          done
-          tail -f "$BUILD_LOG" 2>/dev/null | while read line; do
-            echo "$line" | grep -qiE "error:|Error|ERROR|failed:|Failed|make.*\*\*\*" && echo "[$(date)] $line" >> "$ERROR_LOG"
-            if echo "$line" | grep -qiE "pkg_hash_check_unresolved|cannot find dependency"; then
-              echo "[$(date)] $line" >> "$DEP_ERROR_LOG"
-              [[ "$line" =~ for[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/problem_packages.txt"
-              [[ "$line" =~ dependency[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/missing_deps.txt"
-            fi
-          done
-EOF
+          printf '%s\n' '#!/bin/bash' > /tmp/error_monitor.sh
+          printf '%s\n' 'MONITOR_DIR="/tmp/build-monitor"' >> /tmp/error_monitor.sh
+          printf '%s\n' 'ERROR_LOG="$MONITOR_DIR/errors.log"' >> /tmp/error_monitor.sh
+          printf '%s\n' 'DEP_ERROR_LOG="$MONITOR_DIR/dep_errors.log"' >> /tmp/error_monitor.sh
+          printf '%s\n' 'BUILD_LOG="/mnt/openwrt-build/build.log"' >> /tmp/error_monitor.sh
+          printf '%s\n' 'mkdir -p "$MONITOR_DIR"' >> /tmp/error_monitor.sh
+          printf '%s\n' '> "$ERROR_LOG"' >> /tmp/error_monitor.sh
+          printf '%s\n' '> "$DEP_ERROR_LOG"' >> /tmp/error_monitor.sh
+          printf '%s\n' 'echo "[$(date)] 监控守护进程启动" >> "$MONITOR_DIR/events.log"' >> /tmp/error_monitor.sh
+          printf '%s\n' 'WAIT_COUNT=0' >> /tmp/error_monitor.sh
+          printf '%s\n' 'while [ ! -f "$BUILD_LOG" ] && [ $WAIT_COUNT -lt 300 ]; do' >> /tmp/error_monitor.sh
+          printf '%s\n' '  sleep 2' >> /tmp/error_monitor.sh
+          printf '%s\n' '  WAIT_COUNT=$((WAIT_COUNT+1))' >> /tmp/error_monitor.sh
+          printf '%s\n' 'done' >> /tmp/error_monitor.sh
+          printf '%s\n' 'tail -f "$BUILD_LOG" 2>/dev/null | while read line; do' >> /tmp/error_monitor.sh
+          printf '%s\n' '  echo "$line" | grep -qiE "error:|Error|ERROR|failed:|Failed|make.*\*\*\*" && echo "[$(date)] $line" >> "$ERROR_LOG"' >> /tmp/error_monitor.sh
+          printf '%s\n' '  if echo "$line" | grep -qiE "pkg_hash_check_unresolved|cannot find dependency"; then' >> /tmp/error_monitor.sh
+          printf '%s\n' '    echo "[$(date)] $line" >> "$DEP_ERROR_LOG"' >> /tmp/error_monitor.sh
+          printf '%s\n' '    [[ "$line" =~ for[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/problem_packages.txt"' >> /tmp/error_monitor.sh
+          printf '%s\n' '    [[ "$line" =~ dependency[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/missing_deps.txt"' >> /tmp/error_monitor.sh
+          printf '%s\n' '  fi' >> /tmp/error_monitor.sh
+          printf '%s\n' 'done' >> /tmp/error_monitor.sh
           chmod +x /tmp/error_monitor.sh
           /tmp/error_monitor.sh &
           echo "MONITOR_PID=$!" >> $GITHUB_ENV
