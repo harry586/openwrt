@@ -1,6 +1,6 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 4.2.0
+# 版本: 4.4.0
 # 最后更新: 2026-05-14
 
 name: OpenWrt 智能固件构建工作流
@@ -136,28 +136,28 @@ jobs:
         run: |
           echo "=== 步骤01.5: 启动错误监控守护进程 ==="
           mkdir -p /tmp/build-monitor
-          printf '%s\n' '#!/bin/bash' > /tmp/error_monitor.sh
-          printf '%s\n' 'MONITOR_DIR="/tmp/build-monitor"' >> /tmp/error_monitor.sh
-          printf '%s\n' 'ERROR_LOG="$MONITOR_DIR/errors.log"' >> /tmp/error_monitor.sh
-          printf '%s\n' 'DEP_ERROR_LOG="$MONITOR_DIR/dep_errors.log"' >> /tmp/error_monitor.sh
-          printf '%s\n' 'BUILD_LOG="/mnt/openwrt-build/build.log"' >> /tmp/error_monitor.sh
-          printf '%s\n' 'mkdir -p "$MONITOR_DIR"' >> /tmp/error_monitor.sh
-          printf '%s\n' '> "$ERROR_LOG"' >> /tmp/error_monitor.sh
-          printf '%s\n' '> "$DEP_ERROR_LOG"' >> /tmp/error_monitor.sh
-          printf '%s\n' 'echo "[$(date)] 监控守护进程启动" >> "$MONITOR_DIR/events.log"' >> /tmp/error_monitor.sh
-          printf '%s\n' 'WAIT_COUNT=0' >> /tmp/error_monitor.sh
-          printf '%s\n' 'while [ ! -f "$BUILD_LOG" ] && [ $WAIT_COUNT -lt 300 ]; do' >> /tmp/error_monitor.sh
-          printf '%s\n' '  sleep 2' >> /tmp/error_monitor.sh
-          printf '%s\n' '  WAIT_COUNT=$((WAIT_COUNT+1))' >> /tmp/error_monitor.sh
-          printf '%s\n' 'done' >> /tmp/error_monitor.sh
-          printf '%s\n' 'tail -f "$BUILD_LOG" 2>/dev/null | while read line; do' >> /tmp/error_monitor.sh
-          printf '%s\n' '  echo "$line" | grep -qiE "error:|Error|ERROR|failed:|Failed|make.*\*\*\*" && echo "[$(date)] $line" >> "$ERROR_LOG"' >> /tmp/error_monitor.sh
-          printf '%s\n' '  if echo "$line" | grep -qiE "pkg_hash_check_unresolved|cannot find dependency"; then' >> /tmp/error_monitor.sh
-          printf '%s\n' '    echo "[$(date)] $line" >> "$DEP_ERROR_LOG"' >> /tmp/error_monitor.sh
-          printf '%s\n' '    [[ "$line" =~ for[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/problem_packages.txt"' >> /tmp/error_monitor.sh
-          printf '%s\n' '    [[ "$line" =~ dependency[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/missing_deps.txt"' >> /tmp/error_monitor.sh
-          printf '%s\n' '  fi' >> /tmp/error_monitor.sh
-          printf '%s\n' 'done' >> /tmp/error_monitor.sh
+          echo '#!/bin/bash' > /tmp/error_monitor.sh
+          echo 'MONITOR_DIR="/tmp/build-monitor"' >> /tmp/error_monitor.sh
+          echo 'ERROR_LOG="$MONITOR_DIR/errors.log"' >> /tmp/error_monitor.sh
+          echo 'DEP_ERROR_LOG="$MONITOR_DIR/dep_errors.log"' >> /tmp/error_monitor.sh
+          echo 'BUILD_LOG="/mnt/openwrt-build/build.log"' >> /tmp/error_monitor.sh
+          echo 'mkdir -p "$MONITOR_DIR"' >> /tmp/error_monitor.sh
+          echo 'echo "" > "$ERROR_LOG"' >> /tmp/error_monitor.sh
+          echo 'echo "" > "$DEP_ERROR_LOG"' >> /tmp/error_monitor.sh
+          echo 'echo "[$(date)] 监控守护进程启动" >> "$MONITOR_DIR/events.log"' >> /tmp/error_monitor.sh
+          echo 'WAIT_COUNT=0' >> /tmp/error_monitor.sh
+          echo 'while [ ! -f "$BUILD_LOG" ] && [ $WAIT_COUNT -lt 300 ]; do' >> /tmp/error_monitor.sh
+          echo '  sleep 2' >> /tmp/error_monitor.sh
+          echo '  WAIT_COUNT=$((WAIT_COUNT+1))' >> /tmp/error_monitor.sh
+          echo 'done' >> /tmp/error_monitor.sh
+          echo 'tail -f "$BUILD_LOG" 2>/dev/null | while read line; do' >> /tmp/error_monitor.sh
+          echo '  echo "$line" | grep -qiE "error:|Error|ERROR|failed:|Failed|make.*\*\*\*" && echo "[$(date)] $line" >> "$ERROR_LOG"' >> /tmp/error_monitor.sh
+          echo '  if echo "$line" | grep -qiE "pkg_hash_check_unresolved|cannot find dependency"; then' >> /tmp/error_monitor.sh
+          echo '    echo "[$(date)] $line" >> "$DEP_ERROR_LOG"' >> /tmp/error_monitor.sh
+          echo '    [[ "$line" =~ for[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/problem_packages.txt"' >> /tmp/error_monitor.sh
+          echo '    [[ "$line" =~ dependency[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/missing_deps.txt"' >> /tmp/error_monitor.sh
+          echo '  fi' >> /tmp/error_monitor.sh
+          echo 'done' >> /tmp/error_monitor.sh
           chmod +x /tmp/error_monitor.sh
           /tmp/error_monitor.sh &
           echo "MONITOR_PID=$!" >> $GITHUB_ENV
@@ -434,14 +434,19 @@ jobs:
           echo "=========================================="
           echo "编译退出码: ${BUILD_EXIT_CODE:-未知}"
           echo "固件存在: ${FIRMWARE_EXISTS:-未知}"
+          echo ""
           if [ -f /tmp/build-monitor/errors.log ]; then
-            echo ""
-            echo "错误总数: $(wc -l < /tmp/build-monitor/errors.log)"
-            tail -30 /tmp/build-monitor/errors.log | sed 's/^/  /'
+            ERROR_COUNT=$(cat /tmp/build-monitor/errors.log | grep -v '^$' | wc -l)
+            echo "❌ 错误总数: $ERROR_COUNT"
+            if [ $ERROR_COUNT -gt 0 ]; then
+              echo ""
+              echo "错误详情:"
+              cat /tmp/build-monitor/errors.log | sed 's/^/  /'
+            fi
           fi
           if [ -f /tmp/build-monitor/dep_errors.log ] && [ -s /tmp/build-monitor/dep_errors.log ]; then
             echo ""
-            echo "依赖错误:"
+            echo "📦 依赖错误:"
             cat /tmp/build-monitor/dep_errors.log | sed 's/^/  /'
           fi
           mkdir -p ${{ github.workspace }}/monitor-reports
@@ -458,3 +463,14 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 #【firmware-build.yml-33-end】
+
+#【firmware-build.yml-34】
+      - name: "34. 最终状态检查"
+        if: always() && env.FIRMWARE_EXISTS != 'true'
+        run: |
+          echo "=========================================="
+          echo "❌ 编译失败，未生成固件"
+          echo "=========================================="
+          echo "编译退出码: ${BUILD_EXIT_CODE}"
+          exit 1
+#【firmware-build.yml-34-end】
