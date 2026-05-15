@@ -2188,8 +2188,8 @@ force_disable_samba4_enable_ksmbd() {
     log "✅ samba4 已强制禁用，ksmbd 已启用"
 }
 
-# 执行强制禁用和启用
-force_disable_samba4_enable_ksmbd
+# 注意：不要在这里自动执行 force_disable_samba4_enable_ksmbd！
+# 这个函数应该由 workflow 在步骤15.5中手动调用
 #【build_firmware_main.sh-13.01-end】
 
 #【build_firmware_main.sh-14】
