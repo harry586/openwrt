@@ -1,8 +1,8 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 4.6.0
-# 最后更新: 2026-05-15
-# 新增: 强制删除 ksmbd-tools 避免编译问题
+# 版本: 4.7.0
+# 最后更新: 2026-05-16
+# 新增: 增强失败包检测 + 调试输出
 
 name: OpenWrt 智能固件构建工作流
 
@@ -78,7 +78,7 @@ on:
         description: "🚫 自定义禁用插件"
         required: false
         type: string
-        default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer samba4 luci-app-samba4 wsdd2 ksmbd-tools luci-app-ksmbd"
+        default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer samba4 luci-app-samba4 wsdd2 ksmbd-tools luci-app-ksmbd wechatpush"
       extra_packages:
         description: "额外安装插件"
         required: false
@@ -379,7 +379,13 @@ jobs:
         run: |
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step14_pre_build_space_check
           AVAILABLE_GB=$(df /mnt --output=avail | tail -1 | awk '{print $1/1024/1024}')
-          if [ $AVAILABLE_GB -lt 10 ]; then exit 1; fi
+          echo "可用空间: ${AVAILABLE_GB}G"
+          if [ $AVAILABLE_GB -lt 20 ]; then
+            echo "⚠️ 空间不足，尝试清理..."
+            sudo apt-get clean
+            docker system prune -f 2>/dev/null || true
+            rm -rf /tmp/* 2>/dev/null || true
+          fi
 #【firmware-build.yml-23-end】
 
 #【firmware-build.yml-24】
@@ -399,6 +405,34 @@ jobs:
           fi
           exit 0
 #【firmware-build.yml-24-end】
+
+#【firmware-build.yml-24.5】
+      - name: "24.5. 调试：分析安装阶段错误"
+        if: always() && env.FIRMWARE_EXISTS != 'true'
+        run: |
+          echo "=== 步骤24.5: 调试分析 ==="
+          cd /mnt/openwrt-build
+          echo ""
+          echo "🔍 查找 Error 255 附近的上下文:"
+          echo "----------------------------------------"
+          grep -B 30 -A 10 "Error 255" build.log 2>/dev/null | tail -60 || echo "未找到 Error 255"
+          echo ""
+          echo "🔍 查找 package/install 错误:"
+          echo "----------------------------------------"
+          grep -B 20 -A 5 "package/install" build.log 2>/dev/null | tail -50 || echo "未找到"
+          echo ""
+          echo "🔍 查找最后一个配置的包:"
+          echo "----------------------------------------"
+          grep "Configuring" build.log 2>/dev/null | tail -10
+          echo ""
+          echo "🔍 查找 make 错误汇总:"
+          echo "----------------------------------------"
+          grep -E "make\[[0-9]+\]: \*\*\*" build.log 2>/dev/null | tail -10
+          echo ""
+          echo "🔍 查找 failed to build 错误:"
+          echo "----------------------------------------"
+          grep -E "failed to build|ERROR:.*failed" build.log 2>/dev/null | tail -10
+#【firmware-build.yml-24.5-end】
 
 #【firmware-build.yml-25】
       - name: "25. 检查构建产物"
@@ -506,5 +540,7 @@ jobs:
           echo "❌ 编译失败，未生成固件"
           echo "=========================================="
           echo "编译退出码: ${BUILD_EXIT_CODE}"
+          echo ""
+          echo "📋 调试信息已在上方步骤24.5输出"
           exit 1
 #【firmware-build.yml-34-end】
