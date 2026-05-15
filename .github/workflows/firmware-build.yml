@@ -1,8 +1,8 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 4.4.0
+# 版本: 4.5.0
 # 最后更新: 2026-05-15
-# 新增: 强制禁用samba4并启用ksmbd步骤
+# 新增: feeds强制更新 + ksmbd-tools下载源修复
 
 name: OpenWrt 智能固件构建工作流
 
@@ -266,8 +266,32 @@ jobs:
 #【firmware-build.yml-09-end】
 
 #【firmware-build.yml-10】
-      - name: "10. 配置Feeds"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step12_configure_feeds
+      - name: "10. 配置Feeds（强制更新）"
+        run: |
+          echo "=== 步骤10: 配置Feeds（强制更新） ==="
+          cd /mnt/openwrt-build
+          if [ -f "feeds.conf.default" ]; then
+            cp feeds.conf.default feeds.conf.default.bak
+            echo "✅ 已备份 feeds.conf.default"
+          fi
+          rm -rf feeds
+          mkdir -p feeds
+          echo "🔄 更新所有 feeds..."
+          ./scripts/feeds update -a || true
+          echo "🔄 修复 ksmbd-tools 下载源..."
+          KSMBD_TOOLS_MAKEFILE=$(find feeds -name "Makefile" -path "*/ksmbd-tools/*" 2>/dev/null | head -1)
+          if [ -z "$KSMBD_TOOLS_MAKEFILE" ]; then
+            KSMBD_TOOLS_MAKEFILE=$(find package -name "Makefile" -path "*/ksmbd-tools/*" 2>/dev/null | head -1)
+          fi
+          if [ -n "$KSMBD_TOOLS_MAKEFILE" ] && [ -f "$KSMBD_TOOLS_MAKEFILE" ]; then
+            cp "$KSMBD_TOOLS_MAKEFILE" "$KSMBD_TOOLS_MAKEFILE.bak"
+            sed -i 's|codeload.github.com/cifsd-team/ksmbd-tools/tar.gz/|github.com/cifsd-team/ksmbd-tools/releases/download/|g' "$KSMBD_TOOLS_MAKEFILE"
+            sed -i 's|\.tar.gz?|.tar.gz|g' "$KSMBD_TOOLS_MAKEFILE"
+            echo "   ✅ ksmbd-tools 下载源已修复"
+          fi
+          echo "🔄 安装所有 feeds..."
+          ./scripts/feeds install -a || true
+          echo "✅ Feeds配置完成"
 #【firmware-build.yml-10-end】
 
 #【firmware-build.yml-11】
