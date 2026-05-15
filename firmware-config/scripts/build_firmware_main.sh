@@ -3123,29 +3123,43 @@ download_dependencies() {
         log "创建依赖包目录: dl"
     fi
     
-    # 使用 -name 条件，不加括号
     local existing_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "现有依赖包数量: $existing_deps 个"
     
-    log "开始下载依赖包..."
-    make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
+    # 增加重试机制
+    local max_retries=3
+    local retry_count=0
+    local download_success=0
     
-    # 使用 -name 条件，不加括号
+    while [ $retry_count -lt $max_retries ] && [ $download_success -eq 0 ]; do
+        if [ $retry_count -gt 0 ]; then
+            log "🔄 第 $((retry_count + 1)) 次尝试下载..."
+            sleep 10
+        fi
+        
+        make -j1 download V=s 2>&1 | tee download.log
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            download_success=1
+        else
+            retry_count=$((retry_count + 1))
+            # 清理可能的损坏文件
+            find dl -type f -size 0 -delete 2>/dev/null || true
+        fi
+    done
+    
+    if [ $download_success -eq 0 ]; then
+        log "⚠️ 下载过程中仍有错误，尝试继续编译..."
+    fi
+    
     local downloaded_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "下载后依赖包数量: $downloaded_deps 个"
     
-    if [ $downloaded_deps -gt $existing_deps ]; then
-        log "✅ 成功下载了 $((downloaded_deps - existing_deps)) 个新依赖包"
-    else
-        log "ℹ️ 没有下载新的依赖包"
-    fi
-    
-    if grep -q "ERROR|Failed|404" download.log 2>/dev/null; then
+    if grep -q "ERROR\|Failed\|404\|502\|504" download.log 2>/dev/null; then
         log "⚠️ 下载过程中发现错误:"
-        grep -E "ERROR|Failed|404" download.log | head -10
+        grep -E "ERROR|Failed|404|502|504" download.log | head -10
     fi
     
-    log "✅ 依赖包下载完成"
+    log "✅ 依赖包下载阶段完成"
 }
 #【build_firmware_main.sh-17-end】
 
@@ -6138,7 +6152,7 @@ workflow_step29_post_build_space_check() {
 
 #【build_firmware_main.sh-43】
 # ============================================
-# 全流程错误检查函数 - 终版（增强依赖分析）
+# 全流程错误检查函数 - 终版（增强依赖分析 + 第一个失败包检测）
 # ============================================
 quick_error_check() {
     local build_dir="$1"
@@ -6163,7 +6177,7 @@ quick_error_check() {
     {
         echo ""
         echo "================================================================="
-        echo "🔍 全流程错误检查 - 终版（增强依赖分析）"
+        echo "🔍 全流程错误检查 - 终版（增强依赖分析 + 第一个失败包检测）"
         echo "检查时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "构建目录: $build_dir"
         echo "目标平台: ${TARGET:-$target_platform}"
@@ -6190,11 +6204,108 @@ quick_error_check() {
         echo "📄 找到 ${#log_sources[@]} 个日志文件"
         echo ""
 
-        # ======================== 依赖分析（新增） ========================
+        # ======================== 第一个失败包检测（新增） ========================
+        echo "🔍 第一个失败包检测（定位编译失败的根源）"
+        echo "----------------------------------------"
+        
+        # 查找第一个 make 错误
+        local first_make_error=""
+        local first_make_error_line=""
+        if [ -f "$log_file" ]; then
+            # 查找第一个 "make: *** [xxx] Error" 模式
+            first_make_error=$(grep -m 1 -E 'make\[[0-9]+\]: \*\*\* \[.+\] Error [0-9]+|make: \*\*\* \[.+\] Error [0-9]+' "$log_file" 2>/dev/null)
+            first_make_error_line=$(grep -n -m 1 -E 'make\[[0-9]+\]: \*\*\* \[.+\] Error [0-9]+|make: \*\*\* \[.+\] Error [0-9]+' "$log_file" 2>/dev/null | cut -d: -f1)
+        fi
+        
+        # 查找第一个编译失败的包
+        local first_failed_pkg=""
+        local first_failed_context=""
+        
+        # 方法1：从 make 错误中提取包名
+        if [ -n "$first_make_error" ]; then
+            # 尝试从错误中提取包名
+            # 格式1: make[3]: *** [/path/to/package/compile] Error 1
+            # 格式2: make[2]: *** [package/feeds/packages/xxx/compile] Error 2
+            local extracted_pkg=$(echo "$first_make_error" | sed -n 's/.*\[\([^]]*\)\/\([^]]*\)\/compile\].*/\2/p' | head -1)
+            if [ -z "$extracted_pkg" ]; then
+                extracted_pkg=$(echo "$first_make_error" | sed -n 's/.*\[\([^]]*\)\/compile\].*/\1/p' | xargs basename 2>/dev/null)
+            fi
+            if [ -z "$extracted_pkg" ]; then
+                extracted_pkg=$(echo "$first_make_error" | grep -oP '(?<=package/feeds/packages/)[^/]+' | head -1)
+            fi
+            if [ -z "$extracted_pkg" ]; then
+                extracted_pkg=$(echo "$first_make_error" | grep -oP '(?<=package/)[^/]+' | head -1)
+            fi
+            first_failed_pkg="$extracted_pkg"
+            first_failed_context="$first_make_error"
+        fi
+        
+        # 方法2：查找第一个 "ERROR:" 或 "failed to build" 行
+        if [ -z "$first_failed_pkg" ] && [ -f "$log_file" ]; then
+            local error_line=$(grep -m 1 -E 'ERROR:.*failed to build|failed to build.*package' "$log_file" 2>/dev/null)
+            if [ -n "$error_line" ]; then
+                first_failed_pkg=$(echo "$error_line" | grep -oP '(?<=failed to build )[^ ]+|(?<=package/)[^/]+' | head -1)
+                first_failed_context="$error_line"
+            fi
+        fi
+        
+        # 方法3：查找 "Makefile.*Error" 附近的包名
+        if [ -z "$first_failed_pkg" ] && [ -f "$log_file" ]; then
+            # 获取错误行附近20行的内容
+            if [ -n "$first_make_error_line" ] && [ "$first_make_error_line" -gt 10 ]; then
+                local start_line=$((first_make_error_line - 20))
+                [ $start_line -lt 1 ] && start_line=1
+                local context=$(sed -n "${start_line},$((first_make_error_line + 5))p" "$log_file" 2>/dev/null)
+                # 查找 "Entering directory" 行
+                local entering_dir=$(echo "$context" | grep -E 'Entering directory.*package/' | tail -1)
+                if [ -n "$entering_dir" ]; then
+                    first_failed_pkg=$(echo "$entering_dir" | grep -oP '(?<=package/feeds/packages/)[^/]+|(?<=package/)[^/]+' | head -1)
+                    first_failed_context="$entering_dir"
+                fi
+            fi
+        fi
+        
+        # 输出第一个失败包
+        if [ -n "$first_failed_pkg" ]; then
+            echo "   🔴 第一个失败的包: $first_failed_pkg"
+            echo "      错误上下文: $first_failed_context"
+            echo ""
+            echo "   💡 修复建议:"
+            echo "      1. 检查该包的依赖是否完整"
+            echo "      2. 尝试在 FORBIDDEN_PACKAGES 中禁用: $first_failed_pkg"
+            echo "      3. 或检查 feeds 中该包的 Makefile"
+        else
+            echo "   ✅ 未检测到明确的失败包"
+        fi
+        echo ""
+        
+        # ======================== 下载错误检测（新增） ========================
+        echo "🔍 下载错误检测（网络问题定位）"
+        echo "----------------------------------------"
+        if [ -f "$log_file" ]; then
+            local download_errors=$(grep -E 'curl: \([0-9]+\)|Failed to download|404 Not Found|502 Bad Gateway|504 Gateway' "$log_file" 2>/dev/null | head -10)
+            if [ -n "$download_errors" ]; then
+                echo "   ⚠️ 发现下载错误:"
+                echo "$download_errors" | while read line; do
+                    echo "      $line"
+                    # 提取失败的 URL 或包名
+                    local failed_url=$(echo "$line" | grep -oP 'https?://[^ ]+' | head -1)
+                    if [ -n "$failed_url" ]; then
+                        echo "         URL: $failed_url"
+                    fi
+                done
+                echo ""
+                echo "   💡 修复建议: 重新运行 workflow（网络临时问题）"
+            else
+                echo "   ✅ 未发现下载错误"
+            fi
+        fi
+        echo ""
+
+        # ======================== 依赖分析 ========================
         echo "🔍 依赖链分析 - 定位问题包的来源"
         echo "----------------------------------------"
         
-        # 提取所有 OPKG 依赖错误
         local dep_errors=$(grep -E "pkg_hash_check_unresolved|cannot find dependency" "$log_file" 2>/dev/null)
         
         if [ -n "$dep_errors" ]; then
@@ -6204,12 +6315,10 @@ quick_error_check() {
             done
             echo ""
             
-            # 解析每个依赖错误，找出问题包
             local problem_packages=()
             local missing_deps=()
             
             while IFS= read -r line; do
-                # 提取缺少的依赖
                 if [[ "$line" =~ cannot[[:space:]]+find[[:space:]]+dependency[[:space:]]+([^[:space:]]+)[[:space:]]+for[[:space:]]+([^[:space:]]+) ]]; then
                     missing_deps+=("${BASH_REMATCH[1]}")
                     problem_packages+=("${BASH_REMATCH[2]}")
@@ -6219,7 +6328,6 @@ quick_error_check() {
                 fi
             done <<< "$dep_errors"
             
-            # 去重
             local unique_problems=($(printf "%s\n" "${problem_packages[@]}" | sort -u))
             local unique_missing=($(printf "%s\n" "${missing_deps[@]}" | sort -u))
             
@@ -6228,47 +6336,12 @@ quick_error_check() {
             echo "   缺失依赖: ${unique_missing[*]}"
             echo ""
             
-            # 尝试找出哪个包引入了问题包
-            echo "🔎 追溯依赖来源（搜索 .config 和 feeds）:"
-            for problem in "${unique_problems[@]}"; do
-                echo ""
-                echo "   📌 问题包: $problem"
-                
-                # 在 .config 中搜索谁启用了这个包
-                local found_in_config=$(grep -E "^CONFIG_PACKAGE_${problem}=y|^CONFIG_PACKAGE_${problem}=m" .config 2>/dev/null)
-                if [ -n "$found_in_config" ]; then
-                    echo "      ✅ 在 .config 中直接启用: $found_in_config"
-                fi
-                
-                # 搜索可能依赖这个包的包
-                local search_pattern="${problem%-*}"  # 去掉后缀
-                if [ -n "$search_pattern" ] && [ ${#search_pattern} -gt 3 ]; then
-                    local possible_sources=$(grep -l "$search_pattern" .config 2>/dev/null | head -5)
-                    if [ -n "$possible_sources" ]; then
-                        echo "      可能相关的配置:"
-                        grep -E "CONFIG_PACKAGE_.*${search_pattern}" .config 2>/dev/null | head -5 | sed 's/^/         /'
-                    fi
-                fi
-                
-                # 搜索 feeds 中的包定义
-                if [ -d "feeds" ]; then
-                    local feed_location=$(find feeds -type d -name "*${problem}*" 2>/dev/null | head -3)
-                    if [ -n "$feed_location" ]; then
-                        echo "      📁 在 feeds 中的位置:"
-                        echo "$feed_location" | sed 's/^/         /'
-                    fi
-                fi
-            done
-            
-            echo ""
             echo "💡 解决方案:"
             for problem in "${unique_problems[@]}"; do
                 echo "   1. 禁用问题包: ${problem}"
-                echo "      在 FORBIDDEN_PACKAGES 中添加: ${problem}"
             done
             for missing in "${unique_missing[@]}"; do
-                echo "   2. 安装缺失依赖: ${missing}"
-                echo "      在配置中添加: CONFIG_PACKAGE_${missing}=y"
+                echo "   2. 安装缺失依赖: CONFIG_PACKAGE_${missing}=y"
             done
             echo ""
         else
@@ -6315,7 +6388,7 @@ quick_error_check() {
                             factory_size="$fsize_human"
                             ;;
                         initramfs)
-                            echo "🔷 $fname ($fsize_human) - 🔧 临时内核（可刷机，但不保存设置）"
+                            echo "🔷 $fname ($fsize_human) - 🔧 临时内核"
                             valid_initramfs=$((valid_initramfs + 1))
                             initramfs_size="$fsize_human"
                             ;;
@@ -6324,7 +6397,7 @@ quick_error_check() {
                             ;;
                     esac
                 else
-                    echo "❌ $fname ($fsize_human) - 文件过小，可能不完整"
+                    echo "❌ $fname ($fsize_human) - 文件过小"
                 fi
             done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null | sort)
 
@@ -6332,9 +6405,9 @@ quick_error_check() {
 
             echo ""
             echo "📊 固件产物统计:"
-            echo "   sysupgrade 刷机固件: $valid_sysupgrade 个"
-            echo "   factory 原厂固件:   $valid_factory 个"
-            echo "   initramfs 临时内核: $valid_initramfs 个"
+            echo "   sysupgrade: $valid_sysupgrade 个"
+            echo "   factory: $valid_factory 个"
+            echo "   initramfs: $valid_initramfs 个"
             
             echo ""
             echo "   📁 目录完整内容:"
@@ -6350,82 +6423,38 @@ quick_error_check() {
         # ======================== 编译退出原因诊断 ========================
         echo "🔍 编译退出原因诊断:"
         echo "----------------------------------------"
-        local exit_type="unknown"
-        local exit_reason=""
         
         local make_errors=$(grep -E 'make(\[[0-9]+\])?: \*\*\*' "$log_file" 2>/dev/null | tail -3)
         if [ -n "$make_errors" ]; then
-            echo "   🔴 检测到 make 错误:"
+            echo "   🔴 make 错误:"
             echo "$make_errors" | sed 's/^/      /'
-            exit_type="error"
-            exit_reason="$make_errors"
         fi
         
         if grep -q "Collected errors:" "$log_file" 2>/dev/null; then
             echo ""
-            echo "   🔴 OPKG 依赖错误:"
-            grep -A 15 "Collected errors:" "$log_file" 2>/dev/null | grep -E "pkg_hash|satisfy|Cannot install|opkg_install" | head -10 | sed 's/^/      /'
-            exit_type="error"
-        fi
-        
-        if grep -q "could not find any JSON files" "$log_file" 2>/dev/null; then
-            echo ""
-            echo "   ⚠️ JSON 信息文件未生成 (缺少有效的固件产物)"
-            exit_type="error"
+            echo "   🔴 OPKG 错误:"
+            grep -A 15 "Collected errors:" "$log_file" 2>/dev/null | grep -E "pkg_hash|satisfy|Cannot install" | head -10 | sed 's/^/      /'
         fi
         
         if grep -q 'make\[1\]: Leaving directory' "$log_file" 2>/dev/null; then
-            echo "   🟢 make 正常结束 (世界目标完成)"
-            if [ "$exit_type" = "unknown" ]; then
-                exit_type="normal"
-                exit_reason="make 世界目标完成，所有步骤已执行"
-            fi
+            echo "   🟢 make 正常结束"
         fi
         
         if [ -f ".config" ]; then
             echo ""
-            echo "   📋 固件格式配置:"
-            if grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null; then
-                echo "      ✅ SQUASHFS   = 已启用 (生成 sysupgrade/factory 的前提)"
-            else
-                echo "      ❌ SQUASHFS   = 未启用 (无法生成 sysupgrade)"
-            fi
-            if grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null; then
-                echo "      ⚠️  INITRAMFS  = 已启用 (仅生成临时内核)"
-            fi
-            if grep -q "^CONFIG_TARGET_ROOTFS_EXT4FS=y" .config 2>/dev/null; then
-                echo "      ✅ EXT4FS     = 已启用"
-            fi
+            echo "   📋 固件格式:"
+            grep -q "^CONFIG_TARGET_ROOTFS_SQUASHFS=y" .config 2>/dev/null && echo "      ✅ SQUASHFS = 已启用" || echo "      ❌ SQUASHFS = 未启用"
+            grep -q "^CONFIG_TARGET_ROOTFS_INITRAMFS=y" .config 2>/dev/null && echo "      ⚠️ INITRAMFS = 已启用"
         fi
         echo ""
 
         # ======================== 最后50行日志 ========================
-        echo "🔍 最后50行日志 (已过滤 BUILD_MARK):"
+        echo "🔍 最后50行日志:"
         echo "----------------------------------------"
         if [ -f "$log_file" ]; then
             grep -v ">>> BUILD_MARK:" "$log_file" | tail -50 | sed 's/^/   /'
         else
-            echo "   (无构建日志)"
-        fi
-        echo ""
-
-        # ======================== 关键错误搜索 ========================
-        echo "🔍 关键错误/警告搜索:"
-        echo "----------------------------------------"
-        
-        local error_lines=$(grep -n "Error\|ERROR\|error:" "$log_file" 2>/dev/null | tail -10)
-        if [ -n "$error_lines" ]; then
-            echo "   发现以下错误关键字:"
-            echo "$error_lines" | sed 's/^/   /'
-        else
-            echo "   ✅ 未发现明显错误"
-        fi
-        
-        local failed_lines=$(grep -n "Failed\|FAILED\|failed:" "$log_file" 2>/dev/null | tail -10)
-        if [ -n "$failed_lines" ]; then
-            echo ""
-            echo "   发现以下失败关键字:"
-            echo "$failed_lines" | sed 's/^/   /'
+            echo "   (无日志)"
         fi
         echo ""
 
@@ -6434,33 +6463,28 @@ quick_error_check() {
         local total_valid=$((valid_sysupgrade + valid_factory))
         echo "📊 构建结论:"
         if [ $total_valid -gt 0 ]; then
-            [ $valid_sysupgrade -gt 0 ] && echo "   ✅ sysupgrade 固件: $sysupgrade_size"
-            [ $valid_factory -gt 0 ] && echo "   ✅ factory 固件: $factory_size"
-            echo "🎉 编译成功！固件可用于正常刷机，设置可永久保存"
+            echo "🎉 编译成功！固件已生成"
         elif [ $valid_initramfs -gt 0 ]; then
-            echo "⚠️  仅生成了 initramfs 内核 ($initramfs_size)"
-            echo ""
-            echo "   🔍 根因分析: CONFIG_TARGET_ROOTFS_INITRAMFS=y 覆盖了 squashfs 生成"
-            echo ""
-            echo "   📝 手动生成 sysupgrade 方法:"
-            echo "      cd $build_dir"
-            echo "      make defconfig"
-            echo "      sed -i '/^CONFIG_TARGET_ROOTFS_INITRAMFS=y/d' .config"
-            echo "      echo 'CONFIG_TARGET_ROOTFS_SQUASHFS=y' >> .config"
-            echo "      make defconfig"
-            echo "      make -j\$(nproc) V=s"
+            echo "⚠️ 仅生成 initramfs 内核"
         else
-            echo "❌ 编译失败，未生成任何有效固件"
+            echo "❌ 编译失败，未生成固件"
+            echo ""
+            if [ -n "$first_failed_pkg" ]; then
+                echo "   🔴 第一个失败的包: $first_failed_pkg"
+                echo "   📝 建议: 检查该包的依赖或尝试禁用"
+            fi
+            if [ -n "$download_errors" ]; then
+                echo "   🌐 发现下载错误，建议重新运行 workflow"
+            fi
             echo ""
             echo "   📝 排查建议:"
-            echo "      - 检查上方依赖分析中的问题包"
-            echo "      - 在 FORBIDDEN_PACKAGES 中添加问题包名称"
             echo "      - 查看完整日志: $build_dir/$log_file"
+            echo "      - 检查上方第一个失败包"
         fi
         echo "================================================================="
     } | tee "$output_file"
 
-    echo "✅ 错误检查报告已保存到: $output_file"
+    echo "✅ 报告已保存: $output_file"
     return $(( (valid_sysupgrade + valid_factory) > 0 ? 0 : 1 ))
 }
 #【build_firmware_main.sh-43-end】
