@@ -90,17 +90,20 @@ load_build_config() {
 #【build_firmware_main.sh-00.5.01-end】
 }
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONFIG_FILE="$REPO_ROOT/build-config.conf"
+# 只在脚本被直接执行且 REPO_ROOT 已定义时才执行以下代码
+# 避免在 source 时执行 cd 命令
+if [ -n "${BASH_SOURCE[0]}" ] && [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    CONFIG_FILE="$REPO_ROOT/build-config.conf"
 
-if [ -n "${SOURCE_REPO:-}" ]; then
-    export SOURCE_REPO_TYPE="$SOURCE_REPO"
-fi
+    if [ -n "${SOURCE_REPO:-}" ]; then
+        export SOURCE_REPO_TYPE="$SOURCE_REPO"
+    fi
 
-# 修复：只调用 load_build_config，不在外部重复 source
-if [ -z "$CONFIG_ALREADY_LOADED" ]; then
-    if [ -f "$CONFIG_FILE" ]; then
-        load_build_config
+    if [ -z "$CONFIG_ALREADY_LOADED" ]; then
+        if [ -f "$CONFIG_FILE" ]; then
+            load_build_config
+        fi
     fi
 fi
 #【build_firmware_main.sh-00.5-end】
@@ -4066,6 +4069,8 @@ workflow_step05_install_basic_tools() {
     set -e
     trap 'echo "❌ 步骤05 失败，退出代码: $?"; exit 1' ERR
     
+    # 注意：此时 BUILD_DIR 可能还不存在，不要 cd 进入
+    # 直接调用 setup_environment 安装依赖
     setup_environment
     
     log "✅ 步骤05 完成"
