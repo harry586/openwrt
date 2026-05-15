@@ -847,8 +847,9 @@ add_turboacc_support() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 添加 TurboACC 支持 ==="
+    log "=== 添加网络加速支持 ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "目标平台: $TARGET"
     
     # 特殊处理：Hanwckf 模式（RAX3000M + immortalwrt）不添加 TurboACC
     if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
@@ -856,16 +857,29 @@ add_turboacc_support() {
         return 0
     fi
     
-    # ============================================
-    # 彻底修复所有下载源
-    # ============================================
-    log "🔧 彻底修复所有下载源..."
+    # LEDE 源码：使用内置的 shortcut-fe，不需要额外 feed
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 LEDE 源码模式：使用内置 shortcut-fe 加速"
+        log "ℹ️ LEDE 内置 shortcut-fe，只需在 .config 中启用即可，不需要添加额外 feed"
+        return 0
+    fi
     
-    # 创建补丁目录
-    mkdir -p package/firmware/trusted-firmware-a/patches
+    # OpenWrt 官方源码：不添加 turboacc
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "⚠️ OpenWrt 官方源码：跳过 TurboACC feed"
+        return 0
+    fi
     
-    # 创建补丁文件，替换所有失效的下载源
-    cat > package/firmware/trusted-firmware-a/patches/001-fix-download-url.patch << 'EOF'
+    # ImmortalWrt 源码：使用 turboacc feed
+    if [ "$SOURCE_REPO_TYPE" = "immortalwrt" ] && [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        log "🔧 ImmortalWrt 源码模式：添加 TurboACC feed"
+        
+        # 修复所有下载源
+        log "🔧 修复下载源..."
+        
+        mkdir -p package/firmware/trusted-firmware-a/patches
+        
+        cat > package/firmware/trusted-firmware-a/patches/001-fix-download-url.patch << 'EOF'
 --- a/package/firmware/trusted-firmware-a/Makefile
 +++ b/package/firmware/trusted-firmware-a/Makefile
 @@ -5,8 +5,8 @@
@@ -880,45 +894,36 @@ add_turboacc_support() {
  
  PKG_LICENSE:=BSD-3-Clause
 EOF
-    log "  ✅ 创建 trusted-firmware-a 下载源修复补丁"
-    
-    # 修复 libxml2 下载源
-    find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
-        if [ -f "$dir/Makefile" ]; then
-            cp "$dir/Makefile" "$dir/Makefile.bak"
-            # 替换为可用的下载源
-            sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
-            sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
-            log "  ✅ 修复 libxml2 下载源"
-        fi
-    done
-    
-    # 修复所有 mirror.immortalwrt.org 源
-    find . -name "*.mk" -o -name "Makefile" | while read file; do
-        if grep -q "mirror2.immortalwrt.org\|mirror.immortalwrt.org\|sources-cdn.immortalwrt.org" "$file" 2>/dev/null; then
-            cp "$file" "$file.bak"
-            sed -i 's|mirror2.immortalwrt.org|github.com|g' "$file"
-            sed -i 's|mirror.immortalwrt.org|github.com|g' "$file"
-            sed -i 's|sources-cdn.immortalwrt.org|github.com|g' "$file"
-            log "  ✅ 修复: $file"
-        fi
-    done
-    
-    # 使用配置文件中的开关
-    if [ "$CONFIG_MODE" = "normal" ] && [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
-        log "🔧 为正常模式添加 TurboACC 支持"
+        log "  ✅ 创建 trusted-firmware-a 下载源修复补丁"
         
-        if [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
-            if [ ! -f "feeds.conf.default" ]; then
-                touch feeds.conf.default
+        find package/libs -name "libxml2" -type d 2>/dev/null | while read dir; do
+            if [ -f "$dir/Makefile" ]; then
+                cp "$dir/Makefile" "$dir/Makefile.bak"
+                sed -i 's|https\?://download.gnome.org/sources/libxml2/|https://github.com/GNOME/libxml2/archive/refs/tags/v|g' "$dir/Makefile"
+                sed -i 's|libxml2-\([0-9.]*\)\.tar\.xz|\1.tar.gz|g' "$dir/Makefile"
+                log "  ✅ 修复 libxml2 下载源"
             fi
-            
-            if ! grep -q "turboacc" feeds.conf.default; then
-                echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
-                log "✅ TurboACC feed 添加完成"
-            else
-                log "ℹ️ TurboACC feed 已存在"
+        done
+        
+        find . -name "*.mk" -o -name "Makefile" | while read file; do
+            if grep -q "mirror2.immortalwrt.org\|mirror.immortalwrt.org\|sources-cdn.immortalwrt.org" "$file" 2>/dev/null; then
+                cp "$file" "$file.bak"
+                sed -i 's|mirror2.immortalwrt.org|github.com|g' "$file"
+                sed -i 's|mirror.immortalwrt.org|github.com|g' "$file"
+                sed -i 's|sources-cdn.immortalwrt.org|github.com|g' "$file"
+                log "  ✅ 修复: $file"
             fi
+        done
+        
+        if [ ! -f "feeds.conf.default" ]; then
+            touch feeds.conf.default
+        fi
+        
+        if ! grep -q "turboacc" feeds.conf.default; then
+            echo "src-git turboacc ${TURBOACC_FEED_URL:-https://github.com/chenmozhijin/turboacc}" >> feeds.conf.default
+            log "✅ TurboACC feed 添加完成"
+        else
+            log "ℹ️ TurboACC feed 已存在"
         fi
     fi
 }
@@ -1431,19 +1436,31 @@ install_turboacc_packages() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 安装 TurboACC 包 ==="
+    log "=== 安装网络加速包 ==="
     
-    # Hanwckf 源码（RAX3000M + immortalwrt）已集成硬件加速，无需安装 TurboACC 包
+    # Hanwckf 源码跳过
     if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
         log "ℹ️ 检测到 Hanwckf 源码 (RAX3000M)，跳过 TurboACC 包安装"
         return 0
     fi
     
-    ./scripts/feeds update turboacc || handle_error "更新turboacc feed失败"
+    # LEDE 源码使用内置 shortcut-fe
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "ℹ️ LEDE 源码使用内置 shortcut-fe，跳过外部 feed 包安装"
+        return 0
+    fi
     
-    ./scripts/feeds install -p turboacc luci-app-turboacc || handle_error "安装luci-app-turboacc失败"
-    ./scripts/feeds install -p turboacc kmod-shortcut-fe || handle_error "安装kmod-shortcut-fe失败"
-    ./scripts/feeds install -p turboacc kmod-fast-classifier || handle_error "安装kmod-fast-classifier失败"
+    # OpenWrt 官方源码跳过
+    if [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+        log "ℹ️ OpenWrt 官方源码跳过 TurboACC"
+        return 0
+    fi
+    
+    # ImmortalWrt 源码安装 turboacc 包
+    ./scripts/feeds update turboacc 2>/dev/null || true
+    ./scripts/feeds install -p turboacc luci-app-turboacc 2>/dev/null || true
+    ./scripts/feeds install -p turboacc kmod-shortcut-fe 2>/dev/null || true
+    ./scripts/feeds install -p turboacc kmod-fast-classifier 2>/dev/null || true
     
     log "✅ TurboACC 包安装完成"
 }
@@ -1857,11 +1874,24 @@ EOF
         log "✅ TCP BBR已启用"
     fi
     
-    if [ "${ENABLE_TURBOACC:-true}" = "true" ] && [ "$SOURCE_REPO_TYPE" != "openwrt" ]; then
-        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
-        echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
-        log "✅ TurboACC已启用"
+    # 网络加速配置（根据源码类型智能选择）
+    if [ "${ENABLE_TURBOACC:-true}" = "true" ]; then
+        if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+            log "✅ LEDE 源码：启用内置 shortcut-fe 加速"
+            echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+            echo "# CONFIG_PACKAGE_kmod-fast-classifier is not set" >> .config
+        elif [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
+            if ! echo "$DEVICE" | grep -qi "rax3000m"; then
+                log "✅ ImmortalWrt 源码：启用 turboacc 加速"
+                echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-shortcut-fe=y" >> .config
+                echo "CONFIG_PACKAGE_kmod-fast-classifier=y" >> .config
+            else
+                log "ℹ️ Hanwckf 模式：使用内置 MTK 硬件加速"
+            fi
+        elif [ "$SOURCE_REPO_TYPE" = "openwrt" ]; then
+            log "ℹ️ OpenWrt 官方源码跳过 TurboACC"
+        fi
     fi
     
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
@@ -2025,7 +2055,7 @@ EOF
     # ============================================
     log "🔧 ===== 全面禁用不需要的插件 ====="
     
-    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
+    local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer samba4 luci-app-samba4 wsdd2}"
     log "📋 基础禁用插件: $base_forbidden"
     
     local search_keywords=()
@@ -2042,16 +2072,29 @@ EOF
     done
     
     # ============================================
-    # 强制删除 ddns 相关配置（修复 LEDE 源码问题）
+    # 强制禁用 samba4 并启用 ksmbd
     # ============================================
-    log "🔧 ===== 强制删除 DDNS 相关配置 ====="
-    sed -i '/ddns/d' .config
-    sed -i '/DDNS/d' .config
-    echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
-    echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
-    echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
-    echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
-    log "✅ DDNS 配置已强制删除"
+    log "🔧 ===== 强制禁用 samba4 并启用 ksmbd ====="
+    
+    sed -i '/samba4/d' .config
+    sed -i '/SAMB/d' .config
+    sed -i '/wsdd2/d' .config
+    
+    echo "# CONFIG_PACKAGE_samba4 is not set" >> .config
+    echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
+    echo "# CONFIG_PACKAGE_wsdd2 is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-i18n-samba4-zh-cn is not set" >> .config
+    
+    if [ "${ENABLE_KSMBD:-true}" = "true" ]; then
+        echo "CONFIG_PACKAGE_kmod-fs-ksmbd=y" >> .config
+        echo "CONFIG_PACKAGE_ksmbd-tools=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ksmbd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-ksmbd-zh-cn=y" >> .config
+        log "✅ ksmbd 已启用"
+    fi
+    
+    log "✅ samba4 已禁用，ksmbd 已启用"
     
     log "🔄 运行 make defconfig 使禁用生效..."
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
@@ -2086,6 +2129,65 @@ EOF
     log "✅ 配置生成完成"
 }
 #【build_firmware_main.sh-13-end】
+
+#【build_firmware_main.sh-13.01】
+# 强制禁用 samba4 并启用 ksmbd（独立函数，可在 generate_config 之后单独调用）
+force_disable_samba4_enable_ksmbd() {
+    load_env
+    cd $BUILD_DIR || handle_error "进入构建目录失败"
+    
+    log "=== 强制禁用 samba4 并启用 ksmbd ==="
+    
+    if [ ! -f ".config" ]; then
+        log "⚠️ .config 文件不存在，跳过"
+        return 0
+    fi
+    
+    # 1. 删除所有 samba4 相关配置行
+    log "🔧 删除所有 samba4 相关配置..."
+    sed -i '/samba4/d' .config
+    sed -i '/SAMB/d' .config
+    sed -i '/wsdd2/d' .config
+    sed -i '/WSDD2/d' .config
+    
+    # 2. 强制禁用 samba4 相关包
+    log "🔧 强制禁用 samba4 相关包..."
+    echo "# CONFIG_PACKAGE_samba4 is not set" >> .config
+    echo "# CONFIG_PACKAGE_samba4-admin is not set" >> .config
+    echo "# CONFIG_PACKAGE_samba4-client is not set" >> .config
+    echo "# CONFIG_PACKAGE_samba4-libs is not set" >> .config
+    echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
+    echo "# CONFIG_PACKAGE_samba4-utils is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-i18n-samba4-zh-cn is not set" >> .config
+    echo "# CONFIG_PACKAGE_wsdd2 is not set" >> .config
+    
+    # 3. 启用 ksmbd
+    if [ "${ENABLE_KSMBD:-true}" = "true" ]; then
+        log "🔧 启用 ksmbd..."
+        echo "CONFIG_PACKAGE_kmod-fs-ksmbd=y" >> .config
+        echo "CONFIG_PACKAGE_ksmbd-tools=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ksmbd=y" >> .config
+        echo "CONFIG_PACKAGE_luci-i18n-ksmbd-zh-cn=y" >> .config
+    fi
+    
+    # 4. 去重并重新生成配置
+    log "🔧 去重并重新生成配置..."
+    sort .config | uniq > .config.tmp
+    mv .config.tmp .config
+    
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        make olddefconfig > /tmp/build-logs/defconfig_ksmbd.log 2>&1 || true
+    else
+        make defconfig > /tmp/build-logs/defconfig_ksmbd.log 2>&1 || true
+    fi
+    
+    log "✅ samba4 已强制禁用，ksmbd 已启用"
+}
+
+# 执行强制禁用和启用
+force_disable_samba4_enable_ksmbd
+#【build_firmware_main.sh-13.01-end】
 
 #【build_firmware_main.sh-14】
 verify_usb_config() {
@@ -6601,7 +6703,6 @@ workflow_step_hanwckf_build() {
 # 以下三个辅助函数弥补之前遗漏的定义，确保 support.sh 等调用无误
 save_source_code_info() {
     log "保存源代码信息（函数尚未完整实现，仅占位）"
-    # 可在此添加 git log、repo info 等，当前保留基础信息
     return 0
 }
 
@@ -6622,7 +6723,6 @@ main() {
     local arg4="$5"
     local arg5="$6"
 
-    # 只在首次调用主函数时加载配置
     if [ -z "$MAIN_CONFIG_LOADED" ] && [ -z "$CONFIG_ALREADY_LOADED" ]; then
         if [ -f "$REPO_ROOT/build-config.conf" ]; then
             source "$REPO_ROOT/build-config.conf"
@@ -6695,7 +6795,9 @@ main() {
         "verify_config_files")
             verify_config_files
             ;;
-
+        "force_disable_samba4_enable_ksmbd")
+            force_disable_samba4_enable_ksmbd
+            ;;
         "step05_install_basic_tools")
             workflow_step05_install_basic_tools
             ;;
@@ -6762,42 +6864,31 @@ main() {
         "step30_build_summary")
             workflow_step30_build_summary "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
-
-        # 新增 Hanwckf 独立编译命令
         "step_hanwckf_build")
             workflow_step_hanwckf_build "$arg1" "$arg2"
             ;;
-
         "execute_patches")
             execute_patches "$arg1" "$arg2" "$arg3" "$arg4" "$arg5"
             ;;
         "list_patches")
             list_available_patches "$arg1" "$arg2" "$arg3"
             ;;
-
         "search_compiler_files"|"universal_compiler_search"|"search_compiler_files_simple"|"intelligent_platform_aware_compiler_search")
             echo "⚠️ 编译器搜索命令已废弃，使用步骤09编译工具链"
             ;;
-
         *)
             log "❌ 未知命令: $command"
             echo "可用命令:"
-            echo "  基础函数: setup_environment, create_build_dir, initialize_build_env, etc."
-            echo ""
-            echo "  工作流步骤命令:"
-            echo "    step05_install_basic_tools, step06_initial_space_check, step07_create_build_dir"
-            echo "    step08_initialize_build_env, step08_initialize_build_env_hybrid, step09_download_sdk, step10_verify_sdk"
-            echo "    step11_add_turboacc, step12_configure_feeds, step13_install_turboacc"
-            echo "    step14_pre_build_space_check, step15_generate_config, step16_verify_usb"
-            echo "    step17_check_usb_drivers, step20_fix_network, step21_download_deps"
-            echo "    step22_integrate_custom_files, step23_pre_build_check, step25_build_firmware"
-            echo "    step26_check_artifacts, step29_post_build_space_check, step30_build_summary"
-            echo ""
-            echo "  Hanwckf 独立编译: step_hanwckf_build <设备名> <额外包>"
-            echo ""
-            echo "  补丁管理命令:"
-            echo "    execute_patches <补丁选择> <设备名> <源码类型> <分支> [自定义补丁文件]"
-            echo "    list_patches [设备名] [源码类型] [分支]"
+            echo "  基础函数: setup_environment, create_build_dir, initialize_build_env"
+            echo "  工作流步骤: step05_install_basic_tools, step06_initial_space_check"
+            echo "  step07_create_build_dir, step08_initialize_build_env, step08_initialize_build_env_hybrid"
+            echo "  step09_download_sdk, step10_verify_sdk, step11_add_turboacc, step12_configure_feeds"
+            echo "  step13_install_turboacc, step14_pre_build_space_check, step15_generate_config"
+            echo "  step16_verify_usb, step17_check_usb_drivers, step20_fix_network, step21_download_deps"
+            echo "  step22_integrate_custom_files, step23_pre_build_check, step25_build_firmware"
+            echo "  step26_check_artifacts, step29_post_build_space_check, step30_build_summary"
+            echo "  step_hanwckf_build, force_disable_samba4_enable_ksmbd"
+            echo "  补丁管理: execute_patches, list_patches"
             exit 1
             ;;
     esac
@@ -6805,8 +6896,7 @@ main() {
 
 if [ $# -eq 0 ]; then
     echo "错误: 需要提供命令参数"
-    echo "用法: $0 <命令> [参数1] [参数2] [参数3] [参数4] [参数5]"
-    echo "例如: $0 step08_initialize_build_env xiaomi_mi-router-4a-100m 23.05 normal"
+    echo "用法: $0 <命令> [参数]"
     exit 1
 fi
 
