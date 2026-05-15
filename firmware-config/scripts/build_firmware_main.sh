@@ -63,6 +63,7 @@ load_build_config() {
     export IMMORTALWRT_URL OPENWRT_URL LEDE_URL PACKAGES_FEED_URL LUCI_FEED_URL TURBOACC_FEED_URL
     export ENABLE_TURBOACC ENABLE_TCP_BBR FORCE_ATH10K_CT AUTO_FIX_USB_DRIVERS
     export ENABLE_DYNAMIC_KERNEL_DETECTION ENABLE_DYNAMIC_PLATFORM_DRIVERS ENABLE_DYNAMIC_DEVICE_MAPPING
+    export DISABLE_IPV6
     
     # ============================================
     # 检查文件描述符限制（修复Broken pipe）
@@ -90,9 +91,8 @@ load_build_config() {
 #【build_firmware_main.sh-00.5.01-end】
 }
 
-# 只在脚本被直接执行且 REPO_ROOT 已定义时才执行以下代码
-# 避免在 source 时执行 cd 命令
-if [ -n "${BASH_SOURCE[0]}" ] && [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+# 只在脚本被直接执行（而不是被 source）时才执行以下初始化
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
     CONFIG_FILE="$REPO_ROOT/build-config.conf"
 
