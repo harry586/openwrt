@@ -1,8 +1,8 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 4.5.0
+# 版本: 4.6.0
 # 最后更新: 2026-05-15
-# 新增: feeds强制更新 + ksmbd-tools下载源修复
+# 新增: 强制删除 ksmbd-tools 避免编译问题
 
 name: OpenWrt 智能固件构建工作流
 
@@ -78,7 +78,7 @@ on:
         description: "🚫 自定义禁用插件"
         required: false
         type: string
-        default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer samba4 luci-app-samba4 wsdd2"
+        default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer samba4 luci-app-samba4 wsdd2 ksmbd-tools luci-app-ksmbd"
       extra_packages:
         description: "额外安装插件"
         required: false
@@ -266,7 +266,7 @@ jobs:
 #【firmware-build.yml-09-end】
 
 #【firmware-build.yml-10】
-      - name: "10. 配置Feeds（强制更新）"
+      - name: "10. 配置Feeds（强制更新并删除ksmbd）"
         run: |
           echo "=== 步骤10: 配置Feeds（强制更新） ==="
           cd /mnt/openwrt-build
@@ -278,17 +278,10 @@ jobs:
           mkdir -p feeds
           echo "🔄 更新所有 feeds..."
           ./scripts/feeds update -a || true
-          echo "🔄 修复 ksmbd-tools 下载源..."
-          KSMBD_TOOLS_MAKEFILE=$(find feeds -name "Makefile" -path "*/ksmbd-tools/*" 2>/dev/null | head -1)
-          if [ -z "$KSMBD_TOOLS_MAKEFILE" ]; then
-            KSMBD_TOOLS_MAKEFILE=$(find package -name "Makefile" -path "*/ksmbd-tools/*" 2>/dev/null | head -1)
-          fi
-          if [ -n "$KSMBD_TOOLS_MAKEFILE" ] && [ -f "$KSMBD_TOOLS_MAKEFILE" ]; then
-            cp "$KSMBD_TOOLS_MAKEFILE" "$KSMBD_TOOLS_MAKEFILE.bak"
-            sed -i 's|codeload.github.com/cifsd-team/ksmbd-tools/tar.gz/|github.com/cifsd-team/ksmbd-tools/releases/download/|g' "$KSMBD_TOOLS_MAKEFILE"
-            sed -i 's|\.tar.gz?|.tar.gz|g' "$KSMBD_TOOLS_MAKEFILE"
-            echo "   ✅ ksmbd-tools 下载源已修复"
-          fi
+          echo "🔧 删除 ksmbd-tools（避免编译问题）..."
+          find . -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
+          find feeds -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
+          find package -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
           echo "🔄 安装所有 feeds..."
           ./scripts/feeds install -a || true
           echo "✅ Feeds配置完成"
@@ -323,11 +316,24 @@ jobs:
 #【firmware-build.yml-15-end】
 
 #【firmware-build.yml-15.5】
-      - name: "15.5. 强制禁用samba4并启用ksmbd"
+      - name: "15.5. 强制禁用samba4并删除ksmbd"
         run: |
-          echo "=== 步骤15.5: 强制禁用samba4并启用ksmbd ==="
-          source /mnt/openwrt-build/build_env.sh
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh force_disable_samba4_enable_ksmbd
+          echo "=== 步骤15.5: 强制禁用samba4并删除ksmbd ==="
+          cd /mnt/openwrt-build
+          echo "🔧 删除 ksmbd-tools 源码..."
+          find . -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
+          find feeds -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
+          find package -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
+          echo "🔧 从 .config 中删除 ksmbd 配置..."
+          sed -i '/ksmbd/d' .config
+          sed -i '/KSMBD/d' .config
+          echo "🔧 禁用 samba4..."
+          sed -i '/samba4/d' .config
+          echo "# CONFIG_PACKAGE_samba4 is not set" >> .config
+          echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
+          echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
+          make defconfig
+          echo "✅ samba4 已禁用，ksmbd 源码已删除"
 #【firmware-build.yml-15.5-end】
 
 #【firmware-build.yml-16】
