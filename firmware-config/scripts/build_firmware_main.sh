@@ -1274,6 +1274,11 @@ configure_feeds() {
     log "=== 配置Feeds ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
     
+    # ---------- 新增：强制清理并重建 feeds ----------
+    log "🔧 强制清理旧 feeds..."
+    rm -rf feeds
+    mkdir -p feeds
+    
     # ---------- 新增：Hanwckf 模式保留原有 feeds ----------
     local is_hanwckf=0
     if echo "$DEVICE" | grep -qi "rax3000m" && [ "$SOURCE_REPO_TYPE" = "immortalwrt" ]; then
@@ -1286,7 +1291,6 @@ configure_feeds() {
             cp "feeds.conf.default" "feeds.conf.default.bak"
             log "  ✅ 已备份原有 feeds 配置"
         fi
-        # 直接进行更新和安装，不重写 feeds 文件
         log "=== 更新Feeds ==="
         ./scripts/feeds update -a || log "⚠️ feeds更新有警告，继续"
         ./scripts/feeds install -a || log "⚠️ feeds安装有警告，继续"
@@ -1423,6 +1427,21 @@ EOF
             log "  🗑️ 删除 package 目录: $dir"
             rm -rf "$dir"
         done
+    fi
+    
+    # ---------- 新增：修复 ksmbd-tools 下载源 ----------
+    log "🔧 修复 ksmbd-tools 下载源..."
+    KSMBD_TOOLS_MAKEFILE=$(find feeds -name "Makefile" -path "*/ksmbd-tools/*" 2>/dev/null | head -1)
+    if [ -z "$KSMBD_TOOLS_MAKEFILE" ]; then
+        KSMBD_TOOLS_MAKEFILE=$(find package -name "Makefile" -path "*/ksmbd-tools/*" 2>/dev/null | head -1)
+    fi
+    if [ -n "$KSMBD_TOOLS_MAKEFILE" ] && [ -f "$KSMBD_TOOLS_MAKEFILE" ]; then
+        cp "$KSMBD_TOOLS_MAKEFILE" "$KSMBD_TOOLS_MAKEFILE.bak"
+        sed -i 's|codeload.github.com/cifsd-team/ksmbd-tools/tar.gz/|github.com/cifsd-team/ksmbd-tools/releases/download/|g' "$KSMBD_TOOLS_MAKEFILE"
+        sed -i 's|\.tar.gz?|.tar.gz|g' "$KSMBD_TOOLS_MAKEFILE"
+        log "  ✅ ksmbd-tools 下载源已修复"
+    else
+        log "  ⚠️ 未找到 ksmbd-tools Makefile，跳过修复"
     fi
     
     log "=== 安装Feeds ==="
