@@ -2153,12 +2153,12 @@ EOF
 #【build_firmware_main.sh-13-end】
 
 #【build_firmware_main.sh-13.01】
-# 强制禁用 samba4 并启用 ksmbd（独立函数，可在 generate_config 之后单独调用）
+# 强制禁用 samba4（ksmbd 暂时禁用，待修复后再启用）
 force_disable_samba4_enable_ksmbd() {
     load_env
     cd $BUILD_DIR || handle_error "进入构建目录失败"
     
-    log "=== 强制禁用 samba4 并启用 ksmbd ==="
+    log "=== 强制禁用 samba4 ==="
     
     if [ ! -f ".config" ]; then
         log "⚠️ .config 文件不存在，跳过"
@@ -2175,23 +2175,17 @@ force_disable_samba4_enable_ksmbd() {
     # 2. 强制禁用 samba4 相关包
     log "🔧 强制禁用 samba4 相关包..."
     echo "# CONFIG_PACKAGE_samba4 is not set" >> .config
-    echo "# CONFIG_PACKAGE_samba4-admin is not set" >> .config
-    echo "# CONFIG_PACKAGE_samba4-client is not set" >> .config
-    echo "# CONFIG_PACKAGE_samba4-libs is not set" >> .config
     echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
-    echo "# CONFIG_PACKAGE_samba4-utils is not set" >> .config
     echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
-    echo "# CONFIG_PACKAGE_luci-i18n-samba4-zh-cn is not set" >> .config
     echo "# CONFIG_PACKAGE_wsdd2 is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-i18n-samba4-zh-cn is not set" >> .config
     
-    # 3. 启用 ksmbd
-    if [ "${ENABLE_KSMBD:-true}" = "true" ]; then
-        log "🔧 启用 ksmbd..."
-        echo "CONFIG_PACKAGE_kmod-fs-ksmbd=y" >> .config
-        echo "CONFIG_PACKAGE_ksmbd-tools=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-ksmbd=y" >> .config
-        echo "CONFIG_PACKAGE_luci-i18n-ksmbd-zh-cn=y" >> .config
-    fi
+    # 3. ksmbd 暂时禁用（待修复编译问题）
+    log "⚠️ ksmbd 暂时禁用（编译问题待解决）"
+    echo "# CONFIG_PACKAGE_kmod-fs-ksmbd is not set" >> .config
+    echo "# CONFIG_PACKAGE_ksmbd-tools is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-app-ksmbd is not set" >> .config
+    echo "# CONFIG_PACKAGE_luci-i18n-ksmbd-zh-cn is not set" >> .config
     
     # 4. 去重并重新生成配置
     log "🔧 去重并重新生成配置..."
@@ -2199,16 +2193,15 @@ force_disable_samba4_enable_ksmbd() {
     mv .config.tmp .config
     
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        make olddefconfig > /tmp/build-logs/defconfig_ksmbd.log 2>&1 || true
+        make olddefconfig > /tmp/build-logs/defconfig_samba4_disable.log 2>&1 || true
     else
-        make defconfig > /tmp/build-logs/defconfig_ksmbd.log 2>&1 || true
+        make defconfig > /tmp/build-logs/defconfig_samba4_disable.log 2>&1 || true
     fi
     
-    log "✅ samba4 已强制禁用，ksmbd 已启用"
+    log "✅ samba4 已禁用"
 }
 
-# 注意：不要在这里自动执行 force_disable_samba4_enable_ksmbd！
-# 这个函数应该由 workflow 在步骤15.5中手动调用
+# 注意：不要在这里自动执行
 #【build_firmware_main.sh-13.01-end】
 
 #【build_firmware_main.sh-14】
