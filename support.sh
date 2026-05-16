@@ -265,16 +265,13 @@ validate_device() {
                             best_match="$dev"
                             found_target="$target_name"
                             
-                            # 修复：正确推导子目标
                             local mk_dir=$(dirname "$mk_file")
                             local parent_dir=$(basename "$mk_dir")
                             if [ "$parent_dir" = "image" ]; then
-                                # 直接使用 .mk 文件名作为子目标名 (例如 generic.mk -> generic)
                                 found_subtarget=$(basename "$mk_file" .mk)
                             else
                                 found_subtarget="$parent_dir"
                             fi
-                            # 如果子目标名刚好等于目标名，尝试在 config 目录中找第一个有效子目标
                             if [ "$found_subtarget" = "$target_name" ]; then
                                 for sub_dir in "$search_dir/target/linux/$target_name/"*/; do
                                     [ -d "$sub_dir" ] || continue
@@ -301,7 +298,6 @@ validate_device() {
         fi
     fi
     
-    # 找不到设备，直接报错退出
     error "❌ mk文件中未找到设备: $device_name"
 }
 
@@ -317,7 +313,6 @@ get_device_platform() {
         return 0
     fi
     
-    # 直接调用，让错误信息透传
     validate_device "$device_name" "$manual_target" "$manual_subtarget"
 }
 #【support.sh-08-end】
