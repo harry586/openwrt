@@ -416,6 +416,16 @@ initialize_build_env() {
 
     log "=== 版本选择 ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
+    log "用户选择的版本: $version_selection"
+
+    # ============================================
+    # LEDE 源码：强制使用 master 分支，忽略用户选择的版本
+    # ============================================
+    local is_lede=0
+    if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        is_lede=1
+        log "🔧 LEDE 源码模式：强制使用 master 分支（忽略用户选择的版本: $version_selection）"
+    fi
 
     # ============================================
     # Hanwckf 特殊处理：immortalwrt + rax3000m → 自动切换为 Hanwckf 源码
@@ -429,8 +439,9 @@ initialize_build_env() {
     case "$SOURCE_REPO_TYPE" in
         "lede")
             SELECTED_REPO_URL="${LEDE_URL:-https://github.com/coolsnowwolf/lede.git}"
+            # LEDE 强制使用 master 分支
             SELECTED_BRANCH="master"
-            log "✅ LEDE源码选择: 固定使用master分支"
+            log "✅ LEDE源码选择: 强制使用 master 分支（忽略用户选择: $version_selection）"
             ;;
         "openwrt")
             SELECTED_REPO_URL="${OPENWRT_URL:-https://github.com/openwrt/openwrt.git}"
