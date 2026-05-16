@@ -1,8 +1,8 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 4.9.0
+# 版本: 5.0.0
 # 最后更新: 2026-05-16
-# 新增: 强制删除 ppp/ksmbd/samba4 源码解决冲突
+# 已删除实时监控守护进程
 
 name: OpenWrt 智能固件构建工作流
 
@@ -131,39 +131,6 @@ jobs:
           fi
           echo "✅ 时间戳: $TIMESTAMP_SEC"
 #【firmware-build.yml-01-end】
-
-#【firmware-build.yml-01.5】
-      - name: "01.5. 启动错误监控守护进程"
-        run: |
-          echo "=== 步骤01.5: 启动错误监控守护进程 ==="
-          mkdir -p /tmp/build-monitor
-          echo '#!/bin/bash' > /tmp/error_monitor.sh
-          echo 'MONITOR_DIR="/tmp/build-monitor"' >> /tmp/error_monitor.sh
-          echo 'ERROR_LOG="$MONITOR_DIR/errors.log"' >> /tmp/error_monitor.sh
-          echo 'DEP_ERROR_LOG="$MONITOR_DIR/dep_errors.log"' >> /tmp/error_monitor.sh
-          echo 'BUILD_LOG="/mnt/openwrt-build/build.log"' >> /tmp/error_monitor.sh
-          echo 'mkdir -p "$MONITOR_DIR"' >> /tmp/error_monitor.sh
-          echo 'echo "" > "$ERROR_LOG"' >> /tmp/error_monitor.sh
-          echo 'echo "" > "$DEP_ERROR_LOG"' >> /tmp/error_monitor.sh
-          echo 'echo "[$(date)] 监控守护进程启动" >> "$MONITOR_DIR/events.log"' >> /tmp/error_monitor.sh
-          echo 'WAIT_COUNT=0' >> /tmp/error_monitor.sh
-          echo 'while [ ! -f "$BUILD_LOG" ] && [ $WAIT_COUNT -lt 300 ]; do' >> /tmp/error_monitor.sh
-          echo '  sleep 2' >> /tmp/error_monitor.sh
-          echo '  WAIT_COUNT=$((WAIT_COUNT+1))' >> /tmp/error_monitor.sh
-          echo 'done' >> /tmp/error_monitor.sh
-          echo 'tail -f "$BUILD_LOG" 2>/dev/null | while read line; do' >> /tmp/error_monitor.sh
-          echo '  echo "$line" | grep -qiE "error:|Error|ERROR|failed:|Failed|make.*\*\*\*" && echo "[$(date)] $line" >> "$ERROR_LOG"' >> /tmp/error_monitor.sh
-          echo '  if echo "$line" | grep -qiE "pkg_hash_check_unresolved|cannot find dependency"; then' >> /tmp/error_monitor.sh
-          echo '    echo "[$(date)] $line" >> "$DEP_ERROR_LOG"' >> /tmp/error_monitor.sh
-          echo '    [[ "$line" =~ for[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/problem_packages.txt"' >> /tmp/error_monitor.sh
-          echo '    [[ "$line" =~ dependency[[:space:]]+([a-zA-Z0-9_-]+) ]] && echo "${BASH_REMATCH[1]}" >> "$MONITOR_DIR/missing_deps.txt"' >> /tmp/error_monitor.sh
-          echo '  fi' >> /tmp/error_monitor.sh
-          echo 'done' >> /tmp/error_monitor.sh
-          chmod +x /tmp/error_monitor.sh
-          /tmp/error_monitor.sh &
-          echo "MONITOR_PID=$!" >> $GITHUB_ENV
-          echo "✅ 监控守护进程已启动"
-#【firmware-build.yml-01.5-end】
 
 #【firmware-build.yml-02】
       - name: "02. 下载源代码"
@@ -489,51 +456,7 @@ jobs:
 #【firmware-build.yml-30-end】
 
 #【firmware-build.yml-31】
-      - name: "31. 停止监控守护进程"
-        if: always() && !cancelled()
-        run: |
-          sleep 3
-          if [ -n "$MONITOR_PID" ] && kill -0 $MONITOR_PID 2>/dev/null; then
-            kill $MONITOR_PID 2>/dev/null || true
-          fi
-#【firmware-build.yml-31-end】
-
-#【firmware-build.yml-32】
-      - name: "32. 生成监控报告"
-        if: always() && !cancelled()
-        run: |
-          echo "=========================================="
-          echo "📊 错误监控报告"
-          echo "=========================================="
-          echo "编译退出码: ${BUILD_EXIT_CODE:-未知}"
-          echo "固件存在: ${FIRMWARE_EXISTS:-未知}"
-          if [ -f /tmp/build-monitor/errors.log ]; then
-            echo ""
-            echo "错误总数: $(wc -l < /tmp/build-monitor/errors.log)"
-            tail -30 /tmp/build-monitor/errors.log | sed 's/^/  /'
-          fi
-          if [ -f /tmp/build-monitor/dep_errors.log ] && [ -s /tmp/build-monitor/dep_errors.log ]; then
-            echo ""
-            echo "依赖错误:"
-            cat /tmp/build-monitor/dep_errors.log | sed 's/^/  /'
-          fi
-          mkdir -p ${{ github.workspace }}/monitor-reports
-          cp -r /tmp/build-monitor/* ${{ github.workspace }}/monitor-reports/ 2>/dev/null || true
-#【firmware-build.yml-32-end】
-
-#【firmware-build.yml-33】
-      - name: "33. 上传监控报告"
-        if: always() && !cancelled()
-        uses: actions/upload-artifact@v4
-        with:
-          name: monitor-report-${{ env.TIMESTAMP_SEC }}
-          path: ${{ github.workspace }}/monitor-reports/
-          retention-days: 7
-          if-no-files-found: warn
-#【firmware-build.yml-33-end】
-
-#【firmware-build.yml-34】
-      - name: "34. 最终状态检查"
+      - name: "31. 最终状态检查"
         if: always() && env.FIRMWARE_EXISTS != 'true'
         run: |
           echo "=========================================="
@@ -543,4 +466,4 @@ jobs:
           echo ""
           echo "📋 详细错误报告请下载 error-report artifact"
           exit 1
-#【firmware-build.yml-34-end】
+#【firmware-build.yml-31-end】
