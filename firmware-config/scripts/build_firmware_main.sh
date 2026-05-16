@@ -1469,7 +1469,6 @@ install_turboacc_packages() {
 : ${FORCE_ATH10K_CT:="true"}
 : ${AUTO_FIX_USB_DRIVERS:="true"}
 : ${ENABLE_VERBOSE_LOG:="false"}
-: ${DISABLE_IPV6:="true"}
 : ${FORBIDDEN_PACKAGES:="vssr ssr-plus passwall rclone ddns qbittorrent filetransfer nlbwmon wol"}
 #【build_firmware_main.sh-11-end】
 
@@ -1599,7 +1598,6 @@ generate_config() {
             cp "defconfig/mt7981-ax3000.config" ".config"
             log "✅ 已应用 Hanwckf 预置配置: defconfig/mt7981-ax3000.config"
         
-            # 锁定设备为 cmcc_rax3000m（NAND）
             sed -i '/^CONFIG_TARGET_mediatek_mt7981_DEVICE_/d' .config
             echo "CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m=y" >> .config
             echo "# CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m_emmc is not set" >> .config
@@ -1607,7 +1605,6 @@ generate_config() {
             make defconfig > /tmp/build-logs/defconfig_hanwckf.log 2>&1
             log "✅ 已锁定设备: cmcc_rax3000m (NAND)"
             
-            # 设置正确的平台变量，后续步骤引用
             TARGET="mediatek"
             SUBTARGET="mt7981"
             actual_subtarget="mt7981"
@@ -1619,7 +1616,6 @@ generate_config() {
             handle_error "Hanwckf 预置配置缺失"
         fi
         
-        # 不再在此添加额外包、TCP BBR、禁用 IPv6 等，全部交给后续通用流程
         log "📌 Hanwckf 基础配置已就绪，继续合并通用配置..."
     fi
     
@@ -1646,22 +1642,18 @@ CONFIG_MTD_ROOTFS_ROOT_DEV=y
 CONFIG_MTD_ROOTFS_SPLIT=y
 CONFIG_MTD_SPLIT_SQUASHFS=y
 
-# 确保 UBI 支持
 CONFIG_MTD_UBI=y
 CONFIG_UBIFS_FS=y
 CONFIG_UBIFS_FS_XZ=y
 CONFIG_UBIFS_FS_LZO=y
 CONFIG_UBIFS_FS_ZLIB=y
 
-# 内核命令行参数
 CONFIG_CMDLINE="console=ttyMSM0,115200n8"
 CONFIG_CMDLINE_FROM_BOOTLOADER=y
 
-# 看门狗支持
 CONFIG_WATCHDOG=y
 CONFIG_QCOM_WDT=y
 
-# 确保 MTD 支持
 CONFIG_MTD=y
 CONFIG_MTD_BLOCK=y
 CONFIG_MTD_BLOCK_RO=y
@@ -1679,7 +1671,6 @@ CONFIG_CMDLINE_PARTITION=y
 CONFIG_MTD_SPLIT_FIRMWARE=y
 CONFIG_MTD_SPLIT_UIMAGE_FW=y
 
-# 确保 MTD 和 UBI 支持
 CONFIG_MTD=y
 CONFIG_MTD_BLOCK=y
 CONFIG_MTD_SPLIT=y
@@ -1689,17 +1680,14 @@ CONFIG_SQUASHFS=y
 CONFIG_SQUASHFS_XZ=y
 CONFIG_SQUASHFS_ZSTD=y
 
-# NAND 支持
 CONFIG_MTD_NAND=y
 CONFIG_MTD_NAND_ECC=y
 CONFIG_MTD_NAND_ECC_SW_HAMMING=y
 CONFIG_MTD_SPI_NAND=y
 
-# 内核命令行参数
 CONFIG_CMDLINE="earlycon=uart8250,mmio32,0x11002000 console=ttyS0,115200n1"
 CONFIG_CMDLINE_FROM_BOOTLOADER=y
 
-# 确保 watchdog 支持
 CONFIG_WATCHDOG=y
 CONFIG_MEDIATEK_WATCHDOG=y
 EOF
@@ -1715,21 +1703,17 @@ CONFIG_CMDLINE_PARTITION=y
 CONFIG_MTD_SPLIT_FIRMWARE=y
 CONFIG_MTD_SPLIT_UIMAGE_FW=y
 
-# 确保 MTD 支持
 CONFIG_MTD=y
 CONFIG_MTD_BLOCK=y
 CONFIG_MTD_SPLIT=y
 CONFIG_MTD_ROOTFS=y
 
-# 内核命令行参数
 CONFIG_CMDLINE="console=ttyS0,115200"
 CONFIG_CMDLINE_FROM_BOOTLOADER=y
 
-# 确保 watchdog 支持
 CONFIG_WATCHDOG=y
 CONFIG_ATH79_WDT=y
 
-# SquashFS 支持
 CONFIG_SQUASHFS=y
 CONFIG_SQUASHFS_XZ=y
 CONFIG_SQUASHFS_ZLIB=y
@@ -1743,7 +1727,6 @@ EOF
         
         cat >> .config << 'EOF'
 # LEDE 通用启动修复配置
-# 确保 initramfs 支持
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_INITRAMFS_SOURCE=""
 CONFIG_RD_GZIP=y
@@ -1753,10 +1736,8 @@ CONFIG_RD_XZ=y
 CONFIG_RD_LZO=y
 CONFIG_RD_LZ4=y
 
-# 确保正确的根文件系统类型
 CONFIG_ROOT_NFS=y
 
-# 确保必要的文件系统支持
 CONFIG_EXT4_FS=y
 CONFIG_EXT4_USE_FOR_EXT2=y
 CONFIG_FUSE_FS=y
@@ -1767,7 +1748,6 @@ CONFIG_FAT_DEFAULT_IOCHARSET="iso8859-1"
 CONFIG_NTFS_FS=y
 CONFIG_NTFS3_FS=y
 
-# 确保网络支持（不影响启动）
 CONFIG_NET=y
 CONFIG_INET=y
 CONFIG_IPV4=y
@@ -1899,9 +1879,7 @@ EOF
     local device_config=""
     local actual_subtarget="$SUBTARGET"
     
-    # 如果不是 Hanwckf 模式，则需要重新生成 device_config
     if [ $IS_HANWCKF_RAX3000M -eq 0 ]; then
-        # 修复：只有当 SUBTARGET 无效（不存在或等于目标名）时才尝试自动查找
         local subtarget_valid=0
         if [ -n "$actual_subtarget" ] && [ "$actual_subtarget" != "$TARGET" ]; then
             if [ -f "target/linux/$TARGET/$actual_subtarget/target.mk" ] || [ -d "target/linux/$TARGET/$actual_subtarget/base-files" ]; then
@@ -1971,7 +1949,6 @@ ${device_config}
 EOF
         fi
     else
-        # Hanwckf 模式：设备配置已在之前设置，这里只更新 SUBTARGET 环境变量
         SUBTARGET="$actual_subtarget"
         log "  ✅ Hanwckf 模式，设备配置已锁定: $device_config"
     fi
@@ -2039,7 +2016,6 @@ EOF
         fi
     fi
     
-    # 添加额外包（统一处理，兼容逗号和分号）
     if [ -n "$extra_packages" ]; then
         log "📦 添加额外包: $extra_packages"
         local fixed_packages=$(echo "$extra_packages" | sed 's/;/,/g')
@@ -2066,7 +2042,6 @@ EOF
         log "ℹ️ OpenWrt官方源码跳过TurboACC"
     fi
     
-    # 强制启用 ath10k-ct（只对真正可能使用 ath10k 的平台）
     if [ "${FORCE_ATH10K_CT:-true}" = "true" ]; then
         local force_ath10k=0
         case "$TARGET" in
@@ -2085,65 +2060,6 @@ EOF
         else
             log "ℹ️ 当前平台 $TARGET 不需要 ath10k-ct，跳过强制启用"
         fi
-    fi
-    
-    # ============================================
-    # 禁用 IPv6 所有功能
-    # ============================================
-    if [ "${DISABLE_IPV6:-true}" = "true" ]; then
-        log "🔧 ===== 禁用所有 IPv6 功能（所有源码类型通用保守方式） ====="
-        
-        cat >> .config << 'EOF'
-# IPv6 包禁用（保守方式 - 所有源码类型通用）
-# 禁用 IPv6 防火墙相关
-# CONFIG_PACKAGE_ip6tables is not set
-# CONFIG_PACKAGE_ip6tables-extra is not set
-# CONFIG_PACKAGE_ip6tables-mod-nat is not set
-# CONFIG_PACKAGE_kmod-ip6tables is not set
-# CONFIG_PACKAGE_kmod-ip6tables-extra is not set
-
-# 禁用 IPv6 DHCP/RA 客户端和服务
-# CONFIG_PACKAGE_odhcp6c is not set
-# CONFIG_PACKAGE_odhcpd is not set
-# CONFIG_PACKAGE_odhcpd-ipv6only is not set
-
-# 禁用 IPv6 隧道协议
-# CONFIG_PACKAGE_6in4 is not set
-# CONFIG_PACKAGE_6rd is not set
-# CONFIG_PACKAGE_6to4 is not set
-# CONFIG_PACKAGE_ds-lite is not set
-# CONFIG_PACKAGE_map is not set
-
-# 禁用 LuCI IPv6 协议支持
-# CONFIG_PACKAGE_luci-proto-ipv6 is not set
-# CONFIG_PACKAGE_luci-proto-6in4 is not set
-# CONFIG_PACKAGE_luci-proto-6rd is not set
-# CONFIG_PACKAGE_luci-proto-6to4 is not set
-
-# 禁用 IPv6 内核模块包（但不修改内核配置）
-# CONFIG_PACKAGE_kmod-ipv6 is not set
-# CONFIG_PACKAGE_kmod-nf-ip6 is not set
-# CONFIG_PACKAGE_kmod-nf-conntrack6 is not set
-# CONFIG_PACKAGE_kmod-nf-log6 is not set
-# CONFIG_PACKAGE_kmod-nf-nat6 is not set
-# CONFIG_PACKAGE_kmod-nf-reject6 is not set
-# CONFIG_PACKAGE_kmod-sit is not set
-EOF
-        log "  ✅ 已添加 IPv6 包禁用配置（所有源码类型通用）"
-        
-        sed -i '/^CONFIG_PACKAGE_.*ip6tables/d' .config
-        sed -i '/^CONFIG_PACKAGE_odhcp6c/d' .config
-        sed -i '/^CONFIG_PACKAGE_odhcpd/d' .config
-        sed -i '/^CONFIG_PACKAGE_6in4/d' .config
-        sed -i '/^CONFIG_PACKAGE_6rd/d' .config
-        sed -i '/^CONFIG_PACKAGE_6to4/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-proto-ipv6/d' .config
-        sed -i '/^CONFIG_PACKAGE_kmod-ipv6/d' .config
-        sed -i '/^CONFIG_PACKAGE_kmod-nf-ip6/d' .config
-        sed -i '/^CONFIG_PACKAGE_kmod-nf-conntrack6/d' .config
-        
-        log "  ✅ 已删除所有 IPv6 启用配置"
-        log "  📌 注意：保留内核 IPv6 配置，仅禁用用户态包，确保系统启动兼容性"
     fi
     
     log "🔧 强制配置生成固件..."
@@ -2592,9 +2508,18 @@ EOF
     log "  模块化软件包: $module_packages"
     log "  禁用软件包: $disabled_packages"
     
-    log "🔧 ===== 全面禁用不需要的插件 ===== "
+    # ============================================
+    # base 模式和 normal 模式都需要禁用冲突和不需要的插件
+    # ============================================
+    log "🔧 ===== 禁用冲突和不需要的插件 ====="
     
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
+    
+    if [ "$CONFIG_MODE" = "base" ]; then
+        log "📋 base模式：禁用更多插件以保持精简"
+        base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp"
+    fi
+    
     log "📋 基础禁用插件: $base_forbidden"
     
     local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
@@ -2673,6 +2598,18 @@ EOF
     sed -i '/ddns/d' .config
     sed -i '/DDNS/d' .config
     
+    log "🔧 解决 dnsmasq 冲突：确保只启用 dnsmasq，禁用 dnsmasq-full..."
+    if grep -q "^CONFIG_PACKAGE_dnsmasq-full=y" .config || grep -q "^CONFIG_PACKAGE_dnsmasq-full=m" .config; then
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=m/d' .config
+        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+        log "  ✅ 已禁用 dnsmasq-full"
+    fi
+    if ! grep -q "^CONFIG_PACKAGE_dnsmasq=y" .config && ! grep -q "^# CONFIG_PACKAGE_dnsmasq is not set" .config; then
+        echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
+        log "  ✅ 已启用 dnsmasq"
+    fi
+    
     log "🔧 确保 vsftpd 被启用..."
     if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
@@ -2739,8 +2676,9 @@ EOF
     
     log "📊 最终插件状态验证:"
     local still_enabled=0
+    local base_pkgs_array=($base_forbidden)
     
-    for plugin in "${BASE_PKGS[@]}"; do
+    for plugin in "${base_pkgs_array[@]}"; do
         if grep -q "^CONFIG_PACKAGE_${plugin}=y" .config || grep -q "^CONFIG_PACKAGE_luci-app-${plugin}=y" .config; then
             log "  ❌ $plugin 相关包仍被启用"
             still_enabled=$((still_enabled + 1))
@@ -2766,9 +2704,19 @@ EOF
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
     fi
     
-    # ============================================
-    # LEDE 源码最终启动配置验证（仅在 lede 且非 Hanwckf 时执行）
-    # ============================================
+    if grep -q "^CONFIG_PACKAGE_dnsmasq=y" .config; then
+        log "  ✅ dnsmasq 已启用"
+    else
+        log "  ⚠️ dnsmasq 未启用"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_dnsmasq-full=y" .config || grep -q "^CONFIG_PACKAGE_dnsmasq-full=m" .config; then
+        log "  ❌ dnsmasq-full 仍被启用"
+        still_enabled=$((still_enabled + 1))
+    else
+        log "  ✅ dnsmasq-full 已禁用"
+    fi
+    
     if [ $still_enabled -eq 0 ]; then
         log "🎉 所有指定插件已成功禁用"
     else
