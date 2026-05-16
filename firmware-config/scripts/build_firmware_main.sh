@@ -2610,6 +2610,12 @@ EOF
         log "  ✅ 已启用 dnsmasq"
     fi
     
+    log "🔧 解决 luci-light 依赖问题：确保 luci-proto-ppp 已启用..."
+    if ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config && ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=m" .config; then
+        echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+        log "  ✅ 已启用 luci-proto-ppp（luci-light 依赖）"
+    fi
+    
     log "🔧 确保 vsftpd 被启用..."
     if ! grep -q "^CONFIG_PACKAGE_vsftpd=y" .config && ! grep -q "^CONFIG_PACKAGE_vsftpd=m" .config; then
         echo "CONFIG_PACKAGE_vsftpd=y" >> .config
@@ -2715,6 +2721,12 @@ EOF
         still_enabled=$((still_enabled + 1))
     else
         log "  ✅ dnsmasq-full 已禁用"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config; then
+        log "  ✅ luci-proto-ppp 已启用（luci-light 依赖）"
+    else
+        log "  ⚠️ luci-proto-ppp 未启用"
     fi
     
     if [ $still_enabled -eq 0 ]; then
