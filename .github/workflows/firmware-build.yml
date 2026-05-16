@@ -1,89 +1,113 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 5.0.0
-# 最后更新: 2026-05-16
-# 已删除实时监控守护进程
+# 版本: 3.8.0
+# 最后更新: 2026-05-04
+# 整合 Hanwckf 源码，使用标准构建步骤
 
 name: OpenWrt 智能固件构建工作流
 
 on:
   workflow_dispatch:
     inputs:
+      # 源码仓库选择
       source_repo:
         description: "📦 源码仓库选择"
         required: true
         type: choice
         default: "immortalwrt"
         options: ["immortalwrt", "openwrt", "lede"]
+
+      # 版本选择
       version_selection:
         description: "🔄 版本选择"
         required: true
         type: choice
         default: "21.02"
         options: ["23.05", "21.02"]
+      # 配置模式
       config_mode:
         description: "⚙️ 配置模式选择"
         required: true
         type: choice
         default: "normal"
         options: ["base", "normal"]
+
+      # 预定义设备
       device_name:
         description: "📱 预定义设备（下拉选择）"
         required: false
         type: choice
         default: "ac42u"
         options: ["ac42u", "cmcc_rax3000m-nand", "netgear_wndr3800"]
+
+      # 补丁选择方式（显示中文）
       patch_method:
         description: "🔧 补丁选择方式"
         required: true
         type: choice
         default: "不应用补丁"
         options:
-          - "不应用补丁"
-          - "单选内置补丁"
-          - "手动输入多个内置补丁"
-          - "自定义补丁命令"
+          - "不应用补丁"                 # none
+          - "单选内置补丁"               # single
+          - "手动输入多个内置补丁"       # custom-list
+          - "自定义补丁命令"             # custom-command
+
+      # 单个内置补丁（当选择“单选内置补丁”时生效）
       builtin_patch_single:
-        description: "📌 选择单个内置补丁"
+        description: "📌 选择单个内置补丁（ac42u-ath10k）"
         required: false
         type: choice
         default: "none"
-        options: ["none", "ac42u-ath10k"]
+        options:
+          - "none"              # 不选择
+          - "ac42u-ath10k"      # AC42U - ATH10K固件更新
+
+      # 多个内置补丁（当选择“手动输入多个内置补丁”时生效）
       builtin_patch_list:
-        description: "📋 多个内置补丁"
+        description: "📋 多个内置补丁（逗号分隔；适用源码同上）"
         required: false
         type: string
         default: ""
+
+      # 自定义补丁命令（当选择“自定义补丁命令”时生效）
       custom_patch_command:
-        description: "📝 自定义补丁命令"
+        description: "📝 自定义补丁命令（每行一条命令，支持#注释）"
         required: false
         type: string
         default: ""
+
+      # 手动输入框
       manual_device_name:
-        description: "📝 设备名称（自定义）"
+        description: "📝 设备名称（使用自定义）"
         required: false
         type: string
         default: ""
       manual_target:
-        description: "🎯 芯片型号"
+        description: "🎯 芯片型号（ipq40xx、mediatek）"
         required: false
         type: string
         default: ""
       manual_subtarget:
-        description: "🔧 子平台"
+        description: "🔧 子平台（generic、filogic）"
         required: false
         type: string
         default: ""
+
+      # 自定义禁用插件
       forbidden_packages:
-        description: "🚫 自定义禁用插件"
+        description: "🚫 自定义禁用插件 - 格式：用空格分隔，默认禁用 vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
         required: false
         type: string
-        default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer samba4 luci-app-samba4 wsdd2 ksmbd-tools luci-app-ksmbd wechatpush ppp ppp-mod-pppoe"
+        default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer"
+
+      # 额外安装插件
       extra_packages:
-        description: "额外安装插件"
+        description: "额外安装插件 - 格式：用分号;分隔"
         required: false
         type: string
         default: ""
+
+      # 启用智能并行优化
       enable_parallel:
         description: "⚡ 启用智能并行优化"
         required: false
@@ -100,7 +124,7 @@ env:
   BUILTIN_PATCH_SINGLE: "${{ github.event.inputs.builtin_patch_single }}"
   BUILTIN_PATCH_LIST: "${{ github.event.inputs.builtin_patch_list }}"
   CUSTOM_PATCH_COMMAND: "${{ github.event.inputs.custom_patch_command }}"
-  IS_HANWCKF: "false"
+  IS_HANWCKF: "false"  # 默认不是，后续步骤会动态设置（保留，但不再用于跳过步骤）
 #【firmware-build.yml-00-end】
 
 jobs:
@@ -109,58 +133,119 @@ jobs:
 
     steps:
 #【firmware-build.yml-01】
-      - name: "01. 生成时间戳"
+      - name: "01. 生成时间戳（UTC+8时区）"
         run: |
-          echo "=== 步骤01: 生成时间戳 ==="
+          echo "=== 步骤01: 生成时间戳（UTC+8时区） ==="
+          
           sudo timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
+          
+          START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+          echo "🕐 开始时间: $START_TIME"
+          
+          # 确定最终使用的设备名称
           if [ -n "${{ github.event.inputs.manual_device_name }}" ]; then
             FINAL_DEVICE_NAME="${{ github.event.inputs.manual_device_name }}"
           else
             FINAL_DEVICE_NAME="${{ github.event.inputs.device_name }}"
           fi
+          
+          # 获取源码名称
           SOURCE_REPO_NAME="${{ github.event.inputs.source_repo }}"
+          
           TIMESTAMP_LOCAL=$(date +'%Y%m%d_%H%M%S')
           TIMESTAMP_SEC="${SOURCE_REPO_NAME}-${FINAL_DEVICE_NAME}-${{ github.event.inputs.version_selection }}-${{ github.event.inputs.config_mode }}-${TIMESTAMP_LOCAL}"
+          
           echo "TIMESTAMP_SEC=$TIMESTAMP_SEC" >> $GITHUB_ENV
+          echo "START_TIME=$START_TIME" >> $GITHUB_ENV
           echo "FINAL_DEVICE_NAME=$FINAL_DEVICE_NAME" >> $GITHUB_ENV
           echo "SOURCE_REPO_NAME=$SOURCE_REPO_NAME" >> $GITHUB_ENV
+          
+          echo "✅ 生成时间戳: $TIMESTAMP_SEC"
+          echo "📋 构建配置:"
+          echo "  源码类型: $SOURCE_REPO_NAME"
+          echo "  预定义设备: ${{ github.event.inputs.device_name }}"
+          echo "  手动设备名: ${{ github.event.inputs.manual_device_name }}"
+          echo "  最终设备名: $FINAL_DEVICE_NAME"
+          echo "  手动芯片型号: ${{ github.event.inputs.manual_target }}"
+          echo "  手动子平台: ${{ github.event.inputs.manual_subtarget }}"
+          echo "  版本: ${{ github.event.inputs.version_selection }}"
+          echo "  模式: ${{ github.event.inputs.config_mode }}"
+          echo "  并行优化: ${{ github.event.inputs.enable_parallel }}"
+          echo "  补丁方式: ${{ github.event.inputs.patch_method }}"
+
+          # 保留检测 RAX3000M 用于内部逻辑，但不再跳过步骤
           if echo "$FINAL_DEVICE_NAME" | grep -qi "rax3000m"; then
             echo "IS_HANWCKF=true" >> $GITHUB_ENV
+            echo "✅ 检测到 RAX3000M 设备，将在初始化时自动切换为 Hanwckf 源码"
           else
             echo "IS_HANWCKF=false" >> $GITHUB_ENV
           fi
-          echo "✅ 时间戳: $TIMESTAMP_SEC"
 #【firmware-build.yml-01-end】
 
-#【firmware-build.yml-02】
-      - name: "02. 下载源代码"
+      #【firmware-build.yml-02】
+      - name: "02. 使用Git Archive API下载源代码"
         run: |
-          echo "=== 步骤02: 下载源代码 ==="
+          echo "=== 步骤02: 使用Git Archive API下载源代码 ==="
+          
           set -e
+          trap 'echo "❌ 步骤02 失败，退出代码: $?"; exit 1' ERR
+          
           mkdir -p /tmp/openwrt-source
           cd /tmp/openwrt-source
-          DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
-          curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" -o source.tar.gz
+          
+          echo "🔍 获取仓库默认分支..."
+          DEFAULT_BRANCH=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}" | jq -r '.default_branch')
+          echo "✅ 默认分支: $DEFAULT_BRANCH"
+          
+          echo "📥 下载源代码压缩包..."
+          curl -s -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/tarball/$DEFAULT_BRANCH" \
+            -o source.tar.gz
+          
           if [ ! -f "source.tar.gz" ]; then
-            echo "❌ 下载失败"
+            echo "❌ 错误: 下载源代码压缩包失败"
             exit 1
           fi
+          
+          echo "✅ 下载完成，文件大小: $(ls -lh source.tar.gz | awk '{print $5}')"
+          
+          echo "📦 解压源代码..."
           tar -xzf source.tar.gz --strip-components=1
+          
+          echo "🔍 检查解压结果..."
           if [ -f "firmware-config/scripts/build_firmware_main.sh" ]; then
+            echo "✅ 源代码解压成功"
+            echo "✅ 主脚本存在: firmware-config/scripts/build_firmware_main.sh"
+            
+            echo "📁 复制文件到工作区..."
+            mkdir -p ${{ github.workspace }}
+            
             if [ -d "firmware-config/build-Compiler-file" ]; then
+              echo "⚠️ 发现编译器目录，排除不复制"
               rm -rf firmware-config/build-Compiler-file
             fi
+            
             rsync -av --exclude='.git' . ${{ github.workspace }}/
+            
+            echo "✅ 文件复制完成"
+            
             mkdir -p /tmp/build-artifacts/source-archive
             cp source.tar.gz /tmp/build-artifacts/source-archive/
+            echo "📦 源代码已保存到: /tmp/build-artifacts/source-archive/"
           else
+            echo "❌ 错误: 源代码解压失败，重要文件缺失"
+            ls -la
             exit 1
           fi
-          rm -rf /tmp/openwrt-source
-#【firmware-build.yml-02-end】
+          
+          cd /tmp
+          rm -rf openwrt-source
+          echo "✅ 步骤02 完成"
+      #【firmware-build.yml-02-end】
 
 #【firmware-build.yml-03】
-      - name: "03. 上传源代码"
+      - name: "03. 上传源代码Artifacts"
         uses: actions/upload-artifact@v4
         with:
           name: source-${{ env.TIMESTAMP_SEC }}
@@ -169,251 +254,369 @@ jobs:
           if-no-files-found: error
 #【firmware-build.yml-03-end】
 
-#【firmware-build.yml-04】
-      - name: "04. 修复权限"
+      #【firmware-build.yml-04】
+      - name: "04. 修复权限问题"
         run: |
-          chmod +x ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh
-          chmod +x ${{ github.workspace }}/support.sh
+          echo "=== 步骤04: 修复权限问题 ==="
+          
+          set -e
+          trap 'echo "❌ 步骤04 失败，退出代码: $?"; exit 1' ERR
+          
+          echo "🔧 修复所有脚本的执行权限..."
+          
+          if [ -f "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh" ]; then
+            chmod +x "${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh"
+            echo "✅ 修复主脚本权限"
+          else
+            echo "❌ 错误: 主脚本不存在"
+            exit 1
+          fi
+          
+          if [ -f "${{ github.workspace }}/support.sh" ]; then
+            chmod +x "${{ github.workspace }}/support.sh"
+            echo "✅ 修复support.sh权限"
+          else
+            echo "❌ 错误: support.sh不存在"
+            exit 1
+          fi
+          
           find "${{ github.workspace }}/firmware-config/scripts" -name "*.sh" -exec chmod +x {} \;
-#【firmware-build.yml-04-end】
+          echo "✅ 修复所有脚本权限完成"
+      #【firmware-build.yml-04-end】
 
 #【firmware-build.yml-05】
-      - name: "05. 安装基础工具"
+      - name: "05. 安装基础工具（优化版 - 包含所有关键依赖）"
         run: |
+          echo "=== 步骤05: 安装基础工具（优化版 - 包含所有关键依赖） ==="
+          
+          # 更新软件源
           sudo apt-get update
-          sudo apt-get install -y build-essential libyaml-dev libyaml-cpp-dev libssl-dev libxml2-dev libxslt1-dev libuv1-dev libidn11-dev libidn2-dev libpsl-dev libnghttp2-dev libcap-dev libcap-ng-dev libmnl-dev libnftnl-dev uuid-dev || true
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step05_install_basic_tools
+          
+          # 安装所有关键依赖
+          sudo apt-get install -y \
+            build-essential \
+            libyaml-dev \
+            libyaml-cpp-dev \
+            libssl-dev \
+            libxml2-dev \
+            libxslt1-dev \
+            libuv1-dev \
+            libidn11-dev \
+            libidn2-dev \
+            libpsl-dev \
+            libnghttp2-dev \
+            libcap-dev \
+            libcap-ng-dev \
+            libmnl-dev \
+            libnftnl-dev \
+            uuid-dev \
+            || true
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step05_install_basic_tools
 #【firmware-build.yml-05-end】
 
-#【firmware-build.yml-06】
+      #【firmware-build.yml-06】
       - name: "06. 初始空间检查"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step06_initial_space_check
-#【firmware-build.yml-06-end】
-
-#【firmware-build.yml-07】
-      - name: "07. 创建构建目录"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step07_create_build_dir
-#【firmware-build.yml-07-end】
-
-#【firmware-build.yml-08】
-      - name: "08. 初始化构建环境"
         run: |
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step08_initialize_build_env_hybrid "$FINAL_DEVICE_NAME" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ github.event.inputs.manual_target }}" "${{ github.event.inputs.manual_subtarget }}"
-#【firmware-build.yml-08-end】
+          echo "=== 步骤06: 初始空间检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step06_initial_space_check
+      #【firmware-build.yml-06-end】
+
+      #【firmware-build.yml-07】
+      - name: "07. 创建构建目录"
+        run: |
+          echo "=== 步骤07: 创建构建目录 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step07_create_build_dir
+      #【firmware-build.yml-07-end】
+
+      #【firmware-build.yml-08】
+      - name: "08. 初始化构建环境（混合模式：优先使用手动输入）"
+        run: |
+          echo "=== 步骤08: 初始化构建环境（混合模式） ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step08_initialize_build_env_hybrid \
+            "$FINAL_DEVICE_NAME" \
+            "${{ github.event.inputs.version_selection }}" \
+            "${{ github.event.inputs.config_mode }}" \
+            "${{ github.event.inputs.manual_target }}" \
+            "${{ github.event.inputs.manual_subtarget }}"
+      #【firmware-build.yml-08-end】
 
 #【firmware-build.yml-08.5】
-      - name: "08.5. 执行设备补丁"
+      - name: "8.5. 执行设备补丁"
         run: |
+          echo "=== 步骤8.5: 执行设备补丁 ==="
+          
+          PATCH_METHOD="${{ github.event.inputs.patch_method }}"
+          echo "补丁方式: $PATCH_METHOD"
+          
           if [ -f "/mnt/openwrt-build/build_env.sh" ]; then
             source /mnt/openwrt-build/build_env.sh
-            DEVICE="$DEVICE"
-            SOURCE_REPO_TYPE="$SOURCE_REPO_TYPE"
-            SELECTED_BRANCH="$SELECTED_BRANCH"
+            echo "当前设备: $DEVICE"
+            echo "源码类型: $SOURCE_REPO_TYPE"
+            echo "分支: $SELECTED_BRANCH"
           else
+            echo "⚠️ 环境文件不存在，使用工作流参数"
             DEVICE="$FINAL_DEVICE_NAME"
             SOURCE_REPO_TYPE="${{ github.event.inputs.source_repo }}"
             SELECTED_BRANCH="${{ github.event.inputs.version_selection }}"
           fi
-          case "${{ github.event.inputs.patch_method }}" in
-            "不应用补丁") PATCH_ARG="none"; EXTRA_ARG="" ;;
-            "单选内置补丁") PATCH_ARG="${{ github.event.inputs.builtin_patch_single }}"; EXTRA_ARG="" ;;
-            "手动输入多个内置补丁") PATCH_ARG="custom-list"; EXTRA_ARG="${{ github.event.inputs.builtin_patch_list }}" ;;
+          
+          # 将中文选项映射为内部英文标识
+          case "$PATCH_METHOD" in
+            "不应用补丁")
+              PATCH_ARG="none"
+              EXTRA_ARG=""
+              ;;
+            "单选内置补丁")
+              PATCH_ARG="${{ github.event.inputs.builtin_patch_single }}"
+              EXTRA_ARG=""
+              ;;
+            "手动输入多个内置补丁")
+              PATCH_ARG="custom-list"
+              EXTRA_ARG="${{ github.event.inputs.builtin_patch_list }}"
+              ;;
             "自定义补丁命令")
-              printf '%s\n' "${{ github.event.inputs.custom_patch_command }}" > /tmp/custom_patch_commands.sh
+              CUSTOM_CMD_FILE="/tmp/custom_patch_commands.sh"
+              printf '%s\n' "${{ github.event.inputs.custom_patch_command }}" > "$CUSTOM_CMD_FILE"
               PATCH_ARG="custom"
-              EXTRA_ARG="/tmp/custom_patch_commands.sh"
+              EXTRA_ARG="$CUSTOM_CMD_FILE"
+              ;;
+            *)
+              echo "❌ 未知补丁方式: $PATCH_METHOD"
+              exit 1
               ;;
           esac
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh execute_patches "$PATCH_ARG" "$DEVICE" "$SOURCE_REPO_TYPE" "$SELECTED_BRANCH" "$EXTRA_ARG"
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            execute_patches \
+            "$PATCH_ARG" \
+            "$DEVICE" \
+            "$SOURCE_REPO_TYPE" \
+            "$SELECTED_BRANCH" \
+            "$EXTRA_ARG"
 #【firmware-build.yml-08.5-end】
 
-#【firmware-build.yml-09】
+      #【firmware-build.yml-09】
       - name: "09. 添加TurboACC支持"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step11_add_turboacc
-#【firmware-build.yml-09-end】
-
-#【firmware-build.yml-10】
-      - name: "10. 配置Feeds（强制更新并删除问题包）"
         run: |
-          echo "=== 步骤10: 配置Feeds（强制更新） ==="
-          cd /mnt/openwrt-build
-          if [ -f "feeds.conf.default" ]; then
-            cp feeds.conf.default feeds.conf.default.bak
-            echo "✅ 已备份 feeds.conf.default"
-          fi
-          rm -rf feeds
-          mkdir -p feeds
-          echo "🔄 更新所有 feeds..."
-          ./scripts/feeds update -a || true
+          echo "=== 步骤09: 添加TurboACC支持 ==="
           
-          echo "🔧 删除问题包源码（ppp、ksmbd、samba4）..."
-          find . -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
-          find . -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
-          find . -type d -name "*samba4*" -exec rm -rf {} + 2>/dev/null || true
-          find feeds -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
-          find feeds -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
-          find feeds -type d -name "*samba4*" -exec rm -rf {} + 2>/dev/null || true
-          find package -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
-          find package -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
-          find package -type d -name "*samba4*" -exec rm -rf {} + 2>/dev/null || true
-          
-          echo "🔄 安装所有 feeds..."
-          ./scripts/feeds install -a || true
-          echo "✅ Feeds配置完成"
-#【firmware-build.yml-10-end】
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step11_add_turboacc
+      #【firmware-build.yml-09-end】
 
-#【firmware-build.yml-11】
+      #【firmware-build.yml-10】
+      - name: "10. 配置Feeds"
+        run: |
+          echo "=== 步骤10: 配置Feeds ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step12_configure_feeds
+      #【firmware-build.yml-10-end】
+
+      #【firmware-build.yml-11】
       - name: "11. 安装TurboACC包"
         if: github.event.inputs.config_mode == 'normal'
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step13_install_turboacc
-#【firmware-build.yml-11-end】
+        run: |
+          echo "=== 步骤11: 安装TurboACC包 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step13_install_turboacc
+      #【firmware-build.yml-11-end】
 
-#【firmware-build.yml-12】
-      - name: "12. 智能配置生成"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step15_generate_config "${{ github.event.inputs.extra_packages }}"
-#【firmware-build.yml-12-end】
+      #【firmware-build.yml-12】
+      - name: "12. 智能配置生成【修复版】"
+        run: |
+          echo "=== 步骤12: 智能配置生成【修复版】 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step15_generate_config \
+            "${{ github.event.inputs.extra_packages }}"
+      #【firmware-build.yml-12-end】
 
-#【firmware-build.yml-13】
+      #【firmware-build.yml-13】
       - name: "13. 验证USB配置"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step16_verify_usb
-#【firmware-build.yml-13-end】
+        run: |
+          echo "=== 步骤13: 验证USB配置 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step16_verify_usb
+      #【firmware-build.yml-13-end】
 
-#【firmware-build.yml-14】
+      #【firmware-build.yml-14】
       - name: "14. USB驱动完整性检查"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step17_check_usb_drivers
-#【firmware-build.yml-14-end】
-
-#【firmware-build.yml-15】
-      - name: "15. 应用配置"
         run: |
-          cd /mnt/openwrt-build
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh apply_config
-#【firmware-build.yml-15-end】
+          echo "=== 步骤14: USB驱动完整性检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step17_check_usb_drivers
+      #【firmware-build.yml-14-end】
 
-#【firmware-build.yml-15.5】
-      - name: "15.5. 强制禁用samba4、删除ksmbd和ppp"
+      #【firmware-build.yml-15】
+      - name: "15. 应用配置并显示详细信息"
         run: |
-          echo "=== 步骤15.5: 强制禁用samba4、删除ksmbd和ppp ==="
+          echo "=== 步骤15: 应用配置并显示详细信息 ==="
+          
+          set -e
+          trap 'echo "❌ 步骤15 失败，退出代码: $?"; exit 1' ERR
+          
           cd /mnt/openwrt-build
           
-          echo "🔧 删除 ppp 相关源码..."
-          find . -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
-          find feeds -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
-          find package -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
-          find package -type d -name "*pppoe*" -exec rm -rf {} + 2>/dev/null || true
+          echo "🔄 调用主脚本的 apply_config 函数..."
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            apply_config
           
-          echo "🔧 删除 ksmbd 相关源码..."
-          find . -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
-          find feeds -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
-          find package -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
-          
-          echo "🔧 从 .config 中删除相关配置..."
-          sed -i '/ppp/d' .config
-          sed -i '/PPP/d' .config
-          sed -i '/pppoe/d' .config
-          sed -i '/ksmbd/d' .config
-          sed -i '/KSMBD/d' .config
-          sed -i '/samba4/d' .config
-          sed -i '/SAMBA4/d' .config
-          sed -i '/wsdd2/d' .config
-          
-          echo "# CONFIG_PACKAGE_ppp is not set" >> .config
-          echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-          echo "# CONFIG_PACKAGE_samba4 is not set" >> .config
-          echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
-          echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
-          echo "# CONFIG_PACKAGE_wsdd2 is not set" >> .config
-          echo "# CONFIG_PACKAGE_kmod-fs-ksmbd is not set" >> .config
-          echo "# CONFIG_PACKAGE_ksmbd-tools is not set" >> .config
-          echo "# CONFIG_PACKAGE_luci-app-ksmbd is not set" >> .config
-          
-          make defconfig
-          echo "✅ 已删除 ppp、ksmbd、samba4 源码并禁用"
-#【firmware-build.yml-15.5-end】
+          echo "✅ 步骤15 完成"
+      #【firmware-build.yml-15-end】
 
-#【firmware-build.yml-16】
+      #【firmware-build.yml-16】
       - name: "16. 备份配置文件"
         run: |
+          echo "=== 步骤16: 备份配置文件 ==="
+          
+          set -e
+          trap 'echo "❌ 步骤16 失败，退出代码: $?"; exit 1' ERR
+          
           cd /mnt/openwrt-build
+          
+          if [ ! -f ".config" ]; then
+            echo "❌ 错误: .config 文件不存在"
+            exit 1
+          fi
+          
+          echo "✅ .config 文件存在"
+          echo "📊 文件大小: $(ls -lh .config | awk '{print $5}')"
+          echo "📝 文件行数: $(wc -l < .config)"
+          
           mkdir -p ${{ github.workspace }}/firmware-config/config-backup
-          cp .config "${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP_SEC }}.config"
-#【firmware-build.yml-16-end】
+          BACKUP_FILE="${{ github.workspace }}/firmware-config/config-backup/config_${{ env.TIMESTAMP_SEC }}.config"
+          
+          cp .config "$BACKUP_FILE"
+          echo "✅ 配置文件已备份到: $BACKUP_FILE"
+      #【firmware-build.yml-16-end】
 
-#【firmware-build.yml-17】
+      #【firmware-build.yml-17】
       - name: "17. 修复网络环境"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step20_fix_network
-#【firmware-build.yml-17-end】
+        run: |
+          echo "=== 步骤17: 修复网络环境 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step20_fix_network
+      #【firmware-build.yml-17-end】
 
-#【firmware-build.yml-18】
+      #【firmware-build.yml-18】
       - name: "18. 下载依赖包"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step21_download_deps
-#【firmware-build.yml-18-end】
+        run: |
+          echo "=== 步骤18: 下载依赖包 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step21_download_deps
+      #【firmware-build.yml-18-end】
 
-#【firmware-build.yml-19】
+      #【firmware-build.yml-19】
       - name: "19. 集成自定义文件"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step22_integrate_custom_files
-#【firmware-build.yml-19-end】
+        run: |
+          echo "=== 步骤19: 集成自定义文件 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step22_integrate_custom_files
+      #【firmware-build.yml-19-end】
 
-#【firmware-build.yml-20】
+      #【firmware-build.yml-20】
       - name: "20. 前置错误检查"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step23_pre_build_check
-#【firmware-build.yml-20-end】
+        run: |
+          echo "=== 步骤20: 前置错误检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step23_pre_build_check
+      #【firmware-build.yml-20-end】
 
-#【firmware-build.yml-21】
-      - name: "21. 编译工具链"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step09_download_sdk "$FINAL_DEVICE_NAME"
-#【firmware-build.yml-21-end】
+      #【firmware-build.yml-21】
+      - name: "21. 编译源码自带工具链"
+        run: |
+          echo "=== 步骤21: 编译源码自带工具链 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step09_download_sdk \
+            "$FINAL_DEVICE_NAME"
+      #【firmware-build.yml-21-end】
 
-#【firmware-build.yml-22】
-      - name: "22. 验证工具链"
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step10_verify_sdk
-#【firmware-build.yml-22-end】
+      #【firmware-build.yml-22】
+      - name: "22. 验证工具链编译结果"
+        run: |
+          echo "=== 步骤22: 验证工具链编译结果 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step10_verify_sdk
+      #【firmware-build.yml-22-end】
 
-#【firmware-build.yml-23】
+      #【firmware-build.yml-23】
       - name: "23. 编译前空间检查"
         run: |
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step14_pre_build_space_check
-          AVAILABLE_GB=$(df /mnt --output=avail | tail -1 | awk '{print $1/1024/1024}')
-          echo "可用空间: ${AVAILABLE_GB}G"
-          if [ $AVAILABLE_GB -lt 20 ]; then
-            echo "⚠️ 空间不足，尝试清理..."
-            sudo apt-get clean
-            docker system prune -f 2>/dev/null || true
-            rm -rf /tmp/* 2>/dev/null || true
+          echo "=== 步骤23: 编译前空间检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step14_pre_build_space_check
+          
+          AVAILABLE_SPACE=$(df /mnt --output=avail | tail -1 | awk '{print $1}')
+          AVAILABLE_GB=$((AVAILABLE_SPACE / 1024 / 1024))
+          if [ $AVAILABLE_GB -lt 10 ]; then
+            echo "❌ 错误: 编译前空间不足 (需要至少10G，当前${AVAILABLE_GB}G)"
+            exit 1
           fi
-#【firmware-build.yml-23-end】
+      #【firmware-build.yml-23-end】
 
-#【firmware-build.yml-24】
+      #【firmware-build.yml-24】
       - name: "24. 编译固件"
-        id: build_firmware
-        continue-on-error: true
         run: |
+          echo "=== 步骤24: 编译固件 ==="
           set +e
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step25_build_firmware "${{ env.ENABLE_PARALLEL }}"
-          BUILD_EXIT=$?
-          echo "BUILD_EXIT_CODE=$BUILD_EXIT" >> $GITHUB_ENV
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step25_build_firmware \
+            "${{ env.ENABLE_PARALLEL }}"
+          BUILD_EXIT_CODE=$?
+          
+          echo "编译脚本退出码: $BUILD_EXIT_CODE"
+          
+          # 检查是否生成了有效的 sysupgrade 固件（任何目标平台的 *.bin 均可）
           SYS_FILE=$(find /mnt/openwrt-build/bin/targets -name "*sysupgrade*.bin" -size +5M 2>/dev/null | head -1)
           if [ -n "$SYS_FILE" ]; then
-            echo "FIRMWARE_EXISTS=true" >> $GITHUB_ENV
+            echo "✅ 固件已生成: $SYS_FILE"
+            echo "   大小: $(ls -lh "$SYS_FILE" | awk '{print $5}')"
+            exit 0
           else
-            echo "FIRMWARE_EXISTS=false" >> $GITHUB_ENV
+            echo "❌ 未找到有效的 sysupgrade 固件文件！"
+            echo "   请检查编译日志 build_step3.log 和 build_step5*.log"
+            exit 1
           fi
-          exit 0
-#【firmware-build.yml-24-end】
+      #【firmware-build.yml-24-end】
 
-#【firmware-build.yml-25】
+      #【firmware-build.yml-25】
       - name: "25. 检查构建产物"
-        if: success() && env.FIRMWARE_EXISTS == 'true'
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step26_check_artifacts
-#【firmware-build.yml-25-end】
+        if: success()
+        run: |
+          echo "=== 步骤25: 检查构建产物 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step26_check_artifacts
+      #【firmware-build.yml-25-end】
 
 #【firmware-build.yml-26】
       - name: "26. 上传固件"
-        if: always() && env.FIRMWARE_EXISTS == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ env.TIMESTAMP_SEC }}
-          path: /mnt/openwrt-build/bin/targets/**/*.bin
+          path: |
+            /mnt/openwrt-build/bin/targets/**/*.bin
+            /mnt/openwrt-build/bin/targets/**/*.img
           retention-days: 7
           if-no-files-found: warn
 #【firmware-build.yml-26-end】
@@ -429,24 +632,43 @@ jobs:
           if-no-files-found: warn
 #【firmware-build.yml-27-end】
 
-#【firmware-build.yml-28】
+      #【firmware-build.yml-28】
       - name: "28. 编译后空间检查"
         if: always()
-        run: ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step29_post_build_space_check
-#【firmware-build.yml-28-end】
+        run: |
+          echo "=== 步骤28: 编译后空间检查 ==="
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step29_post_build_space_check
+      #【firmware-build.yml-28-end】
 
 #【firmware-build.yml-29】
       - name: "29. 编译总结"
-        if: always() && !cancelled()
+        if: always()
         run: |
+          echo "=== 步骤29: 编译总结 ==="
+          
           set +e
-          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh step30_build_summary "$FINAL_DEVICE_NAME" "${{ github.event.inputs.version_selection }}" "${{ github.event.inputs.config_mode }}" "${{ env.TIMESTAMP_SEC }}" "${{ github.event.inputs.enable_parallel }}"
+          
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step30_build_summary \
+            "$FINAL_DEVICE_NAME" \
+            "${{ github.event.inputs.version_selection }}" \
+            "${{ github.event.inputs.config_mode }}" \
+            "${{ env.TIMESTAMP_SEC }}" \
+            "${{ github.event.inputs.enable_parallel }}"
+          
+          STEP30_EXIT_CODE=$?
+          echo "步骤29退出码: $STEP30_EXIT_CODE"
+          
           set -e
+          
+          echo "✅ 步骤29 完成（即使有错误也继续）"
 #【firmware-build.yml-29-end】
-
+      
 #【firmware-build.yml-30】
       - name: "30. 上传错误检查报告"
-        if: always() && !cancelled()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: error-report-${{ env.TIMESTAMP_SEC }}
@@ -454,16 +676,3 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 #【firmware-build.yml-30-end】
-
-#【firmware-build.yml-31】
-      - name: "31. 最终状态检查"
-        if: always() && env.FIRMWARE_EXISTS != 'true'
-        run: |
-          echo "=========================================="
-          echo "❌ 编译失败，未生成固件"
-          echo "=========================================="
-          echo "编译退出码: ${BUILD_EXIT_CODE}"
-          echo ""
-          echo "📋 详细错误报告请下载 error-report artifact"
-          exit 1
-#【firmware-build.yml-31-end】
