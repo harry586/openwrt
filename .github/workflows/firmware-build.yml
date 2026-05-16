@@ -1,7 +1,8 @@
 #【firmware-build.yml-00】
 # OpenWrt 智能固件构建工作流 - 系统主入口
-# 版本: 4.8.0
+# 版本: 4.9.0
 # 最后更新: 2026-05-16
+# 新增: 强制删除 ppp/ksmbd/samba4 源码解决冲突
 
 name: OpenWrt 智能固件构建工作流
 
@@ -77,7 +78,7 @@ on:
         description: "🚫 自定义禁用插件"
         required: false
         type: string
-        default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer samba4 luci-app-samba4 wsdd2 ksmbd-tools luci-app-ksmbd wechatpush"
+        default: "vssr ssr-plus passwall rclone ddns qbittorrent filetransfer samba4 luci-app-samba4 wsdd2 ksmbd-tools luci-app-ksmbd wechatpush ppp ppp-mod-pppoe"
       extra_packages:
         description: "额外安装插件"
         required: false
@@ -265,7 +266,7 @@ jobs:
 #【firmware-build.yml-09-end】
 
 #【firmware-build.yml-10】
-      - name: "10. 配置Feeds（强制更新并删除ksmbd）"
+      - name: "10. 配置Feeds（强制更新并删除问题包）"
         run: |
           echo "=== 步骤10: 配置Feeds（强制更新） ==="
           cd /mnt/openwrt-build
@@ -277,10 +278,18 @@ jobs:
           mkdir -p feeds
           echo "🔄 更新所有 feeds..."
           ./scripts/feeds update -a || true
-          echo "🔧 删除 ksmbd-tools（避免编译问题）..."
+          
+          echo "🔧 删除问题包源码（ppp、ksmbd、samba4）..."
+          find . -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
           find . -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
+          find . -type d -name "*samba4*" -exec rm -rf {} + 2>/dev/null || true
+          find feeds -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
           find feeds -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
+          find feeds -type d -name "*samba4*" -exec rm -rf {} + 2>/dev/null || true
+          find package -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
           find package -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
+          find package -type d -name "*samba4*" -exec rm -rf {} + 2>/dev/null || true
+          
           echo "🔄 安装所有 feeds..."
           ./scripts/feeds install -a || true
           echo "✅ Feeds配置完成"
@@ -315,24 +324,44 @@ jobs:
 #【firmware-build.yml-15-end】
 
 #【firmware-build.yml-15.5】
-      - name: "15.5. 强制禁用samba4并删除ksmbd"
+      - name: "15.5. 强制禁用samba4、删除ksmbd和ppp"
         run: |
-          echo "=== 步骤15.5: 强制禁用samba4并删除ksmbd ==="
+          echo "=== 步骤15.5: 强制禁用samba4、删除ksmbd和ppp ==="
           cd /mnt/openwrt-build
-          echo "🔧 删除 ksmbd-tools 源码..."
+          
+          echo "🔧 删除 ppp 相关源码..."
+          find . -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
+          find feeds -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
+          find package -type d -name "*ppp*" -exec rm -rf {} + 2>/dev/null || true
+          find package -type d -name "*pppoe*" -exec rm -rf {} + 2>/dev/null || true
+          
+          echo "🔧 删除 ksmbd 相关源码..."
           find . -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
           find feeds -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
           find package -type d -name "*ksmbd*" -exec rm -rf {} + 2>/dev/null || true
-          echo "🔧 从 .config 中删除 ksmbd 配置..."
+          
+          echo "🔧 从 .config 中删除相关配置..."
+          sed -i '/ppp/d' .config
+          sed -i '/PPP/d' .config
+          sed -i '/pppoe/d' .config
           sed -i '/ksmbd/d' .config
           sed -i '/KSMBD/d' .config
-          echo "🔧 禁用 samba4..."
           sed -i '/samba4/d' .config
+          sed -i '/SAMBA4/d' .config
+          sed -i '/wsdd2/d' .config
+          
+          echo "# CONFIG_PACKAGE_ppp is not set" >> .config
+          echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
           echo "# CONFIG_PACKAGE_samba4 is not set" >> .config
           echo "# CONFIG_PACKAGE_samba4-server is not set" >> .config
           echo "# CONFIG_PACKAGE_luci-app-samba4 is not set" >> .config
+          echo "# CONFIG_PACKAGE_wsdd2 is not set" >> .config
+          echo "# CONFIG_PACKAGE_kmod-fs-ksmbd is not set" >> .config
+          echo "# CONFIG_PACKAGE_ksmbd-tools is not set" >> .config
+          echo "# CONFIG_PACKAGE_luci-app-ksmbd is not set" >> .config
+          
           make defconfig
-          echo "✅ samba4 已禁用，ksmbd 源码已删除"
+          echo "✅ 已删除 ppp、ksmbd、samba4 源码并禁用"
 #【firmware-build.yml-15.5-end】
 
 #【firmware-build.yml-16】
