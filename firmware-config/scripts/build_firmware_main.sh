@@ -3108,37 +3108,45 @@ download_dependencies() {
     local existing_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "现有依赖包数量: $existing_deps 个"
     
-    # 增加重试机制
+    # 设置更长的超时和重试参数
+    export MAKE_OPTS="-j1"
+    
+    # 增加重试机制，最多3次
     local max_retries=3
     local retry_count=0
     local download_success=0
     
     while [ $retry_count -lt $max_retries ] && [ $download_success -eq 0 ]; do
         if [ $retry_count -gt 0 ]; then
-            log "🔄 第 $((retry_count + 1)) 次尝试下载..."
+            log "🔄 第 $((retry_count + 1)) 次尝试下载（重试 $retry_count/$max_retries）..."
             sleep 10
-        fi
-        
-        make -j1 download V=s 2>&1 | tee download.log
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            download_success=1
-        else
-            retry_count=$((retry_count + 1))
             # 清理可能的损坏文件
             find dl -type f -size 0 -delete 2>/dev/null || true
+        fi
+        
+        # 使用 timeout 命令限制每次下载的总时间（30分钟）
+        timeout 1800 make -j1 download V=s 2>&1 | tee download.log
+        local make_exit=${PIPESTATUS[0]}
+        
+        if [ $make_exit -eq 0 ]; then
+            download_success=1
+            log "✅ 下载完成"
+        else
+            log "⚠️ 下载失败（退出码: $make_exit），重试中..."
+            retry_count=$((retry_count + 1))
         fi
     done
     
     if [ $download_success -eq 0 ]; then
-        log "⚠️ 下载过程中仍有错误，尝试继续编译..."
+        log "⚠️ 下载过程中仍有错误（已重试 $max_retries 次），尝试继续编译..."
     fi
     
     local downloaded_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "下载后依赖包数量: $downloaded_deps 个"
     
-    if grep -q "ERROR\|Failed\|404\|502\|504" download.log 2>/dev/null; then
+    if grep -q "ERROR\|Failed\|404\|502\|504\|timeout" download.log 2>/dev/null; then
         log "⚠️ 下载过程中发现错误:"
-        grep -E "ERROR|Failed|404|502|504" download.log | head -10
+        grep -E "ERROR|Failed|404|502|504|timeout" download.log | head -10
     fi
     
     log "✅ 依赖包下载阶段完成"
