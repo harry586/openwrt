@@ -4837,48 +4837,11 @@ workflow_step07_create_build_dir() {
 workflow_step25_build_firmware() {
     local enable_parallel="$1"
 
-    log "=== 步骤25: 编译固件（物理删除冲突包版） ==="
+    log "=== 步骤25: 编译固件（通用补丁自动删除修复版） ==="
     log "源码仓库类型: $SOURCE_REPO_TYPE"
 
     set +e
     cd $BUILD_DIR
-
-    # ============================================
-    # base 模式下：物理删除 feeds 中的冲突包
-    # ============================================
-    if [ "$CONFIG_MODE" = "base" ] && [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 base + LEDE 模式：物理删除 feeds 中的冲突包..."
-        
-        # 删除 dnsmasq-full 源码
-        if [ -d "feeds/packages/net/dnsmasq" ]; then
-            rm -rf feeds/packages/net/dnsmasq
-            log "  ✅ 已删除 feeds/packages/net/dnsmasq"
-        fi
-        
-        # 删除 ddns-scripts 相关源码
-        if [ -d "feeds/packages/net/ddns-scripts" ]; then
-            rm -rf feeds/packages/net/ddns-scripts
-            log "  ✅ 已删除 feeds/packages/net/ddns-scripts"
-        fi
-        
-        # 删除 ppp 相关源码
-        if [ -d "feeds/packages/net/ppp" ]; then
-            rm -rf feeds/packages/net/ppp
-            log "  ✅ 已删除 feeds/packages/net/ppp"
-        fi
-        
-        # 删除 luci-app-ddns 源码
-        if [ -d "feeds/luci/applications/luci-app-ddns" ]; then
-            rm -rf feeds/luci/applications/luci-app-ddns
-            log "  ✅ 已删除 feeds/luci/applications/luci-app-ddns"
-        fi
-        
-        # 重新安装 feeds（排除已删除的）
-        log "  🔄 重新安装 feeds..."
-        ./scripts/feeds install -a 2>/dev/null || true
-        
-        log "✅ 冲突包物理删除完成"
-    fi
 
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
@@ -5522,10 +5485,6 @@ workflow_step11_add_turboacc() {
 #【build_firmware_main.sh-29-end】
 
 #【build_firmware_main.sh-30】
-# ============================================
-# 步骤12: 配置Feeds
-# 对应 firmware-build.yml 步骤12
-# ============================================
 workflow_step12_configure_feeds() {
     log "=== 步骤12: 配置Feeds ==="
     
@@ -5533,6 +5492,50 @@ workflow_step12_configure_feeds() {
     trap 'echo "❌ 步骤12 失败，退出代码: $?"; exit 1' ERR
     
     configure_feeds
+    
+    # ============================================
+    # base + LEDE 模式：feeds 安装后物理删除冲突包
+    # ============================================
+    if [ "$CONFIG_MODE" = "base" ] && [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 base + LEDE 模式：物理删除 feeds 中的冲突包..."
+        cd $BUILD_DIR
+        
+        # 删除 dnsmasq-full 源码（整个目录）
+        if [ -d "feeds/packages/net/dnsmasq" ]; then
+            rm -rf feeds/packages/net/dnsmasq
+            log "  ✅ 已删除 feeds/packages/net/dnsmasq"
+        fi
+        
+        # 删除 ddns-scripts 相关源码
+        if [ -d "feeds/packages/net/ddns-scripts" ]; then
+            rm -rf feeds/packages/net/ddns-scripts
+            log "  ✅ 已删除 feeds/packages/net/ddns-scripts"
+        fi
+        
+        # 删除 ppp 相关源码
+        if [ -d "feeds/packages/net/ppp" ]; then
+            rm -rf feeds/packages/net/ppp
+            log "  ✅ 已删除 feeds/packages/net/ppp"
+        fi
+        
+        # 删除 luci-app-ddns 源码
+        if [ -d "feeds/luci/applications/luci-app-ddns" ]; then
+            rm -rf feeds/luci/applications/luci-app-ddns
+            log "  ✅ 已删除 feeds/luci/applications/luci-app-ddns"
+        fi
+        
+        # 删除 luci-light 相关（如果存在单独的 feed）
+        if [ -d "feeds/luci/collections/luci-light" ]; then
+            rm -rf feeds/luci/collections/luci-light
+            log "  ✅ 已删除 feeds/luci/collections/luci-light"
+        fi
+        
+        # 重新运行 make defconfig 使删除生效
+        log "  🔄 重新运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig_after_cleanup.log 2>&1 || true
+        
+        log "✅ 冲突包物理删除完成"
+    fi
     
     if [ $? -ne 0 ]; then
         echo "❌ 错误: 配置Feeds失败"
