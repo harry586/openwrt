@@ -2647,6 +2647,28 @@ EOF
         log "  ✅ 已启用 vsftpd"
     fi
     
+    # ============================================
+    # normal 模式：确保必要包被正确安装
+    # ============================================
+    if [ "$CONFIG_MODE" != "base" ] && [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]]; then
+        log "🔧 LEDE + WNDR3800 模式：确保已禁用包不被意外启用"
+        # 二次确认禁用 ppp-mod-pppoe
+        sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
+        echo "# CONFIG_PACKAGE_ppp is not set" >> .config
+        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+        
+        # 二次确认禁用 ddns-scripts 子包
+        sed -i '/ddns-scripts_aliyun/d' .config
+        sed -i '/ddns-scripts_dnspod/d' .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+        
+        log "  ✅ 已确保 ppp 和 ddns-scripts 子包被禁用"
+    fi
+    
     log "✅ 禁用完成"
     
     sort .config | uniq > .config.tmp
@@ -2762,6 +2784,29 @@ EOF
         else
             log "  ✅ default-settings 已禁用"
         fi
+    fi
+    
+    # 检查 ppp-mod-pppoe 是否被禁用
+    if grep -q "^CONFIG_PACKAGE_ppp-mod-pppoe=y" .config || grep -q "^CONFIG_PACKAGE_ppp-mod-pppoe=m" .config; then
+        log "  ❌ ppp-mod-pppoe 仍被启用"
+        still_enabled=$((still_enabled + 1))
+    else
+        log "  ✅ ppp-mod-pppoe 已禁用"
+    fi
+    
+    # 检查 ddns-scripts_aliyun 是否被禁用
+    if grep -q "^CONFIG_PACKAGE_ddns-scripts_aliyun=y" .config; then
+        log "  ❌ ddns-scripts_aliyun 仍被启用"
+        still_enabled=$((still_enabled + 1))
+    else
+        log "  ✅ ddns-scripts_aliyun 已禁用"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_ddns-scripts_dnspod=y" .config; then
+        log "  ❌ ddns-scripts_dnspod 仍被启用"
+        still_enabled=$((still_enabled + 1))
+    else
+        log "  ✅ ddns-scripts_dnspod 已禁用"
     fi
     
     if [ $still_enabled -eq 0 ]; then
