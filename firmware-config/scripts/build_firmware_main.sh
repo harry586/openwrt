@@ -2509,7 +2509,7 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     # ============================================
-    # base 模式下彻底禁用冲突包
+    # base 模式下强制禁用冲突包
     # ============================================
     log "🔧 ===== 禁用冲突和不需要的插件 ====="
     
@@ -2538,10 +2538,16 @@ EOF
         echo "# CONFIG_PACKAGE_ppp is not set" >> .config
         echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
         
-        # 确保 luci-proto-ppp 已安装（解决 luci-light 依赖）
-        log "  🔧 确保 luci-proto-ppp 已安装..."
-        if ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config; then
-            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+        # 强制禁用 luci-light（使用完整 luci 代替）
+        log "  🔧 强制禁用 luci-light..."
+        sed -i '/^CONFIG_PACKAGE_luci-light=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-light=m/d' .config
+        echo "# CONFIG_PACKAGE_luci-light is not set" >> .config
+        
+        # 确保完整 luci 已启用
+        log "  🔧 确保完整 luci 已启用..."
+        if ! grep -q "^CONFIG_PACKAGE_luci=y" .config; then
+            echo "CONFIG_PACKAGE_luci=y" >> .config
         fi
         
         # 确保 dnsmasq 已启用
@@ -2557,7 +2563,7 @@ EOF
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     
     if [ "$CONFIG_MODE" = "base" ]; then
-        base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp"
+        base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp luci-light"
     fi
     
     log "📋 基础禁用插件: $base_forbidden"
@@ -2650,10 +2656,15 @@ EOF
         log "  ✅ 已启用 dnsmasq"
     fi
     
-    log "🔧 解决 luci-light 依赖问题：确保 luci-proto-ppp 已启用..."
-    if ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config && ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=m" .config; then
-        echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
-        log "  ✅ 已启用 luci-proto-ppp（luci-light 依赖）"
+    log "🔧 解决 luci-light 依赖问题：使用完整 luci 替代..."
+    if grep -q "^CONFIG_PACKAGE_luci-light=y" .config; then
+        sed -i '/^CONFIG_PACKAGE_luci-light=y/d' .config
+        echo "# CONFIG_PACKAGE_luci-light is not set" >> .config
+        log "  ✅ 已禁用 luci-light"
+    fi
+    if ! grep -q "^CONFIG_PACKAGE_luci=y" .config && ! grep -q "^# CONFIG_PACKAGE_luci is not set" .config; then
+        echo "CONFIG_PACKAGE_luci=y" >> .config
+        log "  ✅ 已启用完整 luci"
     fi
     
     log "🔧 确保 vsftpd 被启用..."
@@ -2763,10 +2774,17 @@ EOF
         log "  ✅ dnsmasq-full 已禁用"
     fi
     
-    if grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config; then
-        log "  ✅ luci-proto-ppp 已启用（luci-light 依赖）"
+    if grep -q "^CONFIG_PACKAGE_luci=y" .config; then
+        log "  ✅ 完整 luci 已启用"
     else
-        log "  ⚠️ luci-proto-ppp 未启用"
+        log "  ⚠️ 完整 luci 未启用"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_luci-light=y" .config; then
+        log "  ❌ luci-light 仍被启用"
+        still_enabled=$((still_enabled + 1))
+    else
+        log "  ✅ luci-light 已禁用"
     fi
     
     if [ $still_enabled -eq 0 ]; then
