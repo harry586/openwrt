@@ -2538,6 +2538,12 @@ EOF
         echo "# CONFIG_PACKAGE_ppp is not set" >> .config
         echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
         
+        # 强制禁用 default-settings（LEDE lean 源包）
+        log "  🔧 强制禁用 default-settings..."
+        sed -i '/^CONFIG_PACKAGE_default-settings=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_default-settings=m/d' .config
+        echo "# CONFIG_PACKAGE_default-settings is not set" >> .config
+        
         # 注意：不强制禁用 luci-light，因为 luci 依赖它
         # 但确保完整 luci 不被启用（避免循环依赖）
         log "  🔧 确保完整 luci 不被启用..."
@@ -2557,7 +2563,7 @@ EOF
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     
     if [ "$CONFIG_MODE" = "base" ]; then
-        base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp luci"
+        base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp luci default-settings"
     fi
     
     log "📋 基础禁用插件: $base_forbidden"
@@ -2762,6 +2768,13 @@ EOF
         still_enabled=$((still_enabled + 1))
     else
         log "  ✅ 完整 luci 已禁用"
+    fi
+    
+    if grep -q "^CONFIG_PACKAGE_default-settings=y" .config; then
+        log "  ❌ default-settings 仍被启用"
+        still_enabled=$((still_enabled + 1))
+    else
+        log "  ✅ default-settings 已禁用"
     fi
     
     if [ $still_enabled -eq 0 ]; then
