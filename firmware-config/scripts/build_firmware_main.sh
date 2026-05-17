@@ -5497,44 +5497,68 @@ workflow_step12_configure_feeds() {
     # base + LEDE 模式：feeds 安装后物理删除冲突包
     # ============================================
     if [ "$CONFIG_MODE" = "base" ] && [ "$SOURCE_REPO_TYPE" = "lede" ]; then
-        log "🔧 base + LEDE 模式：物理删除 feeds 中的冲突包..."
+        log "🔧 base + LEDE 模式：动态搜索并删除 feeds 中的冲突包..."
         cd $BUILD_DIR
         
-        # 删除 dnsmasq-full 源码（整个目录）
-        if [ -d "feeds/packages/net/dnsmasq" ]; then
-            rm -rf feeds/packages/net/dnsmasq
-            log "  ✅ 已删除 feeds/packages/net/dnsmasq"
+        # 动态删除 dnsmasq 相关包
+        log "  🔍 搜索并删除 dnsmasq 相关包..."
+        find package feeds -type d -name "*dnsmasq*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除: $dir"
+            rm -rf "$dir"
+        done
+        
+        # 动态删除 ddns-scripts 相关包
+        log "  🔍 搜索并删除 ddns-scripts 相关包..."
+        find package feeds -type d -name "*ddns-scripts*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除: $dir"
+            rm -rf "$dir"
+        done
+        
+        # 动态删除 ppp 相关包
+        log "  🔍 搜索并删除 ppp 相关包..."
+        find package feeds -type d -name "*ppp*" 2>/dev/null | while read dir; do
+            if echo "$dir" | grep -q "ppp-mod-pppoe\|ppp$"; then
+                log "    🗑️ 删除: $dir"
+                rm -rf "$dir"
+            fi
+        done
+        
+        # 动态删除 luci-app-ddns
+        log "  🔍 搜索并删除 luci-app-ddns..."
+        find package feeds -type d -name "*luci-app-ddns*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除: $dir"
+            rm -rf "$dir"
+        done
+        
+        # 强制在 .config 中禁用冲突包
+        log "  🔧 强制在 .config 中禁用冲突包..."
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=m/d' .config
+        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+        
+        sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
+        echo "# CONFIG_PACKAGE_ppp is not set" >> .config
+        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+        
+        sed -i '/ddns-scripts/d' .config
+        echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+        
+        # 确保 luci-proto-ppp 已安装（解决 luci-light 依赖）
+        if ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config; then
+            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+            log "  ✅ 已添加 luci-proto-ppp"
         fi
         
-        # 删除 ddns-scripts 相关源码
-        if [ -d "feeds/packages/net/ddns-scripts" ]; then
-            rm -rf feeds/packages/net/ddns-scripts
-            log "  ✅ 已删除 feeds/packages/net/ddns-scripts"
-        fi
-        
-        # 删除 ppp 相关源码
-        if [ -d "feeds/packages/net/ppp" ]; then
-            rm -rf feeds/packages/net/ppp
-            log "  ✅ 已删除 feeds/packages/net/ppp"
-        fi
-        
-        # 删除 luci-app-ddns 源码
-        if [ -d "feeds/luci/applications/luci-app-ddns" ]; then
-            rm -rf feeds/luci/applications/luci-app-ddns
-            log "  ✅ 已删除 feeds/luci/applications/luci-app-ddns"
-        fi
-        
-        # 删除 luci-light 相关（如果存在单独的 feed）
-        if [ -d "feeds/luci/collections/luci-light" ]; then
-            rm -rf feeds/luci/collections/luci-light
-            log "  ✅ 已删除 feeds/luci/collections/luci-light"
-        fi
-        
-        # 重新运行 make defconfig 使删除生效
+        # 重新运行 make defconfig
         log "  🔄 重新运行 make defconfig..."
         make defconfig > /tmp/build-logs/defconfig_after_cleanup.log 2>&1 || true
         
-        log "✅ 冲突包物理删除完成"
+        log "✅ 冲突包动态删除完成"
     fi
     
     if [ $? -ne 0 ]; then
