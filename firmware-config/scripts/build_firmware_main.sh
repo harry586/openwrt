@@ -88,6 +88,8 @@ load_build_config() {
     # 导出补丁相关变量
     export BUILTIN_PATCHES_ENABLED
     export CUSTOM_PATCH_SCRIPT
+    # 导出设备特殊禁用包配置
+    export DEVICE_SPECIAL_FORBIDDEN
 #【build_firmware_main.sh-00.5.01-end】
 }
 
@@ -1584,6 +1586,29 @@ generate_config() {
     log "🔧 使用传入的设备名: $correct_device"
     
     # ============================================
+    # 获取设备特殊禁用包列表（仅对特定设备+源码组合生效）
+    # ============================================
+    get_device_special_forbidden() {
+        local device_name="$1"
+        local source_type="$2"
+        local result=""
+        
+        if [ ${#DEVICE_SPECIAL_FORBIDDEN[@]} -gt 0 ]; then
+            for rule in "${DEVICE_SPECIAL_FORBIDDEN[@]}"; do
+                IFS='|' read -r dev_pat src_pat pkgs <<< "$rule"
+                if [[ "$device_name" == $dev_pat ]] && [ "$source_type" = "$src_pat" ]; then
+                    result="$pkgs"
+                    log "  📌 匹配设备特殊规则: $device_name + $source_type -> 禁用: $pkgs"
+                    break
+                fi
+            done
+        fi
+        echo "$result"
+    }
+    
+    local device_special_forbidden=$(get_device_special_forbidden "$correct_device" "$SOURCE_REPO_TYPE")
+    
+    # ============================================
     # Hanwckf 特殊处理：immortalwrt + rax3000m → 使用预置配置
     # ============================================
     local IS_HANWCKF_RAX3000M=0
@@ -2509,20 +2534,21 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     # ============================================
-    # 智能处理插件：修复而非删除（base 模式精简，normal 模式保留）
+    # 禁用冲突和不需要的插件
     # ============================================
-    log "🔧 ===== 智能处理插件（修复而非禁用） ====="
+    log "🔧 ===== 禁用冲突和不需要的插件 ====="
     
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     
-    # base 模式精简，只禁用问题包
+    # base 模式禁用更多包
     if [ "$CONFIG_MODE" = "base" ]; then
-        log "📋 base 模式：精简配置"
-        base_forbidden="$base_forbidden dnsmasq-full luci-app-ddns luci-i18n-ddns-zh-cn"
-    else
-        log "📋 normal 模式：保留完整功能，智能修复问题包"
-        # normal 模式不禁用任何包，让修复逻辑处理
-        base_forbidden="$base_forbidden"
+        base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp luci default-settings"
+    fi
+    
+    # 添加设备特殊禁用包（仅对特定设备+源码组合生效）
+    if [ -n "$device_special_forbidden" ]; then
+        base_forbidden="$base_forbidden $device_special_forbidden"
+        log "📋 添加设备特殊禁用包: $device_special_forbidden"
     fi
     
     log "📋 基础禁用插件: $base_forbidden"
@@ -2621,57 +2647,12 @@ EOF
         log "  ✅ 已启用 vsftpd"
     fi
     
-    # ============================================
-    # normal 模式：智能启用修复后的包
-    # ============================================
-    if [ "$CONFIG_MODE" != "base" ]; then
-        log "🔧 normal 模式：智能启用修复后的包"
-        
-        # 确保 ddns-scripts 被安装（已修复）
-        if ! grep -q "^CONFIG_PACKAGE_ddns-scripts=y" .config && ! grep -q "^# CONFIG_PACKAGE_ddns-scripts is not set" .config; then
-            echo "CONFIG_PACKAGE_ddns-scripts=y" >> .config
-            log "  ✅ 已启用 ddns-scripts（已修复）"
-        fi
-        
-        # 确保 ddns-scripts 子包可用（如果存在）
-        if grep -q "ddns-scripts_aliyun" .config 2>/dev/null; then
-            log "  ℹ️ ddns-scripts_aliyun 将正常编译"
-        fi
-        if grep -q "ddns-scripts_dnspod" .config 2>/dev/null; then
-            log "  ℹ️ ddns-scripts_dnspod 将正常编译"
-        fi
-        
-        # 确保 wechatpush 被安装（如果修复成功）
-        if grep -q "wechatpush" package/feeds -r 2>/dev/null || find package -name "*wechatpush*" -type d 2>/dev/null | grep -q .; then
-            if ! grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" .config; then
-                echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
-                echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
-                log "  ✅ 已启用 wechatpush（已修复）"
-            fi
-        fi
-        
-        # 确保 ppp 被正确安装（如果需要）
-        if ! grep -q "^CONFIG_PACKAGE_ppp=y" .config && ! grep -q "^# CONFIG_PACKAGE_ppp is not set" .config; then
-            echo "CONFIG_PACKAGE_ppp=y" >> .config
-            echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
-            log "  ✅ 已启用 ppp（已修复）"
-        fi
-        
-        # 确保 default-settings 被安装（如果 Makefile 已修复）
-        if find package -name "default-settings" -type d 2>/dev/null | grep -q .; then
-            if ! grep -q "^CONFIG_PACKAGE_default-settings=y" .config && ! grep -q "^# CONFIG_PACKAGE_default-settings is not set" .config; then
-                echo "CONFIG_PACKAGE_default-settings=y" >> .config
-                log "  ✅ 已启用 default-settings（已修复）"
-            fi
-        fi
-    fi
-    
     log "✅ 禁用完成"
     
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    log "🔄 运行 make defconfig 使配置生效..."
+    log "🔄 运行 make defconfig 使禁用生效..."
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
             log "⚠️ olddefconfig 有警告，但继续..."
@@ -2765,6 +2746,22 @@ EOF
         still_enabled=$((still_enabled + 1))
     else
         log "  ✅ dnsmasq-full 已禁用"
+    fi
+    
+    if [ "$CONFIG_MODE" = "base" ]; then
+        if grep -q "^CONFIG_PACKAGE_luci=y" .config; then
+            log "  ❌ 完整 luci 仍被启用（应避免）"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ 完整 luci 已禁用"
+        fi
+        
+        if grep -q "^CONFIG_PACKAGE_default-settings=y" .config; then
+            log "  ❌ default-settings 仍被启用"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ default-settings 已禁用"
+        fi
     fi
     
     if [ $still_enabled -eq 0 ]; then
