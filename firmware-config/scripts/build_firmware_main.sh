@@ -5514,10 +5514,12 @@ workflow_step12_configure_feeds() {
             rm -rf "$dir"
         done
         
-        # 动态删除 ppp 相关包
+        # 动态删除 ppp 相关包（排除 luci-proto-ppp，因为需要它）
         log "  🔍 搜索并删除 ppp 相关包..."
         find package feeds -type d -name "*ppp*" 2>/dev/null | while read dir; do
-            if echo "$dir" | grep -q "ppp-mod-pppoe\|ppp$"; then
+            if echo "$dir" | grep -q "luci-proto-ppp"; then
+                log "    ⏭️ 跳过: $dir (保留，luci 需要)"
+            elif echo "$dir" | grep -q "ppp-mod-pppoe\|ppp$"; then
                 log "    🗑️ 删除: $dir"
                 rm -rf "$dir"
             fi
@@ -5530,33 +5532,37 @@ workflow_step12_configure_feeds() {
             rm -rf "$dir"
         done
         
-        # 强制在 .config 中禁用冲突包
-        log "  🔧 强制在 .config 中禁用冲突包..."
-        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=m/d' .config
-        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
-        
-        sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
-        echo "# CONFIG_PACKAGE_ppp is not set" >> .config
-        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        
-        sed -i '/ddns-scripts/d' .config
-        echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
-        
-        # 确保 luci-proto-ppp 已安装（解决 luci-light 依赖）
-        if ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config; then
-            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
-            log "  ✅ 已添加 luci-proto-ppp"
+        # 强制在 .config 中禁用冲突包（如果 .config 存在）
+        if [ -f ".config" ]; then
+            log "  🔧 强制在 .config 中禁用冲突包..."
+            sed -i '/^CONFIG_PACKAGE_dnsmasq-full=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_dnsmasq-full=m/d' .config
+            echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+            
+            sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
+            sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
+            echo "# CONFIG_PACKAGE_ppp is not set" >> .config
+            echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+            
+            sed -i '/ddns-scripts/d' .config
+            echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
+            echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
+            echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+            
+            # 确保 luci-proto-ppp 已安装（解决 luci-light 依赖）
+            if ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config; then
+                echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+                log "  ✅ 已添加 luci-proto-ppp"
+            fi
+            
+            # 重新运行 make defconfig
+            log "  🔄 重新运行 make defconfig..."
+            make defconfig > /tmp/build-logs/defconfig_after_cleanup.log 2>&1 || true
+        else
+            log "  ⚠️ .config 文件不存在，跳过 sed 操作（将在后续步骤生成）"
         fi
-        
-        # 重新运行 make defconfig
-        log "  🔄 重新运行 make defconfig..."
-        make defconfig > /tmp/build-logs/defconfig_after_cleanup.log 2>&1 || true
         
         log "✅ 冲突包动态删除完成"
     fi
