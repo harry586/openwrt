@@ -4834,53 +4834,185 @@ workflow_step07_create_build_dir() {
 #【build_firmware_main.sh-24-end】
 
 #【build_firmware_main.sh-25】
-# ============================================
-# 步骤08: 初始化构建环境
-# 对应 firmware-build.yml 步骤08
-# ============================================
-workflow_step08_initialize_build_env() {
-    local device_name="$1"
-    local version_selection="$2"
-    local config_mode="$3"
-    
-    log "=== 步骤08: 初始化构建环境 ==="
-    
-    set -e
-    trap 'echo "❌ 步骤08 失败，退出代码: $?"; exit 1' ERR
-    
-    initialize_build_env "$device_name" "$version_selection" "$config_mode"
-    
+workflow_step25_build_firmware() {
+    local enable_parallel="$1"
+
+    log "=== 步骤25: 编译固件（物理删除冲突包版） ==="
+    log "源码仓库类型: $SOURCE_REPO_TYPE"
+
+    set +e
+    cd $BUILD_DIR
+
     # ============================================
-    # 修复文件描述符限制
+    # base 模式下：物理删除 feeds 中的冲突包
     # ============================================
-    log "🔧 检查和修复文件描述符限制..."
-    
-    # 获取当前限制
-    local current_limit=$(ulimit -n)
-    log "  当前文件描述符限制: $current_limit"
-    
-    # 如果限制小于65536，尝试提高
-    if [ $current_limit -lt 65536 ]; then
-        log "  文件描述符限制过低，尝试提高到65536..."
-        ulimit -n 65536 2>/dev/null || {
-            log "  ⚠️ 无法直接提高限制，尝试使用sudo..."
-            sudo ulimit -n 65536 2>/dev/null || true
-        }
+    if [ "$CONFIG_MODE" = "base" ] && [ "$SOURCE_REPO_TYPE" = "lede" ]; then
+        log "🔧 base + LEDE 模式：物理删除 feeds 中的冲突包..."
         
-        # 再次检查
-        local new_limit=$(ulimit -n)
-        log "  新的文件描述符限制: $new_limit"
-        
-        if [ $new_limit -lt 4096 ]; then
-            log "  ⚠️ 警告：文件描述符限制仍过低，可能会遇到'Broken pipe'错误"
-        else
-            log "  ✅ 文件描述符限制已优化"
+        # 删除 dnsmasq-full 源码
+        if [ -d "feeds/packages/net/dnsmasq" ]; then
+            rm -rf feeds/packages/net/dnsmasq
+            log "  ✅ 已删除 feeds/packages/net/dnsmasq"
         fi
-    else
-        log "  ✅ 文件描述符限制足够"
+        
+        # 删除 ddns-scripts 相关源码
+        if [ -d "feeds/packages/net/ddns-scripts" ]; then
+            rm -rf feeds/packages/net/ddns-scripts
+            log "  ✅ 已删除 feeds/packages/net/ddns-scripts"
+        fi
+        
+        # 删除 ppp 相关源码
+        if [ -d "feeds/packages/net/ppp" ]; then
+            rm -rf feeds/packages/net/ppp
+            log "  ✅ 已删除 feeds/packages/net/ppp"
+        fi
+        
+        # 删除 luci-app-ddns 源码
+        if [ -d "feeds/luci/applications/luci-app-ddns" ]; then
+            rm -rf feeds/luci/applications/luci-app-ddns
+            log "  ✅ 已删除 feeds/luci/applications/luci-app-ddns"
+        fi
+        
+        # 重新安装 feeds（排除已删除的）
+        log "  🔄 重新安装 feeds..."
+        ./scripts/feeds install -a 2>/dev/null || true
+        
+        log "✅ 冲突包物理删除完成"
     fi
-    
-    log "✅ 步骤08 完成"
+
+    ulimit -n 65536 2>/dev/null || true
+    local current_limit=$(ulimit -n)
+    log "  ✅ 当前文件描述符限制: $current_limit"
+
+    CPU_CORES=$(nproc)
+    TOTAL_MEM=$(free -m | awk '/^Mem:/{print $2}')
+    echo ""
+    echo "🔧 系统信息:"
+    echo "  CPU核心数: $CPU_CORES"
+    echo "  内存大小: ${TOTAL_MEM}MB"
+    echo "  源码类型: $SOURCE_REPO_TYPE"
+
+    local MAKE_JOBS=1
+    if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
+        if [ $CPU_CORES -ge 4 ] && [ $TOTAL_MEM -ge 4096 ]; then MAKE_JOBS=4
+        elif [ $CPU_CORES -ge 2 ] && [ $TOTAL_MEM -ge 2048 ]; then MAKE_JOBS=2
+        else MAKE_JOBS=1; fi
+        log "🚀 使用 $MAKE_JOBS 个并行任务"
+    else
+        log "⚠️ 使用单线程编译"
+    fi
+
+    local vendor_dist=""
+    case "$SOURCE_REPO_TYPE" in
+        "immortalwrt") vendor_dist="ImmortalWrt" ;;
+        "lede") vendor_dist="LEDE" ;;
+        "openwrt") vendor_dist="OpenWrt" ;;
+        *) vendor_dist=$(echo "$SOURCE_REPO_TYPE" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}') ;;
+    esac
+    export VERSION_DIST="$vendor_dist"
+    export CONFIG_VERSION_DIST="$vendor_dist"
+
+    # ---------- 通用补丁自动删除函数 ----------
+    auto_disable_failed_patches() {
+        local log_to_check="$1"
+        local deleted=0
+        local patches=$(grep "Patch failed!" "$log_to_check" 2>/dev/null | sed -n 's/.*Please fix \([^!]*\).*/\1/p')
+        if [ -z "$patches" ]; then
+            patches=$(grep -oP '[^ ]+\.patch' "$log_to_check" 2>/dev/null | head -1)
+        fi
+        [ -z "$patches" ] && return 1
+        for patch in $patches; do
+            patch=$(echo "$patch" | xargs)
+            if [ -f "$patch" ]; then
+                log "  🧩 删除冲突补丁: $patch"
+                rm -f "$patch"
+                deleted=$((deleted + 1))
+            fi
+        done
+        return $deleted
+    }
+
+    # ---------- 编译主逻辑（最多尝试2次） ----------
+    local attempt=1
+    local max_attempts=2
+    local make_exit_code=0
+
+    while [ $attempt -le $max_attempts ]; do
+        log "🔧 开始编译（尝试 $attempt/$max_attempts）..."
+        START_TIME=$(date +%s)
+
+        make -j$MAKE_JOBS V=s VERSION_DIST="$vendor_dist" 2>&1 | tee build.log
+        make_exit_code=${PIPESTATUS[0]}
+
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        log "⏱️ 编译耗时: $((DURATION / 60))分$((DURATION % 60))秒"
+
+        if [ $make_exit_code -eq 0 ]; then
+            log "✅ make 成功退出"
+            break
+        fi
+
+        log "⚠️ make 返回非零退出码 ($make_exit_code)，尝试修复..."
+
+        if grep -qE "Patch failed|Hunk FAILED" build.log; then
+            auto_disable_failed_patches build.log
+            local deleted_count=$?
+            if [ $deleted_count -gt 0 ]; then
+                log "  🔄 已删除 $deleted_count 个冲突补丁，准备重试..."
+            else
+                log "  ❌ 补丁冲突但未能自动处理，放弃重试"
+                break
+            fi
+        else
+            log "  ❌ 非补丁冲突错误，放弃重试"
+            break
+        fi
+
+        attempt=$((attempt + 1))
+    done
+
+    # ---------- 验证固件 ----------
+    log "🔍 验证固件并计算哈希值..."
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+    fi
+    local target_dir="$BUILD_DIR/bin/targets/$TARGET/$SUBTARGET"
+    local valid_firmware=0
+    local hash_file="$target_dir/firmware-sha256sums.txt"
+    > "$hash_file" 2>/dev/null || true
+    if [ -d "$target_dir" ]; then
+        find "$target_dir" -maxdepth 1 -type f -name "*.manifest" -o -name "*sha256sums*" 2>/dev/null | while read file; do rm -f "$file"; done
+        [ -d "$target_dir/packages" ] && rm -rf "$target_dir/packages"
+        while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            local fname=$(basename "$file")
+            [[ "$fname" == *"initramfs"* ]] && continue
+            local size_mb=$(($(stat -c%s "$file" 2>/dev/null || echo 0) / 1024 / 1024))
+            if [ $size_mb -ge 5 ]; then
+                if [[ "$fname" == *"sysupgrade"* ]] || [[ "$fname" == *"factory"* ]]; then
+                    log "  ✅ $fname 大小: ${size_mb}MB - 有效固件"
+                    valid_firmware=$((valid_firmware + 1))
+                    local fhash=$(sha256sum "$file" | awk '{print $1}')
+                    echo "$fhash  $fname" >> "$hash_file"
+                else
+                    log "  📄 $fname 大小: ${size_mb}MB - 其他文件"
+                fi
+            else
+                log "  ❌ $fname 大小: ${size_mb}MB - 无效"
+                rm -f "$file"
+            fi
+        done < <(find "$target_dir" -maxdepth 1 -type f \( -name "*.bin" -o -name "*.img" -o -name "*.itb" \) 2>/dev/null)
+    fi
+
+    if [ $valid_firmware -eq 0 ]; then
+        log "❌ 错误：没有找到任何有效可刷机固件"
+        exit 1
+    fi
+
+    log "✅ 步骤25 完成"
+    set -e
+    return 0
 }
 #【build_firmware_main.sh-25-end】
 
