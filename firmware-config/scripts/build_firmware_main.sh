@@ -2509,14 +2509,54 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     # ============================================
-    # base 模式和 normal 模式都需要禁用冲突和不需要的插件
+    # base 模式下彻底禁用冲突包
     # ============================================
     log "🔧 ===== 禁用冲突和不需要的插件 ====="
     
+    if [ "$CONFIG_MODE" = "base" ]; then
+        log "📋 base模式：强制禁用以下冲突包"
+        
+        # 强制禁用 dnsmasq-full
+        log "  🔧 强制禁用 dnsmasq-full..."
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=m/d' .config
+        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+        
+        # 强制禁用 ddns 所有相关包
+        log "  🔧 强制禁用 DDNS 相关包..."
+        sed -i '/ddns-scripts/d' .config
+        sed -i '/DDNS-SCRIPTS/d' .config
+        echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
+        
+        # 强制禁用 ppp 和 ppp-mod-pppoe
+        log "  🔧 强制禁用 PPPoE 相关包..."
+        sed -i '/^CONFIG_PACKAGE_ppp=/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=/d' .config
+        echo "# CONFIG_PACKAGE_ppp is not set" >> .config
+        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+        
+        # 确保 luci-proto-ppp 已安装（解决 luci-light 依赖）
+        log "  🔧 确保 luci-proto-ppp 已安装..."
+        if ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config; then
+            echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
+        fi
+        
+        # 确保 dnsmasq 已启用
+        log "  🔧 确保 dnsmasq 已启用..."
+        if ! grep -q "^CONFIG_PACKAGE_dnsmasq=y" .config && ! grep -q "^# CONFIG_PACKAGE_dnsmasq is not set" .config; then
+            echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
+        fi
+        
+        log "✅ base 模式冲突包禁用完成"
+    fi
+    
+    # 原有的禁用逻辑（保留）
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     
     if [ "$CONFIG_MODE" = "base" ]; then
-        log "📋 base模式：禁用更多插件以保持精简"
         base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp"
     fi
     
