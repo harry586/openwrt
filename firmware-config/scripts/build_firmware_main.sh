@@ -2509,61 +2509,20 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     # ============================================
-    # base 模式下强制禁用冲突包（normal 模式不执行这些禁用）
+    # 智能处理插件：修复而非删除（base 模式精简，normal 模式保留）
     # ============================================
-    if [ "$CONFIG_MODE" = "base" ]; then
-        log "🔧 ===== base 模式：强制禁用冲突包 ====="
-        
-        # 强制禁用 dnsmasq-full
-        log "  🔧 强制禁用 dnsmasq-full..."
-        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=m/d' .config
-        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
-        
-        # 强制禁用 ddns 所有相关包
-        log "  🔧 强制禁用 DDNS 相关包..."
-        sed -i '/ddns-scripts/d' .config
-        sed -i '/DDNS-SCRIPTS/d' .config
-        echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-app-ddns is not set" >> .config
-        
-        # 强制禁用 ppp 和 ppp-mod-pppoe
-        log "  🔧 强制禁用 PPPoE 相关包..."
-        sed -i '/^CONFIG_PACKAGE_ppp=/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=/d' .config
-        echo "# CONFIG_PACKAGE_ppp is not set" >> .config
-        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        
-        # 强制禁用 default-settings（LEDE lean 源包）
-        log "  🔧 强制禁用 default-settings..."
-        sed -i '/^CONFIG_PACKAGE_default-settings=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_default-settings=m/d' .config
-        echo "# CONFIG_PACKAGE_default-settings is not set" >> .config
-        
-        # 确保完整 luci 不被启用（避免循环依赖）
-        log "  🔧 确保完整 luci 不被启用..."
-        sed -i '/^CONFIG_PACKAGE_luci=y/d' .config
-        echo "# CONFIG_PACKAGE_luci is not set" >> .config
-        
-        # 确保 dnsmasq 已启用
-        log "  🔧 确保 dnsmasq 已启用..."
-        if ! grep -q "^CONFIG_PACKAGE_dnsmasq=y" .config && ! grep -q "^# CONFIG_PACKAGE_dnsmasq is not set" .config; then
-            echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
-        fi
-        
-        log "✅ base 模式冲突包禁用完成"
-    else
-        log "📋 normal 模式：跳过 base 模式的强制禁用，使用正常配置"
-    fi
+    log "🔧 ===== 智能处理插件（修复而非禁用） ====="
     
-    # 原有的禁用逻辑（保留，但 normal 模式也会执行）
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     
-    # normal 模式下不禁用 ppp、luci 等必要包
+    # base 模式精简，只禁用问题包
     if [ "$CONFIG_MODE" = "base" ]; then
-        base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp luci default-settings"
+        log "📋 base 模式：精简配置"
+        base_forbidden="$base_forbidden dnsmasq-full luci-app-ddns luci-i18n-ddns-zh-cn"
+    else
+        log "📋 normal 模式：保留完整功能，智能修复问题包"
+        # normal 模式不禁用任何包，让修复逻辑处理
+        base_forbidden="$base_forbidden"
     fi
     
     log "📋 基础禁用插件: $base_forbidden"
@@ -2662,12 +2621,57 @@ EOF
         log "  ✅ 已启用 vsftpd"
     fi
     
+    # ============================================
+    # normal 模式：智能启用修复后的包
+    # ============================================
+    if [ "$CONFIG_MODE" != "base" ]; then
+        log "🔧 normal 模式：智能启用修复后的包"
+        
+        # 确保 ddns-scripts 被安装（已修复）
+        if ! grep -q "^CONFIG_PACKAGE_ddns-scripts=y" .config && ! grep -q "^# CONFIG_PACKAGE_ddns-scripts is not set" .config; then
+            echo "CONFIG_PACKAGE_ddns-scripts=y" >> .config
+            log "  ✅ 已启用 ddns-scripts（已修复）"
+        fi
+        
+        # 确保 ddns-scripts 子包可用（如果存在）
+        if grep -q "ddns-scripts_aliyun" .config 2>/dev/null; then
+            log "  ℹ️ ddns-scripts_aliyun 将正常编译"
+        fi
+        if grep -q "ddns-scripts_dnspod" .config 2>/dev/null; then
+            log "  ℹ️ ddns-scripts_dnspod 将正常编译"
+        fi
+        
+        # 确保 wechatpush 被安装（如果修复成功）
+        if grep -q "wechatpush" package/feeds -r 2>/dev/null || find package -name "*wechatpush*" -type d 2>/dev/null | grep -q .; then
+            if ! grep -q "^CONFIG_PACKAGE_luci-app-wechatpush=y" .config; then
+                echo "CONFIG_PACKAGE_luci-app-wechatpush=y" >> .config
+                echo "CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y" >> .config
+                log "  ✅ 已启用 wechatpush（已修复）"
+            fi
+        fi
+        
+        # 确保 ppp 被正确安装（如果需要）
+        if ! grep -q "^CONFIG_PACKAGE_ppp=y" .config && ! grep -q "^# CONFIG_PACKAGE_ppp is not set" .config; then
+            echo "CONFIG_PACKAGE_ppp=y" >> .config
+            echo "CONFIG_PACKAGE_ppp-mod-pppoe=y" >> .config
+            log "  ✅ 已启用 ppp（已修复）"
+        fi
+        
+        # 确保 default-settings 被安装（如果 Makefile 已修复）
+        if find package -name "default-settings" -type d 2>/dev/null | grep -q .; then
+            if ! grep -q "^CONFIG_PACKAGE_default-settings=y" .config && ! grep -q "^# CONFIG_PACKAGE_default-settings is not set" .config; then
+                echo "CONFIG_PACKAGE_default-settings=y" >> .config
+                log "  ✅ 已启用 default-settings（已修复）"
+            fi
+        fi
+    fi
+    
     log "✅ 禁用完成"
     
     sort .config | uniq > .config.tmp
     mv .config.tmp .config
     
-    log "🔄 运行 make defconfig 使禁用生效..."
+    log "🔄 运行 make defconfig 使配置生效..."
     if [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         make olddefconfig > /tmp/build-logs/defconfig_disable.log 2>&1 || {
             log "⚠️ olddefconfig 有警告，但继续..."
@@ -2761,22 +2765,6 @@ EOF
         still_enabled=$((still_enabled + 1))
     else
         log "  ✅ dnsmasq-full 已禁用"
-    fi
-    
-    if [ "$CONFIG_MODE" = "base" ]; then
-        if grep -q "^CONFIG_PACKAGE_luci=y" .config; then
-            log "  ❌ 完整 luci 仍被启用（应避免）"
-            still_enabled=$((still_enabled + 1))
-        else
-            log "  ✅ 完整 luci 已禁用"
-        fi
-        
-        if grep -q "^CONFIG_PACKAGE_default-settings=y" .config; then
-            log "  ❌ default-settings 仍被启用"
-            still_enabled=$((still_enabled + 1))
-        else
-            log "  ✅ default-settings 已禁用"
-        fi
     fi
     
     if [ $still_enabled -eq 0 ]; then
