@@ -2509,12 +2509,10 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     # ============================================
-    # base 模式下强制禁用冲突包
+    # base 模式下强制禁用冲突包（normal 模式不执行这些禁用）
     # ============================================
-    log "🔧 ===== 禁用冲突和不需要的插件 ====="
-    
     if [ "$CONFIG_MODE" = "base" ]; then
-        log "📋 base模式：强制禁用以下冲突包"
+        log "🔧 ===== base 模式：强制禁用冲突包 ====="
         
         # 强制禁用 dnsmasq-full
         log "  🔧 强制禁用 dnsmasq-full..."
@@ -2544,8 +2542,7 @@ EOF
         sed -i '/^CONFIG_PACKAGE_default-settings=m/d' .config
         echo "# CONFIG_PACKAGE_default-settings is not set" >> .config
         
-        # 注意：不强制禁用 luci-light，因为 luci 依赖它
-        # 但确保完整 luci 不被启用（避免循环依赖）
+        # 确保完整 luci 不被启用（避免循环依赖）
         log "  🔧 确保完整 luci 不被启用..."
         sed -i '/^CONFIG_PACKAGE_luci=y/d' .config
         echo "# CONFIG_PACKAGE_luci is not set" >> .config
@@ -2557,11 +2554,14 @@ EOF
         fi
         
         log "✅ base 模式冲突包禁用完成"
+    else
+        log "📋 normal 模式：跳过 base 模式的强制禁用，使用正常配置"
     fi
     
-    # 原有的禁用逻辑（保留）
+    # 原有的禁用逻辑（保留，但 normal 模式也会执行）
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     
+    # normal 模式下不禁用 ppp、luci 等必要包
     if [ "$CONFIG_MODE" = "base" ]; then
         base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp luci default-settings"
     fi
@@ -2763,18 +2763,20 @@ EOF
         log "  ✅ dnsmasq-full 已禁用"
     fi
     
-    if grep -q "^CONFIG_PACKAGE_luci=y" .config; then
-        log "  ❌ 完整 luci 仍被启用（应避免）"
-        still_enabled=$((still_enabled + 1))
-    else
-        log "  ✅ 完整 luci 已禁用"
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_default-settings=y" .config; then
-        log "  ❌ default-settings 仍被启用"
-        still_enabled=$((still_enabled + 1))
-    else
-        log "  ✅ default-settings 已禁用"
+    if [ "$CONFIG_MODE" = "base" ]; then
+        if grep -q "^CONFIG_PACKAGE_luci=y" .config; then
+            log "  ❌ 完整 luci 仍被启用（应避免）"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ 完整 luci 已禁用"
+        fi
+        
+        if grep -q "^CONFIG_PACKAGE_default-settings=y" .config; then
+            log "  ❌ default-settings 仍被启用"
+            still_enabled=$((still_enabled + 1))
+        else
+            log "  ✅ default-settings 已禁用"
+        fi
     fi
     
     if [ $still_enabled -eq 0 ]; then
@@ -5503,6 +5505,7 @@ workflow_step12_configure_feeds() {
     
     # ============================================
     # base + LEDE 模式：feeds 安装后物理删除冲突包
+    # normal 模式不删除，保留完整功能
     # ============================================
     if [ "$CONFIG_MODE" = "base" ] && [ "$SOURCE_REPO_TYPE" = "lede" ]; then
         log "🔧 base + LEDE 模式：动态搜索并删除 feeds 中的冲突包..."
@@ -5587,6 +5590,8 @@ workflow_step12_configure_feeds() {
         fi
         
         log "✅ 冲突包动态删除完成"
+    else
+        log "ℹ️ 当前模式 [$CONFIG_MODE] 不是 base + LEDE，跳过物理删除"
     fi
     
     if [ $? -ne 0 ]; then
