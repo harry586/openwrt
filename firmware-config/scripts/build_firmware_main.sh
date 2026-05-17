@@ -2538,17 +2538,11 @@ EOF
         echo "# CONFIG_PACKAGE_ppp is not set" >> .config
         echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
         
-        # 强制禁用 luci-light（使用完整 luci 代替）
-        log "  🔧 强制禁用 luci-light..."
-        sed -i '/^CONFIG_PACKAGE_luci-light=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-light=m/d' .config
-        echo "# CONFIG_PACKAGE_luci-light is not set" >> .config
-        
-        # 确保完整 luci 已启用
-        log "  🔧 确保完整 luci 已启用..."
-        if ! grep -q "^CONFIG_PACKAGE_luci=y" .config; then
-            echo "CONFIG_PACKAGE_luci=y" >> .config
-        fi
+        # 注意：不强制禁用 luci-light，因为 luci 依赖它
+        # 但确保完整 luci 不被启用（避免循环依赖）
+        log "  🔧 确保完整 luci 不被启用..."
+        sed -i '/^CONFIG_PACKAGE_luci=y/d' .config
+        echo "# CONFIG_PACKAGE_luci is not set" >> .config
         
         # 确保 dnsmasq 已启用
         log "  🔧 确保 dnsmasq 已启用..."
@@ -2563,7 +2557,7 @@ EOF
     local base_forbidden="${FORBIDDEN_PACKAGES:-vssr ssr-plus passwall rclone ddns qbittorrent filetransfer}"
     
     if [ "$CONFIG_MODE" = "base" ]; then
-        base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp luci-light"
+        base_forbidden="$base_forbidden dnsmasq-full ddns-scripts ddns-scripts_aliyun ddns-scripts_dnspod luci-app-ddns luci-i18n-ddns-zh-cn ppp-mod-pppoe ppp luci"
     fi
     
     log "📋 基础禁用插件: $base_forbidden"
@@ -2654,17 +2648,6 @@ EOF
     if ! grep -q "^CONFIG_PACKAGE_dnsmasq=y" .config && ! grep -q "^# CONFIG_PACKAGE_dnsmasq is not set" .config; then
         echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
         log "  ✅ 已启用 dnsmasq"
-    fi
-    
-    log "🔧 解决 luci-light 依赖问题：使用完整 luci 替代..."
-    if grep -q "^CONFIG_PACKAGE_luci-light=y" .config; then
-        sed -i '/^CONFIG_PACKAGE_luci-light=y/d' .config
-        echo "# CONFIG_PACKAGE_luci-light is not set" >> .config
-        log "  ✅ 已禁用 luci-light"
-    fi
-    if ! grep -q "^CONFIG_PACKAGE_luci=y" .config && ! grep -q "^# CONFIG_PACKAGE_luci is not set" .config; then
-        echo "CONFIG_PACKAGE_luci=y" >> .config
-        log "  ✅ 已启用完整 luci"
     fi
     
     log "🔧 确保 vsftpd 被启用..."
@@ -2775,16 +2758,10 @@ EOF
     fi
     
     if grep -q "^CONFIG_PACKAGE_luci=y" .config; then
-        log "  ✅ 完整 luci 已启用"
-    else
-        log "  ⚠️ 完整 luci 未启用"
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_luci-light=y" .config; then
-        log "  ❌ luci-light 仍被启用"
+        log "  ❌ 完整 luci 仍被启用（应避免）"
         still_enabled=$((still_enabled + 1))
     else
-        log "  ✅ luci-light 已禁用"
+        log "  ✅ 完整 luci 已禁用"
     fi
     
     if [ $still_enabled -eq 0 ]; then
