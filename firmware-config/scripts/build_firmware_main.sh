@@ -2648,25 +2648,42 @@ EOF
     fi
     
     # ============================================
-    # normal 模式：确保必要包被正确安装
+    # LEDE 源码特殊处理：替换 luci 元包为 luci-base
+    # 避免强制依赖 luci-proto-ppp
     # ============================================
-    if [ "$CONFIG_MODE" != "base" ] && [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]]; then
-        log "🔧 LEDE + WNDR3800 模式：确保已禁用包不被意外启用"
-        # 二次确认禁用 ppp-mod-pppoe
-        sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
-        echo "# CONFIG_PACKAGE_ppp is not set" >> .config
-        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ "$CONFIG_MODE" != "base" ]; then
+        log "🔧 LEDE 源码模式：替换 luci 元包为 luci-base 组件"
         
-        # 二次确认禁用 ddns-scripts 子包
-        sed -i '/ddns-scripts_aliyun/d' .config
-        sed -i '/ddns-scripts_dnspod/d' .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+        # 禁用 luci 元包
+        sed -i '/^CONFIG_PACKAGE_luci=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci=m/d' .config
+        echo "# CONFIG_PACKAGE_luci is not set" >> .config
         
-        log "  ✅ 已确保 ppp 和 ddns-scripts 子包被禁用"
+        # 禁用 luci-light（如果存在）
+        sed -i '/^CONFIG_PACKAGE_luci-light=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-light=m/d' .config
+        echo "# CONFIG_PACKAGE_luci-light is not set" >> .config
+        
+        # 禁用 luci-proto-ppp（避免依赖 ppp）
+        sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=m/d' .config
+        echo "# CONFIG_PACKAGE_luci-proto-ppp is not set" >> .config
+        
+        # 确保基础 Luci 组件已启用
+        if ! grep -q "^CONFIG_PACKAGE_luci-base=y" .config; then
+            echo "CONFIG_PACKAGE_luci-base=y" >> .config
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_luci-mod-admin-full=y" .config; then
+            echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_luci-theme-bootstrap=y" .config; then
+            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-firewall=y" .config; then
+            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+        fi
+        
+        log "  ✅ LEDE 模式：已替换 Luci 配置"
     fi
     
     log "✅ 禁用完成"
@@ -2784,29 +2801,6 @@ EOF
         else
             log "  ✅ default-settings 已禁用"
         fi
-    fi
-    
-    # 检查 ppp-mod-pppoe 是否被禁用
-    if grep -q "^CONFIG_PACKAGE_ppp-mod-pppoe=y" .config || grep -q "^CONFIG_PACKAGE_ppp-mod-pppoe=m" .config; then
-        log "  ❌ ppp-mod-pppoe 仍被启用"
-        still_enabled=$((still_enabled + 1))
-    else
-        log "  ✅ ppp-mod-pppoe 已禁用"
-    fi
-    
-    # 检查 ddns-scripts_aliyun 是否被禁用
-    if grep -q "^CONFIG_PACKAGE_ddns-scripts_aliyun=y" .config; then
-        log "  ❌ ddns-scripts_aliyun 仍被启用"
-        still_enabled=$((still_enabled + 1))
-    else
-        log "  ✅ ddns-scripts_aliyun 已禁用"
-    fi
-    
-    if grep -q "^CONFIG_PACKAGE_ddns-scripts_dnspod=y" .config; then
-        log "  ❌ ddns-scripts_dnspod 仍被启用"
-        still_enabled=$((still_enabled + 1))
-    else
-        log "  ✅ ddns-scripts_dnspod 已禁用"
     fi
     
     if [ $still_enabled -eq 0 ]; then
