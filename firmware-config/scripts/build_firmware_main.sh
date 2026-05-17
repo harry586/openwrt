@@ -5540,6 +5540,13 @@ workflow_step12_configure_feeds() {
             rm -rf "$dir"
         done
         
+        # 动态删除 default-settings（LEDE lean 源包，base 模式下不需要）
+        log "  🔍 搜索并删除 default-settings..."
+        find package feeds -type d -name "*default-settings*" 2>/dev/null | while read dir; do
+            log "    🗑️ 删除: $dir"
+            rm -rf "$dir"
+        done
+        
         # 强制在 .config 中禁用冲突包（如果 .config 存在）
         if [ -f ".config" ]; then
             log "  🔧 强制在 .config 中禁用冲突包..."
@@ -5559,10 +5566,17 @@ workflow_step12_configure_feeds() {
             echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
             echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
             
-            # 确保 luci-proto-ppp 已安装（解决 luci-light 依赖）
-            if ! grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config; then
-                echo "CONFIG_PACKAGE_luci-proto-ppp=y" >> .config
-                log "  ✅ 已添加 luci-proto-ppp"
+            sed -i '/^CONFIG_PACKAGE_default-settings=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_default-settings=m/d' .config
+            echo "# CONFIG_PACKAGE_default-settings is not set" >> .config
+            
+            # 确保完整 luci 不被启用
+            sed -i '/^CONFIG_PACKAGE_luci=y/d' .config
+            echo "# CONFIG_PACKAGE_luci is not set" >> .config
+            
+            # 确保 dnsmasq 已启用
+            if ! grep -q "^CONFIG_PACKAGE_dnsmasq=y" .config; then
+                echo "CONFIG_PACKAGE_dnsmasq=y" >> .config
             fi
             
             # 重新运行 make defconfig
