@@ -2537,6 +2537,60 @@ EOF
     log "  禁用软件包: $disabled_packages"
     
     # ============================================
+    # LEDE + WNDR3800 强制禁用问题包（直接操作 .config）
+    # 放在这里确保在 make defconfig 之前执行
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]] && [ "$CONFIG_MODE" = "normal" ]; then
+        log "🔧 LEDE + WNDR3800 normal 模式：强制禁用问题包（直接操作 .config）"
+        
+        # 禁用 ppp
+        sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
+        echo "# CONFIG_PACKAGE_ppp is not set" >> .config
+        
+        # 禁用 ppp-mod-pppoe
+        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
+        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+        
+        # 禁用 dnsmasq-full
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_dnsmasq-full=m/d' .config
+        echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+        
+        # 禁用 wechatpush
+        sed -i '/^CONFIG_PACKAGE_luci-app-wechatpush=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-app-wechatpush=m/d' .config
+        echo "# CONFIG_PACKAGE_luci-app-wechatpush is not set" >> .config
+        
+        sed -i '/^CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=m/d' .config
+        echo "# CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn is not set" >> .config
+        
+        # 禁用 ddns-scripts
+        sed -i '/^CONFIG_PACKAGE_ddns-scripts=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_ddns-scripts=m/d' .config
+        echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
+        
+        sed -i '/^CONFIG_PACKAGE_ddns-scripts_aliyun=y/d' .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
+        
+        sed -i '/^CONFIG_PACKAGE_ddns-scripts_dnspod=y/d' .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+        
+        # 禁用 luci-proto-ppp
+        sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=m/d' .config
+        echo "# CONFIG_PACKAGE_luci-proto-ppp is not set" >> .config
+        
+        log "  ✅ 已强制禁用 ppp、dnsmasq-full、wechatpush、ddns-scripts、luci-proto-ppp"
+        
+        # 重新运行 make defconfig 使禁用生效
+        log "  🔄 重新运行 make defconfig..."
+        make defconfig > /tmp/build-logs/defconfig_force_disable.log 2>&1 || true
+    fi
+    
+    # ============================================
     # 禁用冲突和不需要的插件
     # ============================================
     log "🔧 ===== 禁用冲突和不需要的插件 ====="
@@ -2552,24 +2606,6 @@ EOF
     if [ -n "$device_special_forbidden" ]; then
         base_forbidden="$base_forbidden $device_special_forbidden"
         log "📋 添加设备特殊禁用包: $device_special_forbidden"
-    fi
-    
-    # ============================================
-    # 硬编码：LEDE + netgear_wndr3800 强制禁用问题包（确保生效）
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]]; then
-        log "🔧 硬编码规则：LEDE + WNDR3800 设备，强制禁用问题包"
-        
-        # 禁用 wechatpush
-        base_forbidden="$base_forbidden luci-app-wechatpush luci-i18n-wechatpush-zh-cn"
-        
-        # 禁用 ppp 相关
-        base_forbidden="$base_forbidden ppp ppp-mod-pppoe"
-        
-        # 禁用 dnsmasq-full（解决冲突）
-        base_forbidden="$base_forbidden dnsmasq-full"
-        
-        log "  ✅ 已添加: wechatpush, ppp, ppp-mod-pppoe, dnsmasq-full"
     fi
     
     log "📋 基础禁用插件: $base_forbidden"
