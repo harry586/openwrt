@@ -3918,14 +3918,113 @@ download_dependencies() {
         log "创建依赖包目录: dl"
     fi
     
-    # 使用 -name 条件，不加括号
     local existing_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "现有依赖包数量: $existing_deps 个"
     
-    log "开始下载依赖包..."
-    make -j1 download V=s 2>&1 | tee download.log || handle_error "下载依赖包失败"
+    # ============================================
+    # 自动切换镜像源配置
+    # ============================================
+    MIRRORS=(
+        "https://mirrors.tuna.tsinghua.edu.cn/openwrt"
+        "https://mirrors.ustc.edu.cn/openwrt"
+        "https://mirrors.aliyun.com/openwrt"
+        "https://mirror.sjtu.edu.cn/openwrt"
+    )
     
-    # 使用 -name 条件，不加括号
+    # 备份原始 feeds 配置
+    if [ -f "feeds.conf.default" ]; then
+        cp feeds.conf.default feeds.conf.default.bak
+    fi
+    
+    # 函数：切换镜像源
+    switch_mirror() {
+        local mirror_url="$1"
+        log "🔄 切换到镜像源: $mirror_url"
+        
+        if [ -f "feeds.conf.default" ]; then
+            # 替换所有 GitHub 源为镜像源
+            sed -i "s|https://github.com/openwrt|$mirror_url|g" feeds.conf.default
+            sed -i "s|https://git.openwrt.org|$mirror_url|g" feeds.conf.default
+            sed -i "s|https://github.com/immortalwrt|$mirror_url|g" feeds.conf.default
+            sed -i "s|https://github.com/coolsnowwolf|$mirror_url|g" feeds.conf.default
+        fi
+        
+        # 设置下载工具使用镜像
+        export OPENWRT_MIRROR="$mirror_url"
+    }
+    
+    # 函数：恢复原始 feeds 配置
+    restore_feeds() {
+        if [ -f "feeds.conf.default.bak" ]; then
+            cp feeds.conf.default.bak feeds.conf.default
+        fi
+    }
+    
+    # 设置下载超时和重试参数
+    export DOWNLOAD_TIMEOUT=60
+    export DOWNLOAD_RETRIES=3
+    
+    # 设置 git 超时参数
+    git config --global http.postBuffer 524288000
+    git config --global http.lowSpeedLimit 1000
+    git config --global http.lowSpeedTime 60
+    
+    log "开始下载依赖包（自动切换镜像源）..."
+    
+    # 最多尝试次数（原始源 + 镜像源数量）
+    local max_attempts=$((1 + ${#MIRRORS[@]}))
+    local attempt=1
+    local download_success=0
+    local current_mirror_index=-1
+    
+    while [ $attempt -le $max_attempts ]; do
+        if [ $attempt -eq 1 ]; then
+            log "🔄 下载尝试 $attempt/$max_attempts（使用原始源）..."
+            restore_feeds
+        else
+            current_mirror_index=$((attempt - 2))
+            if [ $current_mirror_index -lt ${#MIRRORS[@]} ]; then
+                log "🔄 下载尝试 $attempt/$max_attempts（使用镜像源 $((current_mirror_index + 1))/${#MIRRORS[@]}）..."
+                switch_mirror "${MIRRORS[$current_mirror_index]}"
+            else
+                log "🔄 下载尝试 $attempt/$max_attempts（所有源都失败，继续尝试原始源）..."
+                restore_feeds
+            fi
+        fi
+        
+        # 使用 timeout 命令，30分钟超时
+        timeout 1800 make -j1 download V=s 2>&1 | tee download.log
+        local exit_code=${PIPESTATUS[0]}
+        
+        if [ $exit_code -eq 0 ]; then
+            log "✅ 下载成功"
+            download_success=1
+            break
+        elif [ $exit_code -eq 124 ]; then
+            log "⚠️ 下载超时（30分钟）"
+        else
+            log "⚠️ 下载失败（退出码: $exit_code）"
+        fi
+        
+        # 检查是否是网络错误，如果是则自动切换镜像
+        if grep -q "curl\|Failed\|404\|timeout\|Connection refused\|Network is unreachable" download.log 2>/dev/null; then
+            log "  📡 检测到网络问题，自动切换镜像源..."
+        fi
+        
+        # 清理可能卡住的进程
+        pkill -f "wget\|curl\|git" 2>/dev/null || true
+        sleep 5
+        
+        attempt=$((attempt + 1))
+    done
+    
+    # 恢复原始配置
+    restore_feeds
+    
+    if [ $download_success -eq 0 ]; then
+        log "⚠️ 所有下载尝试均失败，但继续执行（部分包可能已下载）"
+    fi
+    
     local downloaded_deps=$(find dl -type f -name "*.tar.*" -o -name "*.zip" -o -name "*.gz" 2>/dev/null | wc -l)
     log "下载后依赖包数量: $downloaded_deps 个"
     
@@ -3935,9 +4034,9 @@ download_dependencies() {
         log "ℹ️ 没有下载新的依赖包"
     fi
     
-    if grep -q "ERROR|Failed|404" download.log 2>/dev/null; then
+    if grep -q "ERROR\|Failed\|404" download.log 2>/dev/null; then
         log "⚠️ 下载过程中发现错误:"
-        grep -E "ERROR|Failed|404" download.log | head -10
+        grep -E "ERROR\|Failed\|404" download.log | head -10
     fi
     
     log "✅ 依赖包下载完成"
