@@ -4934,6 +4934,58 @@ workflow_step25_build_firmware() {
     set +e
     cd $BUILD_DIR
 
+    # ============================================
+    # LEDE + WNDR3800 编译前最后一次强制禁用问题包
+    # 这里不再运行 make defconfig，直接修改 .config
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == *wndr3800* ]] && [ "$CONFIG_MODE" = "normal" ]; then
+        log "🔧 LEDE + WNDR3800：编译前最后一次强制禁用问题包"
+        
+        if [ -f ".config" ]; then
+            # 禁用 ppp 相关
+            sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
+            sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
+            echo "# CONFIG_PACKAGE_ppp is not set" >> .config
+            echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+            
+            # 禁用 dnsmasq-full
+            sed -i '/^CONFIG_PACKAGE_dnsmasq-full=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_dnsmasq-full=m/d' .config
+            echo "# CONFIG_PACKAGE_dnsmasq-full is not set" >> .config
+            
+            # 禁用 ddns-scripts 相关
+            sed -i '/^CONFIG_PACKAGE_ddns-scripts=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_ddns-scripts_aliyun=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_ddns-scripts_dnspod=y/d' .config
+            echo "# CONFIG_PACKAGE_ddns-scripts is not set" >> .config
+            echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
+            echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+            
+            # 禁用 wechatpush
+            sed -i '/^CONFIG_PACKAGE_luci-app-wechatpush=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_luci-app-wechatpush=m/d' .config
+            sed -i '/^CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=m/d' .config
+            echo "# CONFIG_PACKAGE_luci-app-wechatpush is not set" >> .config
+            echo "# CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn is not set" >> .config
+            
+            # 禁用 luci-proto-ppp
+            sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=m/d' .config
+            echo "# CONFIG_PACKAGE_luci-proto-ppp is not set" >> .config
+            
+            # 去重
+            sort -u .config > .config.tmp
+            mv .config.tmp .config
+            
+            log "  ✅ 已强制禁用 ppp、dnsmasq-full、ddns-scripts、wechatpush、luci-proto-ppp"
+        else
+            log "  ⚠️ .config 文件不存在，跳过强制禁用"
+        fi
+    fi
+
     ulimit -n 65536 2>/dev/null || true
     local current_limit=$(ulimit -n)
     log "  ✅ 当前文件描述符限制: $current_limit"
