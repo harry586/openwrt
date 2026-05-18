@@ -89,7 +89,10 @@ load_build_config() {
     export BUILTIN_PATCHES_ENABLED
     export CUSTOM_PATCH_SCRIPT
     # 导出设备特殊禁用包配置
-    export DEVICE_SPECIAL_FORBIDDEN
+    if [ ${#DEVICE_SPECIAL_FORBIDDEN[@]} -gt 0 ]; then
+        export DEVICE_SPECIAL_FORBIDDEN
+        echo "📋 已加载设备特殊禁用规则: ${#DEVICE_SPECIAL_FORBIDDEN[@]} 条"
+    fi
 #【build_firmware_main.sh-00.5.01-end】
 }
 
