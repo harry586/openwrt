@@ -2554,6 +2554,24 @@ EOF
         log "📋 添加设备特殊禁用包: $device_special_forbidden"
     fi
     
+    # ============================================
+    # 硬编码：LEDE + netgear_wndr3800 强制禁用问题包（确保生效）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]]; then
+        log "🔧 硬编码规则：LEDE + WNDR3800 设备，强制禁用问题包"
+        
+        # 禁用 wechatpush
+        base_forbidden="$base_forbidden luci-app-wechatpush luci-i18n-wechatpush-zh-cn"
+        
+        # 禁用 ppp 相关
+        base_forbidden="$base_forbidden ppp ppp-mod-pppoe"
+        
+        # 禁用 dnsmasq-full（解决冲突）
+        base_forbidden="$base_forbidden dnsmasq-full"
+        
+        log "  ✅ 已添加: wechatpush, ppp, ppp-mod-pppoe, dnsmasq-full"
+    fi
+    
     log "📋 基础禁用插件: $base_forbidden"
     
     local full_forbidden_list=($(generate_forbidden_packages_list "$base_forbidden"))
