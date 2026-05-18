@@ -4,7 +4,7 @@
 # 最后更新: 2026-05-18
 # 整合 Hanwckf 源码，使用标准构建步骤
 # 修改: LEDE 源码强制使用 master 分支，忽略用户选择的版本
-# 修改: 添加下载镜像源加速，解决网络卡顿问题
+# 修改: 下载依赖包自动切换镜像源（解决网络卡顿问题）
 
 name: OpenWrt 智能固件构建工作流
 
@@ -477,45 +477,13 @@ jobs:
           ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
             step20_fix_network
 
-      - name: "18. 下载依赖包（带重试和镜像加速）"
+      - name: "18. 下载依赖包（自动切换镜像源）"
         run: |
-          echo "=== 步骤18: 下载依赖包（带重试和镜像加速） ==="
+          echo "=== 步骤18: 下载依赖包（自动切换镜像源） ==="
           
-          # 设置下载超时
-          export DOWNLOAD_TIMEOUT=120
-          export DOWNLOAD_RETRIES=5
-          
-          # 启用镜像源加速
-          export ENABLE_MIRROR="true"
-          export MIRROR_SOURCE="tuna"
-          
-          # 最多重试3次
-          for i in 1 2 3; do
-            echo "🔄 下载尝试 $i/3..."
-            
-            # 使用 timeout 命令，30分钟超时
-            timeout 1800 ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
-              step21_download_deps
-            
-            EXIT_CODE=$?
-            
-            if [ $EXIT_CODE -eq 0 ]; then
-              echo "✅ 下载成功"
-              break
-            elif [ $EXIT_CODE -eq 124 ]; then
-              echo "⚠️ 下载超时（30分钟），重试中..."
-            else
-              echo "⚠️ 下载失败（退出码: $EXIT_CODE），重试中..."
-            fi
-            
-            # 清理可能卡住的进程
-            sudo pkill -f "wget\|curl\|git" 2>/dev/null || true
-            sleep 10
-            
-            if [ $i -eq 3 ]; then
-              echo "⚠️ 下载尝试3次后仍失败，但继续执行"
-            fi
-          done
+          # 调用下载函数（自动切换镜像源逻辑在脚本内）
+          ${{ github.workspace }}/firmware-config/scripts/build_firmware_main.sh \
+            step21_download_deps
 
       - name: "19. 集成自定义文件"
         run: |
