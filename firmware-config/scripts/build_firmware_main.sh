@@ -5032,15 +5032,40 @@ workflow_step25_build_firmware() {
 
     set +e
     cd $BUILD_DIR
+    
+    # ============================================
+    # 加载环境变量，确保 DEVICE 等变量可用
+    # ============================================
+    if [ -f "$BUILD_DIR/build_env.sh" ]; then
+        source "$BUILD_DIR/build_env.sh"
+        log "✅ 已加载环境变量: DEVICE=$DEVICE, SOURCE_REPO_TYPE=$SOURCE_REPO_TYPE, CONFIG_MODE=$CONFIG_MODE"
+    fi
+    
+    # 如果没有加载到，从工作流环境变量获取
+    if [ -z "$DEVICE" ]; then
+        DEVICE="${FINAL_DEVICE_NAME:-$DEVICE}"
+        log "⚠️ 从工作流环境变量获取 DEVICE=$DEVICE"
+    fi
+    if [ -z "$SOURCE_REPO_TYPE" ]; then
+        SOURCE_REPO_TYPE="${SOURCE_REPO:-lede}"
+        log "⚠️ 从工作流环境变量获取 SOURCE_REPO_TYPE=$SOURCE_REPO_TYPE"
+    fi
+    if [ -z "$CONFIG_MODE" ]; then
+        CONFIG_MODE="${CONFIG_MODE:-normal}"
+        log "⚠️ 从工作流环境变量获取 CONFIG_MODE=$CONFIG_MODE"
+    fi
 
     # ============================================
     # LEDE + WNDR3800 编译前最后一次强制禁用问题包
-    # 这里不再运行 make defconfig，直接修改 .config
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$DEVICE" == *wndr3800* ]] && [ "$CONFIG_MODE" = "normal" ]; then
         log "🔧 LEDE + WNDR3800：编译前最后一次强制禁用问题包"
         
         if [ -f ".config" ]; then
+            # 显示禁用前的状态
+            log "  📝 禁用前相关配置状态:"
+            grep -E "CONFIG_PACKAGE_(ppp|ppp-mod-pppoe|dnsmasq-full|ddns-scripts|ddns-scripts_aliyun|ddns-scripts_dnspod|luci-app-wechatpush|luci-i18n-wechatpush-zh-cn|luci-proto-ppp)" .config 2>/dev/null | sed 's/^/     /' || echo "    未找到相关配置"
+            
             # 禁用 ppp 相关
             sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
             sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
@@ -5079,6 +5104,10 @@ workflow_step25_build_firmware() {
             sort -u .config > .config.tmp
             mv .config.tmp .config
             
+            # 显示禁用后的状态
+            log "  📝 禁用后相关配置状态:"
+            grep -E "CONFIG_PACKAGE_(ppp|ppp-mod-pppoe|dnsmasq-full|ddns-scripts|ddns-scripts_aliyun|ddns-scripts_dnspod|luci-app-wechatpush|luci-i18n-wechatpush-zh-cn|luci-proto-ppp)" .config 2>/dev/null | sed 's/^/     /' || echo "    已全部禁用"
+            
             log "  ✅ 已强制禁用 ppp、dnsmasq-full、ddns-scripts、wechatpush、luci-proto-ppp"
         else
             log "  ⚠️ .config 文件不存在，跳过强制禁用"
@@ -5096,6 +5125,8 @@ workflow_step25_build_firmware() {
     echo "  CPU核心数: $CPU_CORES"
     echo "  内存大小: ${TOTAL_MEM}MB"
     echo "  源码类型: $SOURCE_REPO_TYPE"
+    echo "  设备: $DEVICE"
+    echo "  配置模式: $CONFIG_MODE"
 
     local MAKE_JOBS=1
     if [ "$enable_parallel" = "true" ] && [ $CPU_CORES -ge 2 ]; then
@@ -7263,10 +7294,6 @@ workflow_step29_post_build_space_check() {
 #【build_firmware_main.sh-42-end】
 
 #【build_firmware_main.sh-43】
-# ============================================
-# 全流程错误检查函数 - 完整增强版
-# 功能：定位失败包、依赖链追溯、冲突检测、给出修复建议
-# ============================================
 quick_error_check() {
     local build_dir="$1"
     local target_platform="$2"
@@ -7297,7 +7324,63 @@ quick_error_check() {
         echo "完整目标: ${TARGET:-$target_platform}/${SUBTARGET:-generic}"
         echo "源码类型: ${SOURCE_REPO_TYPE:-unknown}"
         echo "输入设备: ${DEVICE:-unknown}"
+        echo "配置模式: ${CONFIG_MODE:-unknown}"
         echo "================================================================="
+
+        # ======================== 0. 设备特殊禁用规则状态检查 ========================
+        echo ""
+        echo "🔧 设备特殊禁用规则状态检查"
+        echo "----------------------------------------"
+        if [ ${#DEVICE_SPECIAL_FORBIDDEN[@]} -gt 0 ]; then
+            echo "📋 已加载的设备特殊禁用规则 (${#DEVICE_SPECIAL_FORBIDDEN[@]} 条):"
+            for rule in "${DEVICE_SPECIAL_FORBIDDEN[@]}"; do
+                echo "   📌 $rule"
+            done
+        else
+            echo "⚠️ 未加载任何设备特殊禁用规则"
+        fi
+        echo ""
+        
+        # 检查当前设备是否匹配特殊禁用规则
+        local current_device="${DEVICE:-unknown}"
+        local current_source="${SOURCE_REPO_TYPE:-unknown}"
+        echo "🔍 当前设备 \"$current_device\" 源码类型 \"$current_source\" 的规则匹配情况:"
+        local matched_rules=()
+        if [ ${#DEVICE_SPECIAL_FORBIDDEN[@]} -gt 0 ]; then
+            for rule in "${DEVICE_SPECIAL_FORBIDDEN[@]}"; do
+                IFS='|' read -r dev_pat src_pat pkgs <<< "$rule"
+                if [[ "$current_device" == $dev_pat ]] && [ "$current_source" = "$src_pat" ]; then
+                    matched_rules+=("$rule")
+                    echo "   ✅ 匹配: $rule"
+                    echo "      将禁用: $pkgs"
+                fi
+            done
+        fi
+        if [ ${#matched_rules[@]} -eq 0 ]; then
+            echo "   ⚠️ 未匹配到任何特殊禁用规则"
+        fi
+        echo ""
+
+        # ======================== 0.5 .config 中问题包状态检查 ========================
+        echo "🔍 .config 中问题包配置状态"
+        echo "----------------------------------------"
+        if [ -f ".config" ]; then
+            local problem_packages=("ppp" "ppp-mod-pppoe" "dnsmasq-full" "ddns-scripts" "ddns-scripts_aliyun" "ddns-scripts_dnspod" "luci-app-wechatpush" "luci-i18n-wechatpush-zh-cn" "luci-proto-ppp")
+            for pkg in "${problem_packages[@]}"; do
+                if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config 2>/dev/null; then
+                    echo "   🔴 $pkg: 已启用 (y)"
+                elif grep -q "^CONFIG_PACKAGE_${pkg}=m" .config 2>/dev/null; then
+                    echo "   🟡 $pkg: 模块化 (m)"
+                elif grep -q "^# CONFIG_PACKAGE_${pkg} is not set" .config 2>/dev/null; then
+                    echo "   ✅ $pkg: 已禁用"
+                else
+                    echo "   ⚪ $pkg: 未定义"
+                fi
+            done
+        else
+            echo "   ❌ .config 文件不存在"
+        fi
+        echo ""
 
         # ======================== 1. 日志收集 ========================
         declare -A log_sources
@@ -7325,7 +7408,6 @@ quick_error_check() {
         local first_failed_context=""
         local first_error_line=""
         
-        # 方法1：从 Error 255 的上下文中提取
         if [ -f "$log_file" ]; then
             first_error_line=$(grep -n "Error 255" "$log_file" 2>/dev/null | head -1 | cut -d: -f1)
             if [ -n "$first_error_line" ]; then
@@ -7333,14 +7415,12 @@ quick_error_check() {
                 [ $start_line -lt 1 ] && start_line=1
                 local context=$(sed -n "${start_line},$((first_error_line + 20))p" "$log_file" 2>/dev/null)
                 
-                # 查找 "Configuring" 失败的包
                 local last_config=$(echo "$context" | grep "Configuring" | tail -1)
                 if [ -n "$last_config" ]; then
                     first_failed_pkg=$(echo "$last_config" | sed 's/Configuring //' | cut -d. -f1 | xargs)
                     first_failed_context="安装失败: $last_config"
                 fi
                 
-                # 如果没找到，查找 "Leaving directory"
                 if [ -z "$first_failed_pkg" ]; then
                     local leaving_dir=$(echo "$context" | grep -E "make\[[0-9]+\]: Leaving directory.*package" | tail -1)
                     if [ -n "$leaving_dir" ]; then
@@ -7352,7 +7432,6 @@ quick_error_check() {
             fi
         fi
         
-        # 方法2：从 "failed to build" 中提取
         if [ -z "$first_failed_pkg" ] && [ -f "$log_file" ]; then
             local failed_build=$(grep -E "failed to build|ERROR:.*failed" "$log_file" 2>/dev/null | head -1)
             if [ -n "$failed_build" ]; then
@@ -7362,7 +7441,6 @@ quick_error_check() {
             fi
         fi
         
-        # 输出失败包
         if [ -n "$first_failed_pkg" ]; then
             echo "   🔴 第一个失败的包: $first_failed_pkg"
             echo "      错误上下文: $first_failed_context"
@@ -7372,11 +7450,10 @@ quick_error_check() {
         fi
         echo ""
 
-        # ======================== 3. 依赖链分析（追溯源头） ========================
+        # ======================== 3. 依赖链分析 ========================
         echo "🔍 依赖链分析 - 追溯问题包来源"
         echo "----------------------------------------"
         
-        # 提取依赖错误
         local dep_errors=$(grep -E "pkg_hash_check_unresolved|cannot find dependency" "$log_file" 2>/dev/null)
         
         if [ -n "$dep_errors" ]; then
@@ -7398,7 +7475,6 @@ quick_error_check() {
                 fi
             done <<< "$dep_errors"
             
-            # 去重
             local unique_problems=($(printf "%s\n" "${problem_packages[@]}" | sort -u))
             local unique_missing=($(printf "%s\n" "${missing_deps[@]}" | sort -u))
             
@@ -7407,18 +7483,15 @@ quick_error_check() {
             echo "   缺失依赖: ${unique_missing[*]}"
             echo ""
             
-            # 追溯是谁需要这些问题包
             echo "🔎 追溯依赖来源（查找谁需要这些问题包）:"
             for problem in "${unique_problems[@]}"; do
                 echo ""
                 echo "   📌 问题包: $problem"
-                # 在 .config 中查找谁启用了它
                 local found=$(grep -E "CONFIG_PACKAGE_.*=${problem}" .config 2>/dev/null | head -3)
                 if [ -n "$found" ]; then
                     echo "      可能被以下包依赖:"
                     echo "$found" | sed 's/^/         /'
                 fi
-                # 在 feeds 中查找
                 if [ -d "feeds" ]; then
                     local feed_dep=$(grep -r "DEPENDS.*$problem" feeds/ --include="Makefile" 2>/dev/null | head -3)
                     if [ -n "$feed_dep" ]; then
@@ -7446,7 +7519,6 @@ quick_error_check() {
         echo "🔍 配置冲突检测"
         echo "----------------------------------------"
         
-        # dnsmasq 冲突
         if grep -q "CONFIG_PACKAGE_dnsmasq=y" .config 2>/dev/null && grep -q "CONFIG_PACKAGE_dnsmasq-full=y" .config 2>/dev/null; then
             echo "   🔴 dnsmasq 冲突: 同时启用了 dnsmasq 和 dnsmasq-full"
             echo "      💡 修复: 只保留一个，在 FORBIDDEN_PACKAGES 中添加 dnsmasq-full 或 dnsmasq"
@@ -7457,7 +7529,6 @@ quick_error_check() {
             echo "   ✅ dnsmasq 无冲突"
         fi
         
-        # libustream 冲突
         if grep -q "CONFIG_PACKAGE_libustream-openssl=y" .config 2>/dev/null && grep -q "CONFIG_PACKAGE_libustream-wolfssl=y" .config 2>/dev/null; then
             echo "   🔴 libustream 冲突: 同时启用了 openssl 和 wolfssl 版本"
             echo "      💡 修复: 在 FORBIDDEN_PACKAGES 中添加 libustream-wolfssl"
@@ -7465,7 +7536,6 @@ quick_error_check() {
             echo "   ✅ libustream 无冲突"
         fi
         
-        # ath10k 冲突
         if grep -q "CONFIG_PACKAGE_kmod-ath10k=y" .config 2>/dev/null && grep -q "CONFIG_PACKAGE_kmod-ath10k-ct=y" .config 2>/dev/null; then
             echo "   🔴 ath10k 冲突: 同时启用了标准版和 CT 版"
             echo "      💡 修复: 在 FORBIDDEN_PACKAGES 中添加 kmod-ath10k"
