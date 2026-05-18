@@ -14,6 +14,7 @@
 
 
 
+
 ## 📁 项目结构
 
 ```
@@ -24,7 +25,6 @@
 │   │   │   ├── ath79.config
 │   │   │   ├── ipq40xx.config
 │   │   │   ├── mediatek.config
-│   │   │   ├── netgear_wndr3800.config
 │   │   │   └── ramips.config
 │   │   ├── version-specific/
 │   │   │   ├── 21.02.config
@@ -54,9 +54,9 @@
 ├── build-config.conf
 └── support.sh
 
-7 directories, 28 files
+7 directories, 27 files
 ```
 
 注意，自定义文件名是英文的，方便复制、运行
 
-> 最后更新时间: 2026-05-11 10:37:19
+> 最后更新时间: 2026-05-18 10:45:28
