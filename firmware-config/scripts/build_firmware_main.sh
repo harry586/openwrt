@@ -2808,17 +2808,17 @@ EOF
         sed -i '/^CONFIG_PACKAGE_luci=m/d' .config
         echo "# CONFIG_PACKAGE_luci is not set" >> .config
         
-        # 禁用 luci-light（这是问题的根源）
+        # 禁用 luci-light
         sed -i '/^CONFIG_PACKAGE_luci-light=y/d' .config
         sed -i '/^CONFIG_PACKAGE_luci-light=m/d' .config
         echo "# CONFIG_PACKAGE_luci-light is not set" >> .config
         
-        # 禁用 luci-base（它依赖 luci-light）
+        # 禁用 luci-base
         sed -i '/^CONFIG_PACKAGE_luci-base=y/d' .config
         sed -i '/^CONFIG_PACKAGE_luci-base=m/d' .config
         echo "# CONFIG_PACKAGE_luci-base is not set" >> .config
         
-        # 禁用 luci-proto-ppp（它依赖 ppp）
+        # 禁用 luci-proto-ppp
         sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=y/d' .config
         sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=m/d' .config
         echo "# CONFIG_PACKAGE_luci-proto-ppp is not set" >> .config
