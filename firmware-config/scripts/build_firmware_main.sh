@@ -2775,9 +2775,10 @@ EOF
     
     # ============================================
     # LEDE + WNDR3800 最后一次强制禁用（在 make defconfig 之后）
+    # 关键：禁用整个依赖链，只保留必要的界面组件
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]] && [ "$CONFIG_MODE" = "normal" ]; then
-        log "🔧 LEDE + WNDR3800：最后一次强制禁用问题包"
+        log "🔧 LEDE + WNDR3800：最后一次强制禁用问题包（禁用整个依赖链）"
         
         # 禁用 ppp 相关
         sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
@@ -2800,31 +2801,53 @@ EOF
         echo "# CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn is not set" >> .config
         
         # ============================================
-        # 关键：禁用 luci-light，启用 luci-base
+        # 关键：禁用整个 Luci 依赖链
         # ============================================
+        # 禁用 luci 元包
+        sed -i '/^CONFIG_PACKAGE_luci=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci=m/d' .config
+        echo "# CONFIG_PACKAGE_luci is not set" >> .config
+        
+        # 禁用 luci-light（这是问题的根源）
         sed -i '/^CONFIG_PACKAGE_luci-light=y/d' .config
         sed -i '/^CONFIG_PACKAGE_luci-light=m/d' .config
         echo "# CONFIG_PACKAGE_luci-light is not set" >> .config
         
+        # 禁用 luci-base（它依赖 luci-light）
+        sed -i '/^CONFIG_PACKAGE_luci-base=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-base=m/d' .config
+        echo "# CONFIG_PACKAGE_luci-base is not set" >> .config
+        
+        # 禁用 luci-proto-ppp（它依赖 ppp）
         sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=y/d' .config
         sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=m/d' .config
         echo "# CONFIG_PACKAGE_luci-proto-ppp is not set" >> .config
         
-        # 确保基础 Luci 组件已启用
-        echo "CONFIG_PACKAGE_luci-base=y" >> .config
-        echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
-        echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-        echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+        # ============================================
+        # 只保留必要的 Luci 组件（无依赖链）
+        # ============================================
+        if ! grep -q "^CONFIG_PACKAGE_luci-mod-admin-full=y" .config; then
+            echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_luci-theme-bootstrap=y" .config; then
+            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
+        fi
+        if ! grep -q "^CONFIG_PACKAGE_luci-app-firewall=y" .config; then
+            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
+        fi
         
         # 去重
         sort -u .config > .config.tmp
         mv .config.tmp .config
         
-        log "  ✅ 最后一次强制禁用完成（已禁用 luci-light，改用 luci-base）"
+        log "  ✅ 最后一次强制禁用完成"
+        log "     - 已禁用: ppp, ppp-mod-pppoe, ddns-scripts_*, wechatpush"
+        log "     - 已禁用: luci, luci-light, luci-base, luci-proto-ppp"
+        log "     - 已启用: luci-mod-admin-full, luci-theme-bootstrap, luci-app-firewall"
         
         # 验证禁用结果
-        log "  📝 验证禁用结果:"
-        grep -E "CONFIG_PACKAGE_(ppp|ppp-mod-pppoe|ddns-scripts_aliyun|ddns-scripts_dnspod|luci-light|luci-base|luci-proto-ppp)" .config 2>/dev/null | sed 's/^/     /' || echo "    已全部禁用"
+        log "  📝 验证结果:"
+        grep -E "CONFIG_PACKAGE_(ppp|ppp-mod-pppoe|luci|luci-light|luci-base|luci-proto-ppp|luci-mod-admin-full|luci-theme-bootstrap|luci-app-firewall)" .config 2>/dev/null | sed 's/^/     /'
     fi
     
     # ============================================
