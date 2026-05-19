@@ -2774,80 +2774,25 @@ EOF
     fi
     
     # ============================================
-    # LEDE + WNDR3800 最后一次强制禁用（在 make defconfig 之后）
-    # 关键：禁用整个依赖链，只保留必要的界面组件
+    # LEDE + WNDR3800 最后一次强制禁用 ppp-mod-pppoe
     # ============================================
     if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]] && [ "$CONFIG_MODE" = "normal" ]; then
-        log "🔧 LEDE + WNDR3800：最后一次强制禁用问题包（禁用整个依赖链）"
+        log "🔧 LEDE + WNDR3800：最后一次强制禁用 ppp-mod-pppoe"
         
-        # 禁用 ppp 相关
-        sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
+        # 只禁用 ppp-mod-pppoe，不禁用 ppp 和其他包
         sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
         sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
-        echo "# CONFIG_PACKAGE_ppp is not set" >> .config
         echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        
-        # 禁用 ddns-scripts 相关
-        sed -i '/^CONFIG_PACKAGE_ddns-scripts_aliyun=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ddns-scripts_dnspod=y/d' .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
-        
-        # 禁用 wechatpush
-        sed -i '/^CONFIG_PACKAGE_luci-app-wechatpush=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y/d' .config
-        echo "# CONFIG_PACKAGE_luci-app-wechatpush is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn is not set" >> .config
-        
-        # ============================================
-        # 关键：禁用整个 Luci 依赖链
-        # ============================================
-        # 禁用 luci 元包
-        sed -i '/^CONFIG_PACKAGE_luci=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci=m/d' .config
-        echo "# CONFIG_PACKAGE_luci is not set" >> .config
-        
-        # 禁用 luci-light
-        sed -i '/^CONFIG_PACKAGE_luci-light=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-light=m/d' .config
-        echo "# CONFIG_PACKAGE_luci-light is not set" >> .config
-        
-        # 禁用 luci-base
-        sed -i '/^CONFIG_PACKAGE_luci-base=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-base=m/d' .config
-        echo "# CONFIG_PACKAGE_luci-base is not set" >> .config
-        
-        # 禁用 luci-proto-ppp
-        sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=m/d' .config
-        echo "# CONFIG_PACKAGE_luci-proto-ppp is not set" >> .config
-        
-        # ============================================
-        # 只保留必要的 Luci 组件（无依赖链）
-        # ============================================
-        if ! grep -q "^CONFIG_PACKAGE_luci-mod-admin-full=y" .config; then
-            echo "CONFIG_PACKAGE_luci-mod-admin-full=y" >> .config
-        fi
-        if ! grep -q "^CONFIG_PACKAGE_luci-theme-bootstrap=y" .config; then
-            echo "CONFIG_PACKAGE_luci-theme-bootstrap=y" >> .config
-        fi
-        if ! grep -q "^CONFIG_PACKAGE_luci-app-firewall=y" .config; then
-            echo "CONFIG_PACKAGE_luci-app-firewall=y" >> .config
-        fi
         
         # 去重
         sort -u .config > .config.tmp
         mv .config.tmp .config
         
-        log "  ✅ 最后一次强制禁用完成"
-        log "     - 已禁用: ppp, ppp-mod-pppoe, ddns-scripts_*, wechatpush"
-        log "     - 已禁用: luci, luci-light, luci-base, luci-proto-ppp"
-        log "     - 已启用: luci-mod-admin-full, luci-theme-bootstrap, luci-app-firewall"
+        log "  ✅ 已强制禁用 ppp-mod-pppoe"
         
         # 验证禁用结果
         log "  📝 验证结果:"
-        grep -E "CONFIG_PACKAGE_(ppp|ppp-mod-pppoe|luci|luci-light|luci-base|luci-proto-ppp|luci-mod-admin-full|luci-theme-bootstrap|luci-app-firewall)" .config 2>/dev/null | sed 's/^/     /'
+        grep -E "CONFIG_PACKAGE_ppp-mod-pppoe" .config 2>/dev/null | sed 's/^/     /' || echo "    已禁用"
     fi
     
     # ============================================
