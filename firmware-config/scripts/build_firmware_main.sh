@@ -2774,28 +2774,6 @@ EOF
     fi
     
     # ============================================
-    # LEDE + WNDR3800 最后一次强制禁用 ppp-mod-pppoe
-    # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]] && [ "$CONFIG_MODE" = "normal" ]; then
-        log "🔧 LEDE + WNDR3800：最后一次强制禁用 ppp-mod-pppoe"
-        
-        # 只禁用 ppp-mod-pppoe，不禁用 ppp 和其他包
-        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
-        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        
-        # 去重
-        sort -u .config > .config.tmp
-        mv .config.tmp .config
-        
-        log "  ✅ 已强制禁用 ppp-mod-pppoe"
-        
-        # 验证禁用结果
-        log "  📝 验证结果:"
-        grep -E "CONFIG_PACKAGE_ppp-mod-pppoe" .config 2>/dev/null | sed 's/^/     /' || echo "    已禁用"
-    fi
-    
-    # ============================================
     # 修正固件名称前缀（根据源码类型）
     # ============================================
     log "🔧 修正固件名称前缀（根据源码类型）..."
@@ -2905,6 +2883,40 @@ EOF
     
     log "✅ 固件名称前缀修正完成"
     log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
+    
+    # ============================================
+    # 最后一次强制禁用问题包（在 final make defconfig 之后）
+    # ============================================
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]] && [ "$CONFIG_MODE" = "normal" ]; then
+        log "🔧 LEDE + WNDR3800：最后一次强制禁用问题包"
+        
+        # 禁用 ddns-scripts 相关
+        sed -i '/^CONFIG_PACKAGE_ddns-scripts_aliyun=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_ddns-scripts_dnspod=y/d' .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
+        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
+        
+        # 禁用 ppp-mod-pppoe（如果还存在）
+        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
+        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+        
+        # 禁用 wechatpush
+        sed -i '/^CONFIG_PACKAGE_luci-app-wechatpush=y/d' .config
+        sed -i '/^CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y/d' .config
+        echo "# CONFIG_PACKAGE_luci-app-wechatpush is not set" >> .config
+        echo "# CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn is not set" >> .config
+        
+        # 去重
+        sort -u .config > .config.tmp
+        mv .config.tmp .config
+        
+        log "  ✅ 已强制禁用 ddns-scripts_aliyun, ddns-scripts_dnspod, ppp-mod-pppoe, wechatpush"
+        
+        # 验证
+        log "  📝 验证结果:"
+        grep -E "CONFIG_PACKAGE_(ddns-scripts_aliyun|ddns-scripts_dnspod|ppp-mod-pppoe)" .config 2>/dev/null | sed 's/^/     /' || echo "    已全部禁用"
+    fi
     
     # ============================================
     # 显示已应用补丁状态（动态）
