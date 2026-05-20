@@ -7314,6 +7314,8 @@ quick_error_check() {
         echo "----------------------------------------"
         if [ -f ".config" ]; then
             local problem_packages=("ppp" "ppp-mod-pppoe" "dnsmasq-full" "ddns-scripts" "ddns-scripts_aliyun" "ddns-scripts_dnspod" "luci-app-wechatpush" "luci-i18n-wechatpush-zh-cn" "luci-proto-ppp" "luci-light" "luci-base")
+            local critical_packages=("luci-proto-ppp" "luci-light" "luci-base")
+            
             for pkg in "${problem_packages[@]}"; do
                 if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config 2>/dev/null; then
                     echo "   🔴 $pkg: 已启用 (y)"
@@ -7325,6 +7327,13 @@ quick_error_check() {
                     echo "   ⚪ $pkg: 未定义"
                 fi
             done
+            
+            # 额外检查：如果 luci-proto-ppp 启用但 ppp 禁用，这是异常状态
+            if grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config 2>/dev/null && grep -q "^CONFIG_PACKAGE_ppp=y" .config 2>/dev/null; then
+                echo ""
+                echo "   ⚠️ 警告: luci-proto-ppp 已启用，但 ppp 已禁用！这会导致编译失败"
+                echo "   💡 修复建议: 在 FORBIDDEN_PACKAGES 中添加: luci-proto-ppp"
+            fi
         else
             echo "   ❌ .config 文件不存在"
         fi
@@ -7608,6 +7617,16 @@ quick_error_check() {
                 echo "   🔴 第一个失败的包: $first_failed_pkg"
                 echo "   📝 建议: 在 FORBIDDEN_PACKAGES 中添加: $first_failed_pkg"
             fi
+            
+            # 检查 luci-proto-ppp 异常状态
+            if [ -f ".config" ]; then
+                if grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config 2>/dev/null && ! grep -q "^CONFIG_PACKAGE_ppp=y" .config 2>/dev/null; then
+                    echo ""
+                    echo "   🔴 检测到异常状态: luci-proto-ppp 已启用，但 ppp 已禁用"
+                    echo "   📝 建议: 在 FORBIDDEN_PACKAGES 中添加: luci-proto-ppp"
+                fi
+            fi
+            
             if [ -n "$download_errors" ]; then
                 echo "   🌐 发现下载错误，建议重新运行 workflow"
             fi
