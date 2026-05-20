@@ -2885,45 +2885,36 @@ EOF
     log "  📌 预期固件名称格式: ${vendor_prefix}-${TARGET}-${actual_subtarget}-${correct_device}-squashfs-sysupgrade.bin"
     
     # ============================================
-    # 最后一次强制禁用问题包（在 final make defconfig 之后）
+    # 无条件强制禁用 luci-proto-ppp（针对 LEDE + WNDR3800）
     # ============================================
-    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [[ "$correct_device" == *wndr3800* ]] && [ "$CONFIG_MODE" = "normal" ]; then
-        log "🔧 LEDE + WNDR3800：最后一次强制禁用问题包"
-        
-        # 禁用 ppp 和 ppp-mod-pppoe
-        sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
-        echo "# CONFIG_PACKAGE_ppp is not set" >> .config
-        echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
-        
-        # 禁用 luci-proto-ppp（依赖 ppp）
-        sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=m/d' .config
-        echo "# CONFIG_PACKAGE_luci-proto-ppp is not set" >> .config
-        
-        # 禁用 ddns-scripts 相关
-        sed -i '/^CONFIG_PACKAGE_ddns-scripts_aliyun=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_ddns-scripts_dnspod=y/d' .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_aliyun is not set" >> .config
-        echo "# CONFIG_PACKAGE_ddns-scripts_dnspod is not set" >> .config
-        
-        # 禁用 wechatpush
-        sed -i '/^CONFIG_PACKAGE_luci-app-wechatpush=y/d' .config
-        sed -i '/^CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn=y/d' .config
-        echo "# CONFIG_PACKAGE_luci-app-wechatpush is not set" >> .config
-        echo "# CONFIG_PACKAGE_luci-i18n-wechatpush-zh-cn is not set" >> .config
-        
-        # 去重
-        sort -u .config > .config.tmp
-        mv .config.tmp .config
-        
-        log "  ✅ 已强制禁用 ppp, ppp-mod-pppoe, luci-proto-ppp, ddns-scripts_*, wechatpush"
-        
-        # 验证
-        log "  📝 验证结果:"
-        grep -E "CONFIG_PACKAGE_(ppp|ppp-mod-pppoe|luci-proto-ppp|ddns-scripts_aliyun|ddns-scripts_dnspod)" .config 2>/dev/null | sed 's/^/     /' || echo "    已全部禁用"
+    if [ "$SOURCE_REPO_TYPE" = "lede" ] && [ "$CONFIG_MODE" = "normal" ]; then
+        # 检查是否是 WNDR3800 设备
+        if echo "$correct_device" | grep -qi "wndr3800"; then
+            log "🔧 最终强制禁用 luci-proto-ppp（WNDR3800）"
+            
+            # 直接修改 .config 文件
+            sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_luci-proto-ppp=m/d' .config
+            echo "# CONFIG_PACKAGE_luci-proto-ppp is not set" >> .config
+            
+            # 确保 ppp 也被禁用
+            sed -i '/^CONFIG_PACKAGE_ppp=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_ppp=m/d' .config
+            sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=y/d' .config
+            sed -i '/^CONFIG_PACKAGE_ppp-mod-pppoe=m/d' .config
+            echo "# CONFIG_PACKAGE_ppp is not set" >> .config
+            echo "# CONFIG_PACKAGE_ppp-mod-pppoe is not set" >> .config
+            
+            # 去重
+            sort -u .config > .config.tmp
+            mv .config.tmp .config
+            
+            log "  ✅ 最终强制禁用完成"
+            
+            # 验证
+            log "  📝 验证结果:"
+            grep -E "CONFIG_PACKAGE_(ppp|ppp-mod-pppoe|luci-proto-ppp)" .config 2>/dev/null | sed 's/^/     /' || echo "    已全部禁用"
+        fi
     fi
     
     # ============================================
@@ -7329,7 +7320,7 @@ quick_error_check() {
             done
             
             # 额外检查：如果 luci-proto-ppp 启用但 ppp 禁用，这是异常状态
-            if grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config 2>/dev/null && grep -q "^CONFIG_PACKAGE_ppp=y" .config 2>/dev/null; then
+            if grep -q "^CONFIG_PACKAGE_luci-proto-ppp=y" .config 2>/dev/null && ! grep -q "^CONFIG_PACKAGE_ppp=y" .config 2>/dev/null; then
                 echo ""
                 echo "   ⚠️ 警告: luci-proto-ppp 已启用，但 ppp 已禁用！这会导致编译失败"
                 echo "   💡 修复建议: 在 FORBIDDEN_PACKAGES 中添加: luci-proto-ppp"
