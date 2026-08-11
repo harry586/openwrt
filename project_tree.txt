@@ -1,0 +1,39 @@
+./
+├── firmware-config/
+│   ├── config/
+│   │   ├── devices/
+│   │   │   ├── ath79.config
+│   │   │   ├── ipq40xx.config
+│   │   │   ├── mediatek.config
+│   │   │   ├── netgear_wndr3800.config
+│   │   │   └── ramips.config
+│   │   ├── version-specific/
+│   │   │   ├── 21.02.config
+│   │   │   └── 23.05.config
+│   │   ├── base.config
+│   │   ├── normal.config
+│   │   └── usb-generic.config
+│   ├── custom-files/
+│   │   ├── sh/
+│   │   │   ├── OverlayBackup.sh
+│   │   │   ├── basic.sh
+│   │   │   ├── dhcp.sh
+│   │   │   ├── disk.sh
+│   │   │   ├── ext4.sh
+│   │   │   ├── network.sh
+│   │   │   ├── samba.sh
+│   │   │   ├── smartdns.sh
+│   │   │   ├── sqm.sh
+│   │   │   ├── vsftpd.sh
+│   │   │   └── wechatpush.sh
+│   │   ├── luci-app-opkg-other_1.0_all.ipk
+│   │   └── 注意，自定义文件名要求（纯英文），方便复制、运行
+│   └── scripts/
+│       ├── build_firmware_main.sh
+│       └── custom-files-install.sh
+├── README.md
+├── build-config.conf
+├── fix.txt
+└── support.sh
+
+7 directories, 29 files
